@@ -33,6 +33,20 @@ class ClaudeTranslator(TranslationProvider):
         reply = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
         return parse_numbered(reply, len(texts), texts)
 
+    def list_models(self) -> list[str]:
+        import anthropic
+
+        page = anthropic.Anthropic(api_key=settings.anthropic_api_key).models.list()
+        return sorted(m.id for m in page.data)
+
+    def test_connection(self) -> tuple[bool, str]:
+        if not settings.anthropic_api_key:
+            return False, "Chưa nhập API key."
+        try:
+            return True, f"OK · {len(self.list_models())} model"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+
 
 class ClaudeOpus(ClaudeTranslator):
     name = "claude-opus"

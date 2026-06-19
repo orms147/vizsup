@@ -67,8 +67,10 @@ Each arrow is a **resumable stage**; all state lives in the job's `work_dir`
 
 - **Working now (P1)**: download (yt-dlp), translate orchestrator (passthrough + LLM providers), TTS orchestrator (edge-tts), FFmpeg assemble, SRT/ASS utils, CLI (`run`/`render`/`providers`), provider registry.
 - **Working now (P3)**: async job worker (stages in a thread executor, progress pub/sub, cancel between stages); FastAPI endpoints — `/api/providers`, `POST /api/jobs`, `GET /api/jobs/{id}`, cancel, `GET/PUT /api/jobs/{id}/subtitles` (the edit gate), `POST /api/jobs/{id}/render`, artifact download, and `WS /ws/jobs/{id}` for live progress. Verified end-to-end over a live uvicorn server (job runs to the edit gate; subtitles load/save).
-- **Stubbed (with TODOs)**: hardsub detect (P5), OCR (P5), ASR providers — WhisperX+FunASR / faster-whisper (P2), TTS providers FPT/Azure/Google (P5), React editor wiring to these endpoints (P4).
+- **Working now (P4 — PySide6 desktop, the primary UI)**: `desktop/` — 3 screens (Input · Subtitle Editor · Render) + Settings dialog, ported from the "Dark Editor Design", calling `app.*` directly via a `QThread` `PipelineWorker` (progress + cancel). Subtitle editor = video (`QMediaPlayer`) + editable table + custom-painted timeline (ruler/waveform/cue blocks/playhead, drag + zoom), autosaving `vi.srt`. Verified: constructs + paints headlessly with the real backend. Run: `python -m desktop.main`.
+- **Working now (P2 — ASR, no-hardsub path)**: `faster_whisper` provider (default; `pip install -e ".[asr]"`) — verified transcribe path (model load → segments → cues). `whisperx_funasr` = FunASR Paraformer accuracy option (`.[asr-accurate]`). So "paste link → auto Vietnamese subtitles" works (download → ASR → translate → edit gate), given ffmpeg + a translation key.
+- **Stubbed (with TODOs)**: hardsub detect (P5/M2), OCR (P5/M2), WhisperX word-level alignment refinement, TTS providers FPT/Azure/Google, VieNeu-TTS local provider (parked), the React web editor (optional).
 
-> Until ASR (P2) or OCR (P5) lands, supply a Chinese `srt` when creating a job (or upload via the subtitles endpoint); the translate → edit → TTS → assemble path is fully wired.
+> ffmpeg must be on PATH (audio extract + render). Translation needs one provider API key for real Vietnamese (passthrough is offline test-only). For hardcoded-Chinese-sub videos with little speech, OCR (M2) is still pending — supply a `.srt` for those today.
 
 See the build roadmap in the plan and per-stage notes in [research.md](research.md).

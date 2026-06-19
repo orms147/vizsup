@@ -56,14 +56,21 @@ def parse_numbered(reply: str, n: int, fallback: list[str]) -> list[str]:
 
 
 class OpenAICompatTranslator(TranslationProvider):
-    """Base for OpenAI-compatible chat endpoints (DeepSeek, Qwen, ...)."""
+    """Base for OpenAI-compatible chat endpoints (OpenRouter, DeepSeek, Qwen, ...)."""
 
     base_url: str = ""
     model: str = ""
     api_key: str = ""
+    extra_headers: dict | None = None  # e.g. OpenRouter HTTP-Referer / X-Title
 
     def available(self) -> bool:
         return bool(self.api_key) and _installed("openai")
+
+    def _client(self):
+        from openai import OpenAI
+
+        return OpenAI(api_key=self.api_key, base_url=self.base_url,
+                      default_headers=self.extra_headers or None)
 
     def translate_texts(
         self,
@@ -76,10 +83,7 @@ class OpenAICompatTranslator(TranslationProvider):
     ):
         if not texts:
             return []
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        resp = client.chat.completions.create(
+        resp = self._client().chat.completions.create(
             model=self.model,
             temperature=0.3,
             messages=[
@@ -88,3 +92,26 @@ class OpenAICompatTranslator(TranslationProvider):
             ],
         )
         return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
+
+    def list_models(self) -> list[str]:
+        """GET {base_url}/models (works for OpenRouter / DeepSeek / Qwen-compatible)."""
+        import httpx
+
+        headers = dict(self.extra_headers or {})
+        if self.api_key:  # some endpoints (e.g. OpenRouter /models) are public — don't send "Bearer "
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        r = httpx.get(self.base_url.rstrip("/") + "/models", headers=headers, timeout=20)
+        r.raise_for_status()
+        payload = r.json()
+        data = payload.get("data") or payload.get("models") or []
+        ids = [(m.get("id") or m.get("name")) for m in data if isinstance(m, dict)]
+        return sorted(x for x in ids if x)
+
+    def test_connection(self) -> tuple[bool, str]:
+        if not self.api_key:
+            return False, "Chưa nhập API key."
+        try:
+            n = len(self.list_models())
+            return True, f"OK · {n} model khả dụng"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"

@@ -12,6 +12,7 @@ from app.providers.translation.deepl import DeepLTranslator
 from app.providers.translation.deepseek import DeepSeekFlash, DeepSeekPro
 from app.providers.translation.gemini import GeminiTranslator
 from app.providers.translation.glm import GLM
+from app.providers.translation.openrouter import OpenRouter
 from app.providers.translation.passthrough import PassthroughTranslator
 from app.providers.translation.qwen import Qwen3
 from app.providers.tts.azure import AzureTTS
@@ -23,6 +24,7 @@ TRANSLATORS = {
     p.name: p
     for p in (
         PassthroughTranslator(),
+        OpenRouter(),
         DeepSeekFlash(),
         DeepSeekPro(),
         ClaudeTranslator(),
@@ -59,6 +61,14 @@ def list_providers() -> dict:
         "tts": [p.info() for p in TTS_PROVIDERS.values()],
         "asr": [p.info() for p in ASR_PROVIDERS.values()],
     }
+
+
+def find_provider(name: str):
+    """Look up a provider by name across all stages (for Settings test/fetch)."""
+    for d in (TRANSLATORS, TTS_PROVIDERS, ASR_PROVIDERS):
+        if name in d:
+            return d[name]
+    return None
 
 
 def get_translator(name: str):

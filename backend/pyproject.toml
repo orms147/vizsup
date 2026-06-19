@@ -17,24 +17,24 @@ dependencies = [
     "edge-tts>=6.1",
     "httpx>=0.27",
     "websockets>=12.0",
+    "openai>=1.40",   # OpenAI-compatible providers: OpenRouter / DeepSeek / Qwen
 ]
 
 [project.optional-dependencies]
-# Real ASR (no-hardsub path). Install when wiring P2.
+# Default ASR (no-hardsub path): faster-whisper only — one package, CPU/GPU.
 asr = [
-    "whisperx>=3.1",
     "faster-whisper>=1.0",
+]
+# Accuracy ASR: FunASR Paraformer-Large (CN-native) + torch (CPU works, GPU faster).
+asr-accurate = [
     "funasr>=1.1",
     "torch>=2.2",
     "torchaudio>=2.2",
 ]
-# Hardcoded-subtitle detection + OCR.
+# Hardcoded-subtitle OCR (burned-in Chinese subs → SRT). RapidOCR = ONNX PP-OCR
+# models, CPU, no PaddlePaddle — far easier to install on Windows. Pulls opencv.
 ocr = [
-    "paddleocr>=2.8",
-    "paddlepaddle-gpu>=2.6 ; platform_system != 'Darwin'",
-    "opencv-python>=4.9",
-    "scikit-image>=0.22",   # SSIM frame dedup
-    "numpy>=1.26",
+    "rapidocr-onnxruntime>=1.3",
 ]
 # LLM translation providers.
 translate = [
@@ -52,6 +52,10 @@ audio = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+]
+# desktop GUI (PySide6/Qt). The primary UI; install to run `python -m desktop.main`.
+desktop = [
+    "PySide6>=6.7",
 ]
 
 [project.scripts]

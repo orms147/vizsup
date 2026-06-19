@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     dashscope_api_key: str = ""
     deepl_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = ""  # e.g. "deepseek/deepseek-chat-v3"; pick via Settings → Fetch models
 
     # tts provider keys (edge-tts needs none)
     fpt_api_key: str = ""
@@ -33,10 +35,12 @@ class Settings(BaseSettings):
     ytdlp_cookies_from_browser: str = ""
 
     # paths / defaults
+    ffmpeg_path: str = ""  # explicit ffmpeg(.exe) or its bin dir; empty → resolve from PATH
     vizsup_storage_dir: Path = Path("./storage")
     vizsup_default_translator: str = "deepseek"
     vizsup_default_tts: str = "edge"
-    vizsup_default_asr: str = "whisperx_funasr"
+    vizsup_default_asr: str = "faster_whisper"
+    whisper_model: str = "large-v3"  # faster-whisper model size; set WHISPER_MODEL=tiny to downsize
 
 
 settings = Settings()

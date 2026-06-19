@@ -9,6 +9,7 @@ web before relying on them — don't trust memory.
 | id | engine | key (env) | local | notes |
 |---|---|---|---|---|
 | `passthrough` | none (keeps CN) | — | ✓ | default; offline smoke-test only |
+| `openrouter` | **OpenRouter** (any model) | `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` | | one key → 340+ models. Pick the model in **Settings → Tải danh sách model** (live `/models` fetch, public). **Test kết nối** verifies the key. |
 | `deepseek` | DeepSeek-V4 Flash | `DEEPSEEK_API_KEY` | | `deepseek-v4-flash` ~$0.14/$0.28; best $/quality draft |
 | `deepseek-pro` | DeepSeek-V4 Pro | `DEEPSEEK_API_KEY` | | `deepseek-v4-pro` ~$0.435/$0.87; hard lines |
 | `claude` | Claude Sonnet 4.6 | `ANTHROPIC_API_KEY` | | `claude-sonnet-4-6`; best VI register → refine pass |
@@ -35,13 +36,23 @@ web before relying on them — don't trust memory.
 
 ## ASR (Chinese, with timestamps)
 
-| id | engine | local | notes |
-|---|---|---|---|
-| `whisperx_funasr` | WhisperX timing + FunASR Paraformer | ✓ | **recommended**; best CN accuracy + word timestamps; GPU (stub, P2) |
-| `faster_whisper` | faster-whisper large-v3-turbo | ✓ | simpler, lower CN accuracy (stub, P2) |
+| id | engine | local | install | notes |
+|---|---|---|---|---|
+| `faster_whisper` | faster-whisper (large-v3) | ✓ | `.[asr]` | **default** — 1 pip package, CPU/GPU, segment timestamps; CER ~5% on Mandarin (edit gate catches errors). **Implemented + verified.** |
+| `whisperx_funasr` | FunASR Paraformer (CN-native) | ✓ | `.[asr-accurate]` | **accuracy option** — CER ~1.7%, CPU-viable; needs `funasr` + torch. WhisperX word-alignment is a future refinement. **Implemented.** |
 
-> ASR timing ≠ accuracy: WhisperX for word timestamps, a CN-native model (FunASR
-> Paraformer) for the transcript. Don't use Whisper alone for Mandarin (CER 3–5× worse).
+> ASR timing ≠ accuracy (CLAUDE.md): the ideal is WhisperX word timestamps + a
+> CN-native transcript. v1 ships faster-whisper as the default for install
+> reliability on Windows, with FunASR Paraformer as the one-click accuracy upgrade
+> in the dropdown. Model weights download on first run (~75MB tiny … ~1.5GB large-v3).
+> Set `WHISPER_MODEL=tiny|base|small|medium|large-v3` in `.env` to trade speed/accuracy.
+
+## Connectivity (Settings dialog)
+Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.
+Implemented for the OpenAI-compatible base (OpenRouter / DeepSeek / Qwen) and for
+Claude + Gemini. The Settings dialog runs these on a background thread (no UI freeze):
+**Test kết nối** per provider, and **Tải danh sách model** for OpenRouter.
 
 ## Adding a provider
 See the `/add-provider` skill: one file in `providers/{translation,tts,asr}/` + one line in `registry.py`.
+Optionally implement `list_models()` / `test_connection()` for the Settings dialog.

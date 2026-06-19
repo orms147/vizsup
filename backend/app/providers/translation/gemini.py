@@ -24,3 +24,17 @@ class GeminiTranslator(TranslationProvider):
         prompt = SYSTEM_PROMPT + "\n\n" + build_user_prompt(texts, context=context, glossary=glossary)
         resp = client.models.generate_content(model=self.model, contents=prompt)
         return parse_numbered(resp.text or "", len(texts), texts)
+
+    def list_models(self) -> list[str]:
+        from google import genai
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        return sorted(m.name.split("/")[-1] for m in client.models.list())
+
+    def test_connection(self) -> tuple[bool, str]:
+        if not settings.gemini_api_key:
+            return False, "Chưa nhập API key."
+        try:
+            return True, f"OK · {len(self.list_models())} model"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"

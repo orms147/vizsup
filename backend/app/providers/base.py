@@ -38,6 +38,15 @@ class Provider(ABC):
             "available": self.available(),
         }
 
+    # Optional capabilities (overridden by providers that support them).
+    def list_models(self) -> list[str]:
+        """Return selectable model ids for this provider (empty if N/A)."""
+        return []
+
+    def test_connection(self) -> tuple[bool, str]:
+        """Verify credentials/connectivity. Returns (ok, message)."""
+        return False, "Test kết nối chưa hỗ trợ cho provider này."
+
 
 class TranslationProvider(Provider):
     """Translate a list of strings, preserving order and count (1:1 with cues)."""

@@ -13,26 +13,19 @@ filename (avoids Windows drive-colon escaping headaches).
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
+from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_ass
 
 ATEMPO_CAP = 1.3
 
 
-def _require(tool: str) -> str:
-    path = shutil.which(tool)
-    if not path:
-        raise RuntimeError(f"'{tool}' not found on PATH. Install FFmpeg (with libx264).")
-    return path
-
-
 def probe_duration(path: Path) -> float:
     out = subprocess.run(
-        [_require("ffprobe"), "-v", "error", "-show_entries", "format=duration",
+        [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", str(path)],
         capture_output=True, text=True, check=True,
     )
@@ -50,11 +43,12 @@ def assemble(
     replace_audio: bool = True,
     cover_hardsubs: bool = False,
     font: str = "Be Vietnam Pro",
+    size: int = 60,
 ) -> Path:
-    ffmpeg = _require("ffmpeg")
+    ffmpeg = ffmpeg_bin()
 
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
-    write_ass(cues_for_subs, job.subs_ass, font=font, cover_hardsubs=cover_hardsubs)
+    write_ass(cues_for_subs, job.subs_ass, font=font, size=size, cover_hardsubs=cover_hardsubs)
 
     wd = job.work_dir
     cmd = [ffmpeg, "-y", "-i", "source.mp4"]

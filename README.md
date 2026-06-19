@@ -9,32 +9,41 @@ paste URL → download → detect hardsubs → OCR or ASR → translate (CN→VI
 
 ## Status
 
-Phase 1 scaffold. The **headless CLI smoke path** runs end-to-end on the cheap stack
-(yt-dlp download → edge-tts Vietnamese voice → FFmpeg burn). ASR/OCR, the two-pass
-translator, the FastAPI server and the React timeline editor are scaffolded with TODOs.
-See the roadmap in [the plan](../../Users/Admin/.claude/plans/) and [docs/architecture.md](docs/architecture.md).
+The **PySide6 desktop app** (primary UI) is built: 3 screens (Input · Subtitle Editor · Render)
+matching the "Dark Editor Design", wired to the backend via a `QThread` worker — download →
+subtitles → translate → **edit gate** → TTS → render. The two-pass translator and the
+cheap path (yt-dlp → edge-tts → FFmpeg) work; **ASR/OCR are stubs** (supply a Chinese `.srt`
+for now). A FastAPI server + React scaffold also exist for optional web/remote use.
+See [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
-Prereqs: **Python 3.11+**, **Node 18+**, **ffmpeg** (with libx264; rubberband recommended), and **yt-dlp** on PATH.
+Prereqs: **Python 3.11+**, **ffmpeg** (with libx264; rubberband recommended), and **yt-dlp** on PATH.
 
 ```bash
-# backend
+# install backend + desktop deps into a venv (Windows)
 cd backend
-python -m venv .venv && .venv\Scripts\activate     # Windows
-pip install -e .
+python -m venv .venv && .venv\Scripts\activate
+pip install -e ".[desktop]"
+cd ..
 
-# headless smoke path (download → placeholder VI subs → edge-tts → burn)
-python -m app.cli "https://www.bilibili.com/video/BVxxxxxxxx"
-
-# list available providers (proves the UI-selectable abstraction)
-python -c "from app.providers.registry import list_providers; print(list_providers())"
+# run the desktop app (from the repo root)
+python -m desktop.main
 ```
 
+Headless / scripting alternatives:
+
 ```bash
-# frontend (UI shell)
-cd frontend
-npm install && npm run dev
+cd backend
+# CLI smoke path: download → translate → (edit vi.srt) → render
+python -m app.cli run "https://www.bilibili.com/video/BVxxxxxxxx" --srt cn.srt
+python -m app.cli render --workdir ../storage/<id>
+# list available providers (proves the UI-selectable abstraction)
+python -c "from app.providers.registry import list_providers; print(list_providers())"
+
+# optional web/remote UI
+uvicorn app.main:app --reload      # API
+cd ../frontend && npm install && npm run dev
 ```
 
 ## Configuration

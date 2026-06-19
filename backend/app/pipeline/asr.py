@@ -6,7 +6,6 @@ Extracts audio from the video, runs the provider, and writes the Chinese cues to
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 
 from app.models import Job
@@ -15,11 +14,11 @@ from app.providers.registry import get_asr
 
 
 def _extract_audio(job: Job) -> None:
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("'ffmpeg' not found on PATH.")
+    from app.ffmpegutil import ffmpeg_bin
+
     subprocess.run(
-        [ffmpeg, "-y", "-i", str(job.source_video), "-vn", "-ac", "1", "-ar", "16000", str(job.source_audio)],
+        [ffmpeg_bin(), "-y", "-i", str(job.source_video), "-vn", "-ac", "1", "-ar", "16000",
+         str(job.source_audio)],
         check=True, capture_output=True,
     )
 

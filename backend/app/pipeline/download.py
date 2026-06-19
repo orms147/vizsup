@@ -6,8 +6,7 @@ fallbacks (BBDown / TikTokDownloader) are a later addition.
 """
 from __future__ import annotations
 
-from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from app.config import settings
 from app.models import Job
@@ -22,6 +21,19 @@ def platform_of(url: str) -> str:
     if "douyin" in host:
         return "douyin"
     return "unknown"
+
+
+def normalize_url(url: str) -> str:
+    """Rewrite Douyin feed/modal URLs (which yt-dlp rejects) to the canonical
+    video URL. e.g. douyin.com/jingxuan?modal_id=<id> → douyin.com/video/<id>.
+    """
+    u = urlparse(url)
+    host = (u.hostname or "").lower()
+    if "douyin.com" in host and "/video/" not in u.path:
+        modal_id = parse_qs(u.query).get("modal_id", [None])[0]
+        if modal_id and modal_id.isdigit():
+            return f"https://www.douyin.com/video/{modal_id}"
+    return url
 
 
 def _cookie_opts() -> dict:
@@ -39,6 +51,7 @@ def download(job: Job) -> Job:
 
     if not job.url:
         raise ValueError("Job has no URL to download.")
+    url = normalize_url(job.url)
 
     outtmpl = str(job.work_dir / "source.%(ext)s")
     opts = {
@@ -52,7 +65,7 @@ def download(job: Job) -> Job:
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(job.url, download=True)
+        info = ydl.extract_info(url, download=True)
 
     # Locate the produced file (merge yields source.mp4; otherwise pick newest source.*).
     produced = job.work_dir / "source.mp4"
@@ -62,6 +75,12 @@ def download(job: Job) -> Job:
         if not candidates:
             raise RuntimeError("yt-dlp finished but no output file was found.")
         produced = candidates[-1]
+
+    # Every downstream stage hardcodes source.mp4 (ffmpeg reads by content, not
+    # extension), so normalize the fallback (.webm/.mkv) to the canonical name.
+    if produced != job.source_video:
+        produced.replace(job.source_video)
+        produced = job.source_video
 
     job.metadata = {
         "title": info.get("title"),
