@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python -m app.cli:*)",
+      "Bash(py:*)",
+      "Bash(uv:*)",
+      "Bash(pip:*)",
+      "Bash(uvicorn:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(yt-dlp:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(ffprobe:*)",
+      "Bash(ruff:*)",
+      "Bash(pytest:*)"
+    ]
+  }
+}

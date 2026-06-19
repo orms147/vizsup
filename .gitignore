@@ -1,0 +1,38 @@
+# env / secrets
+.env
+.env.local
+*.cookies.txt
+cookies.txt
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# model caches / weights
+models/
+*.pt
+*.onnx
+*.ckpt
+.cache/
+
+# job working data & outputs
+storage/
+samples/*
+!samples/.gitkeep
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

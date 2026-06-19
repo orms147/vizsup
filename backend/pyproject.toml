@@ -1,0 +1,70 @@
+[project]
+name = "vizsup"
+version = "0.1.0"
+description = "Personal Chinese->Vietnamese video subtitle + dubbing tool"
+requires-python = ">=3.11"
+
+# Core deps for the Phase-1 cheap path (download -> edge-tts -> ffmpeg burn).
+# Heavier ML deps (whisperx, funasr, paddleocr, demucs, torch) are optional
+# extras so the smoke path installs fast and the editor can be built first.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "yt-dlp>=2025.1.1",
+    "edge-tts>=6.1",
+    "httpx>=0.27",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+# Real ASR (no-hardsub path). Install when wiring P2.
+asr = [
+    "whisperx>=3.1",
+    "faster-whisper>=1.0",
+    "funasr>=1.1",
+    "torch>=2.2",
+    "torchaudio>=2.2",
+]
+# Hardcoded-subtitle detection + OCR.
+ocr = [
+    "paddleocr>=2.8",
+    "paddlepaddle-gpu>=2.6 ; platform_system != 'Darwin'",
+    "opencv-python>=4.9",
+    "scikit-image>=0.22",   # SSIM frame dedup
+    "numpy>=1.26",
+]
+# LLM translation providers.
+translate = [
+    "anthropic>=0.40",
+    "openai>=1.40",          # DeepSeek + Qwen are OpenAI-compatible endpoints
+    "zhipuai>=2.1",          # GLM-5.2
+    "google-genai>=0.3",     # Gemini
+]
+# Audio assembly extras.
+audio = [
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "demucs>=4.0",           # optional stem separation for ducking
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+vizsup = "app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
