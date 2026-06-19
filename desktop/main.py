@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import paths  # noqa: F401
+from desktop import store
 from desktop.settings_dialog import SettingsDialog
 from desktop.theme import C, load_fonts, qss
 from desktop.views.editor_view import EditorView
@@ -69,8 +70,12 @@ class MainWindow(QMainWindow):
         # wiring
         self.input.startRequested.connect(self._start_gate)
         self.input.cancelRequested.connect(self._cancel)
+        self.input.resumeRequested.connect(self._resume)
+        self.input.deleteRequested.connect(self._delete_job)
         self.editor.dirtyChanged.connect(self._on_dirty)
         self.render.renderRequested.connect(self._start_render)
+        self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
+        self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
 
@@ -128,6 +133,7 @@ class MainWindow(QMainWindow):
         self.opts = opts
         jid = uuid.uuid4().hex[:12]
         self.job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
+        store.save_job(self.job, opts, "running")
         self.input.set_busy(True)
         self.input.append_log(f"▶ Bắt đầu (job {jid})")
         self._run("run_to_gate", opts, {
@@ -141,10 +147,35 @@ class MainWindow(QMainWindow):
     def _on_gate(self) -> None:
         try:
             self.editor.load(self.job)
+            store.save_job(self.job, self.opts, "await_edit")  # title now known → resumable
             self.stack.setCurrentIndex(EDITOR)
             self.status.setText("● Sửa phụ đề — duyệt khi xong")
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
             self.input.show_error(f"Lỗi mở trình sửa: {type(exc).__name__}: {exc}")
+
+    def _resume(self, job_id: str) -> None:
+        loaded = store.load_job(job_id)
+        if not loaded:
+            return
+        self.job, self.opts = loaded
+        if self.job.vi_srt.exists():
+            self._on_gate()  # reopen straight at the edit gate (no re-download/ASR)
+
+    def _delete_job(self, job_id: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        if QMessageBox.question(self, "Xóa dự án", f"Xóa toàn bộ tệp của dự án này?\n{job_id}") \
+                == QMessageBox.StandardButton.Yes:
+            store.delete_job(job_id)
+            self.input.refresh_recent()
+
+    def _goto_step(self, i: int) -> None:
+        if i == INPUT:
+            self.stack.setCurrentIndex(INPUT)
+        elif i == EDITOR and self.job is not None and self.editor.cues:
+            self.stack.setCurrentIndex(EDITOR)
+        elif i == RENDER and self.job is not None and self.editor.cues and self.job.vi_srt.exists():
+            self._approve()
 
     # --- approve -> render ---------------------------------------------------
     def _approve(self) -> None:
@@ -260,7 +291,24 @@ def _install_excepthook() -> None:
     sys.excepthook = hook
 
 
+def _install_qt_log_filter() -> None:
+    """Drop known-harmless Qt/ffmpeg console spam so real errors stand out."""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    noise = ("setpointsize", "moov atom", "invalid data found", "low score",
+             "illegal icc", "illegal iid", "env_facs_q", "sbr extensions",
+             "could not update timestamps", "expected to read", "ps bits",
+             "reserved sbr", "ffmpeg-devel", "skipped samples")
+
+    def handler(_mode, _ctx, message):
+        if not any(n in message.lower() for n in noise):
+            sys.stderr.write(message + "\n")
+
+    qInstallMessageHandler(handler)
+
+
 def main() -> int:
+    _install_qt_log_filter()
     app = QApplication(sys.argv)
     app.setApplicationName("vizsup")
     _install_excepthook()

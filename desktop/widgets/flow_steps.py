@@ -1,7 +1,7 @@
 """The 1 · Nhập / 2 · Sửa phụ đề / 3 · Dựng video step indicator in the toolbar."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from desktop.theme import C
@@ -10,9 +10,12 @@ STEPS = ["Nhập", "Sửa phụ đề", "Dựng video"]
 
 
 class FlowSteps(QFrame):
+    clicked = Signal(int)  # a step chip was clicked (0=Input, 1=Editor, 2=Render)
+
     def __init__(self) -> None:
         super().__init__()
         self._chips: list[QLabel] = []
+        self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
@@ -51,3 +54,11 @@ class FlowSteps(QFrame):
                 )
             else:
                 chip.setStyleSheet("padding:5px 7px;background:transparent;border:none;")
+
+    def mousePressEvent(self, e) -> None:
+        pos = e.position().toPoint()
+        for i, chip in enumerate(self._chips):
+            if chip.geometry().contains(pos):
+                self.clicked.emit(i)
+                return
+        super().mousePressEvent(e)

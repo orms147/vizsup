@@ -14,7 +14,11 @@
       "Bash(ffprobe:*)",
       "Bash(ruff:*)",
       "Bash(pytest:*)",
-      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup\\\\backend; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\.venv\\\\Scripts\\\\python.exe _ocrtest.py 2>$null; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\backend\\\\_ocrtest.py\")"
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup\\\\backend; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\.venv\\\\Scripts\\\\python.exe _ocrtest.py 2>$null; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\backend\\\\_ocrtest.py\")",
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -m desktop._uxcheck; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\desktop\\\\_uxcheck.py\")",
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -m desktop._resumecheck; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\desktop\\\\_resumecheck.py\")",
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -m desktop._navcheck; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\desktop\\\\_navcheck.py\")",
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -m desktop._crashcheck; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\desktop\\\\_crashcheck.py\")"
     ]
   }
 }

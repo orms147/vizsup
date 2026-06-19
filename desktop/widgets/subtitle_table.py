@@ -18,6 +18,7 @@ class SubtitleTable(QTableWidget):
     rowSelected = Signal(int)
     seekRequested = Signal(float)
     edited = Signal()
+    beforeEdit = Signal()  # fires before a cell edit is applied (for undo snapshots)
 
     def __init__(self) -> None:
         super().__init__(0, len(COLS))
@@ -87,6 +88,8 @@ class SubtitleTable(QTableWidget):
         r, col = item.row(), item.column()
         if not (0 <= r < len(self._cues)):
             return
+        if col in (1, 2, 3):
+            self.beforeEdit.emit()  # snapshot the pre-edit state (cues still old here)
         c = self._cues[r]
         if col == 3:
             c.vi = item.text()

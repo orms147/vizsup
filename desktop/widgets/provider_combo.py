@@ -38,6 +38,14 @@ class ProviderCombo(QComboBox):
         idx = self.currentIndex()
         return self._names[idx] if 0 <= idx < len(self._names) else None
 
+    def select(self, name: str | None) -> None:
+        """Pre-select an option by provider name (if present and enabled)."""
+        if name in self._names:
+            i = self._names.index(name)
+            item = self.model().item(i)
+            if item is None or (item.flags() & Qt.ItemIsEnabled):
+                self.setCurrentIndex(i)
+
     def update_availability(self, providers: list[dict]) -> None:
         """Re-enable/disable items from a fresh list_providers() result (e.g. after
         the user adds an API key in Settings) without rebuilding the widget."""

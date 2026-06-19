@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop import store
 from desktop.theme import C
 from desktop.widgets.provider_combo import ProviderCombo
 
@@ -34,6 +35,8 @@ def _section(text: str) -> QLabel:
 class InputView(QWidget):
     startRequested = Signal(dict)
     cancelRequested = Signal()
+    resumeRequested = Signal(str)  # job_id of a recent project to reopen
+    deleteRequested = Signal(str)  # job_id of a recent project to delete
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
@@ -56,6 +59,14 @@ class InputView(QWidget):
         sub.setWordWrap(True)
         col.addWidget(title)
         col.addWidget(sub)
+
+        # recent projects (resume to the edit gate without re-downloading)
+        self._recent_box = QWidget()
+        self._recent_lay = QVBoxLayout(self._recent_box)
+        self._recent_lay.setContentsMargins(0, 0, 0, 0)
+        self._recent_lay.setSpacing(6)
+        col.addWidget(self._recent_box)
+        self._build_recent()
 
         # source row
         col.addWidget(_section("Nguồn video"))
@@ -157,10 +168,52 @@ class InputView(QWidget):
         # wire subtitle-source behavior (after asr combo exists)
         self.rb_srt.toggled.connect(self._on_srt_radio)
         self.src_group.buttonToggled.connect(self._on_source_changed)
+        self._apply_saved_choices()
         self._on_source_changed()
         self._refresh_start()
 
+    def _apply_saved_choices(self) -> None:
+        st = store.load_ui_state()
+        if st.get("subtitle_source") == "ocr":
+            self.rb_ocr.setChecked(True)  # don't auto-restore 'srt' (would pop a file dialog)
+        self.asr.select(st.get("asr"))
+        self.draft.select(st.get("translator"))
+        self.refine.select(st.get("refine"))
+        self.tts.select(st.get("tts"))
+
     # --- helpers -------------------------------------------------------------
+    def _build_recent(self) -> None:
+        while self._recent_lay.count():
+            item = self._recent_lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        recent = store.list_jobs()
+        self._recent_box.setVisible(bool(recent))
+        if not recent:
+            return
+        self._recent_lay.addWidget(_section("Dự án gần đây"))
+        for j in recent:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            status = "đã dựng video" if j["has_output"] else "sửa phụ đề"
+            open_b = QPushButton(f"  {j['title']}   ·   {status}")
+            open_b.setObjectName("ghost")
+            open_b.setStyleSheet("text-align:left;")
+            open_b.clicked.connect(lambda _=False, jid=j["id"]: self.resumeRequested.emit(jid))
+            del_b = QPushButton("Xóa")
+            del_b.setObjectName("danger")
+            del_b.setFixedWidth(58)
+            del_b.clicked.connect(lambda _=False, jid=j["id"]: self.deleteRequested.emit(jid))
+            rl.addWidget(open_b, 1)
+            rl.addWidget(del_b)
+            self._recent_lay.addWidget(row)
+
+    def refresh_recent(self) -> None:
+        self._build_recent()
+
     def _pick_file(self) -> None:
         fn, _ = QFileDialog.getOpenFileName(self, "Chọn video", "", "Video (*.mp4 *.mkv *.mov *.webm);;All (*.*)")
         if fn:
@@ -214,6 +267,7 @@ class InputView(QWidget):
             opts["url"] = self.url.text().strip()
         if opts["subtitle_source"] == "srt" and self._srt:
             opts["srt"] = self._srt
+        store.save_ui_state(opts)
         self.startRequested.emit(opts)
 
     # --- progress API (driven by MainWindow) ---------------------------------

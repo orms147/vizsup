@@ -35,6 +35,7 @@ def _section(t: str) -> QLabel:
 
 class RenderView(QWidget):
     renderRequested = Signal(dict)
+    backRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,6 +51,11 @@ class RenderView(QWidget):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(22, 22, 22, 16)
         ll.setSpacing(12)
+
+        back = QPushButton("←  Quay lại sửa phụ đề")
+        back.setObjectName("ghost")
+        back.clicked.connect(self.backRequested)
+        ll.addWidget(back)
 
         ll.addWidget(_section("Kiểu phụ đề"))
         self.font = QComboBox()
@@ -144,8 +150,10 @@ class RenderView(QWidget):
         self.voice.clear()
         self.voice.addItems(voices or ["(mặc định)"])
 
-    def set_preview(self, video_path: Path) -> None:
+    def set_preview(self, video_path: Path, cues: list | None = None) -> None:
         self.preview.load(video_path)
+        if cues is not None:
+            self.preview.set_cues(cues)
 
     def _emit_render(self) -> None:
         speed = self.speed.value() / 100.0

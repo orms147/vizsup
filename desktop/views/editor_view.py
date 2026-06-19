@@ -4,6 +4,7 @@ in sync. Autosaves edits to job.vi_srt. Split/Merge/Add/Delete tools.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -81,6 +82,11 @@ class EditorView(QWidget):
         self.timeline.cueChanged.connect(self._on_cue_dragged)
         self.video.positionChanged.connect(self.timeline.set_time)
 
+        # undo (Ctrl+Z): snapshot before table cell edits and before each tool action
+        self._undo_stack: list[list[EditorCue]] = []
+        self.table.beforeEdit.connect(self._snapshot)
+        QShortcut(QKeySequence.Undo, self, activated=self._undo_action)
+
     def _toolbar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
         bar.setContentsMargins(16, 9, 16, 9)
@@ -134,15 +140,30 @@ class EditorView(QWidget):
         self.job = job
         self.cues = cuemodel.load_pair(job)
         self.video.load(job.source_video)
+        self.video.set_cues(self.cues)
         self.table.load(self.cues)
         self.timeline.set_cues(self.cues)
         self.count.setText(f"{len(self.cues)} dòng")
+        self._undo_stack.clear()
 
     def _reload(self) -> None:
         self.table.load(self.cues)
         self.timeline.set_cues(self.cues)
+        self.video.set_cues(self.cues)
         self.count.setText(f"{len(self.cues)} dòng")
         self._mark_dirty()
+
+    # --- undo ----------------------------------------------------------------
+    def _snapshot(self) -> None:
+        self._undo_stack.append([EditorCue(c.start, c.end, c.vi, c.zh) for c in self.cues])
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+
+    def _undo_action(self) -> None:
+        if not self._undo_stack:
+            return
+        self.cues = self._undo_stack.pop()
+        self._reload()
 
     def _save(self) -> None:
         if self.job is not None:
@@ -172,6 +193,7 @@ class EditorView(QWidget):
         return self.table.currentRow()
 
     def _add(self) -> None:
+        self._snapshot()
         i = self._cur()
         last = self.cues[-1] if self.cues else None
         start = (self.cues[i].end if 0 <= i < len(self.cues) else (last.end if last else 0.0))
@@ -182,12 +204,14 @@ class EditorView(QWidget):
     def _delete(self) -> None:
         i = self._cur()
         if 0 <= i < len(self.cues):
+            self._snapshot()
             self.cues.pop(i)
             self._reload()
 
     def _split(self) -> None:
         i = self._cur()
         if 0 <= i < len(self.cues):
+            self._snapshot()
             c = self.cues[i]
             mid = (c.start + c.end) / 2
             words = c.vi.split()
@@ -202,6 +226,7 @@ class EditorView(QWidget):
     def _merge(self) -> None:
         i = self._cur()
         if 0 <= i < len(self.cues) - 1:
+            self._snapshot()
             a, b = self.cues[i], self.cues[i + 1]
             a.end = b.end
             a.vi = (a.vi + " " + b.vi).strip()

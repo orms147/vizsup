@@ -67,6 +67,11 @@ class PipelineWorker(QObject):
                 download.download(job)
                 self.log.emit(f"✓ Tải xong: {job.metadata.get('title')!r}")
 
+            # persist metadata so the project is listed/resumable later
+            import json as _json
+            (job.work_dir / "metadata.json").write_text(
+                _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
             # 2) Chinese subtitles — source chosen by the user in step 1
             self._check()
             self.stage_started.emit("subtitle")
