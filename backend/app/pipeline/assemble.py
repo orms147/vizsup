@@ -14,6 +14,7 @@ filename (avoids Windows drive-colon escaping headaches).
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
@@ -44,6 +45,7 @@ def assemble(
     cover_hardsubs: bool = False,
     font: str = "Be Vietnam Pro",
     size: int = 60,
+    log: Callable[[str], None] | None = None,
 ) -> Path:
     ffmpeg = ffmpeg_bin()
 
@@ -57,10 +59,18 @@ def assemble(
 
     parts: list[str] = []
     labels: list[str] = []
+    sped = 0
+    clipped: list[tuple[Cue, float, float]] = []
     for i, (cue, seg) in enumerate(segments, start=1):
         seg_dur = probe_duration(Path(seg))
         slot = cue.duration
         tempo = min(seg_dur / slot, ATEMPO_CAP) if slot > 0 and seg_dur > slot else 1.0
+        if abs(tempo - 1.0) > 1e-3:
+            sped += 1
+            # even at the cap the VI audio is longer than the slot → ffmpeg will cut
+            # it off mid-word. Flag it so the user can shorten that line in the editor.
+            if slot > 0 and seg_dur > ATEMPO_CAP * slot + 0.05:
+                clipped.append((cue, seg_dur, slot))
         delay = max(0, int(round(cue.start * 1000)))
         af = []
         if abs(tempo - 1.0) > 1e-3:
@@ -68,6 +78,15 @@ def assemble(
         af.append(f"adelay={delay}|{delay}")
         parts.append(f"[{i}:a]{','.join(af)}[a{i}]")
         labels.append(f"[a{i}]")
+
+    if log:
+        if sped:
+            log(f"… {sped} câu phải tăng tốc đọc để khớp khe thời gian")
+        if clipped:
+            log(f"⚠ {len(clipped)} câu QUÁ DÀI: tăng tốc tối đa {ATEMPO_CAP:g}× vẫn không vừa "
+                f"→ lời sẽ bị cắt cụt. Hãy rút gọn các câu này ở bước sửa phụ đề:")
+            for cue, sd, sl in clipped[:6]:
+                log(f"   • [{cue.start:6.1f}s] cần ~{sd:.1f}s nhưng khe chỉ {sl:.1f}s")
 
     if labels:
         if replace_audio:

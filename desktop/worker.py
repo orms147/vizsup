@@ -45,6 +45,34 @@ class PipelineWorker(QObject):
         if self._cancel:
             raise _Cancelled()
 
+    def _preflight_translators(self, o: dict) -> None:
+        """Validate the translator choice up front so the user isn't told 'missing
+        key' only after a long download/OCR/ASR run — and isn't silently handed
+        untranslated Chinese when the (always-available) passthrough default is in
+        effect. Raises RuntimeError to fail fast; logs a loud warning for passthrough.
+        """
+        from app.providers.registry import get_translator
+
+        draft = o.get("translator", "passthrough")
+        refine = o.get("refine")
+        for role, name in (("bản nháp", draft), ("tinh chỉnh", refine)):
+            if not name:
+                continue
+            try:
+                prov = get_translator(name)
+            except KeyError as exc:
+                raise RuntimeError(f"Bộ dịch '{name}' không tồn tại.") from exc
+            if not prov.available():
+                raise RuntimeError(
+                    f"Bộ dịch '{name}' ({role}) chưa sẵn sàng — thiếu API key. "
+                    f"Vào ⚙ Cài đặt thêm key, hoặc đổi bộ dịch ở bước 1."
+                )
+        if draft == "passthrough":
+            self.log.emit(
+                "⚠ Bộ dịch đang là 'passthrough' — phụ đề sẽ GIỮ NGUYÊN tiếng Trung "
+                "(không dịch). Chọn OpenRouter/DeepSeek… ở bước 1 nếu muốn dịch sang tiếng Việt."
+            )
+
     # --- to the edit gate ----------------------------------------------------
     @Slot()
     def run_to_gate(self) -> None:
@@ -54,6 +82,8 @@ class PipelineWorker(QObject):
         job, o = self.job, self.opts
         try:
             store.debug(f"run_to_gate begin file={bool(o.get('file'))} url={o.get('url')} src={o.get('subtitle_source')}")
+            # 0) pre-flight: validate the translator choice BEFORE spending download/OCR
+            self._preflight_translators(o)
             # 1) source
             self._check()
             if o.get("file"):
@@ -146,6 +176,7 @@ class PipelineWorker(QObject):
                 cover_hardsubs=o.get("cover_hardsubs", False),
                 font=o.get("font", "Be Vietnam Pro"),
                 size=ass_size,
+                log=self.log.emit,
             )
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")

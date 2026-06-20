@@ -213,14 +213,13 @@ class EditorView(QWidget):
         if 0 <= i < len(self.cues):
             self._snapshot()
             c = self.cues[i]
+            orig_end = c.end                 # capture BEFORE mutating, so the second half is exact
             mid = (c.start + c.end) / 2
             words = c.vi.split()
             half = len(words) // 2
             left, right = " ".join(words[:half]), " ".join(words[half:])
             c.end, c.vi = mid, left
-            self.cues.insert(i + 1, EditorCue(start=mid, end=max(mid + 0.2, c.end), vi=right, zh=""))
-            # fix the new cue end to original end
-            self.cues[i + 1].end = max(mid + 0.2, mid + (c.end - c.start))
+            self.cues.insert(i + 1, EditorCue(start=mid, end=orig_end, vi=right, zh=""))
             self._reload()
 
     def _merge(self) -> None:
