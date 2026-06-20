@@ -171,6 +171,13 @@ def assemble(
 
     placements, sped, flagged = _plan_segments(segments)
 
+    from app.pipeline.tts import load_overrides
+    ov = load_overrides(job)
+
+    def _gain_db(cue: Cue) -> float:
+        k = cue.index - 1
+        return float(ov[k].get("gain_db", 0.0)) if 0 <= k < len(ov) else 0.0
+
     parts: list[str] = []
     labels: list[str] = []
     for p in placements:
@@ -178,6 +185,9 @@ def assemble(
         af: list[str] = []
         if p["tempo"] > 1.001:
             af.append(_tempo_filter(p["tempo"]))
+        gain = _gain_db(segments[i - 1][0])
+        if abs(gain) > 0.01:
+            af.append(f"volume={gain:.1f}dB")
         if p["trim"]:
             eff = p["eff"]
             af.append(f"atrim=0:{eff:.3f}")
