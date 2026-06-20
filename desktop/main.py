@@ -193,7 +193,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 voices = []
             self.render.set_voices(voices)
-            self.render.set_preview(self.job.source_video)
+            self.render.set_preview(self.job.source_video, self.editor.cues)  # show VI caption bar in step 3
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
