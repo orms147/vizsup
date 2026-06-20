@@ -32,9 +32,13 @@ asr-accurate = [
     "torchaudio>=2.2",
 ]
 # Hardcoded-subtitle OCR (burned-in Chinese subs → SRT). RapidOCR = ONNX PP-OCR
-# models, CPU, no PaddlePaddle — far easier to install on Windows. Pulls opencv.
+# models, CPU, no PaddlePaddle — far easier to install on Windows.
+# IMPORTANT: rapidocr pulls `opencv-python` (full), which bundles Qt and CRASHES
+# alongside PySide6 in the same process. Use the headless build instead — after
+# installing this extra, run:  pip uninstall -y opencv-python && pip install opencv-python-headless
 ocr = [
     "rapidocr-onnxruntime>=1.3",
+    "opencv-python-headless>=4.9",
 ]
 # LLM translation providers.
 translate = [

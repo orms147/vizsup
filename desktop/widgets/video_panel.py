@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.theme import C
 
@@ -99,10 +100,15 @@ class VideoPanel(QFrame):
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:
         self._placeholder.setText("Chưa có video")
-        if HAVE_MM and path and Path(path).exists() and self._probe_ok(path):
+        store.debug(f"VideoPanel.load path={path} HAVE_MM={HAVE_MM}")
+        ok = bool(HAVE_MM and path and Path(path).exists() and self._probe_ok(path))
+        store.debug(f"VideoPanel.load probe_ok={ok}")
+        if ok:
             from PySide6.QtCore import QUrl
 
+            store.debug("VideoPanel.load setSource begin")
             self._player.setSource(QUrl.fromLocalFile(str(path)))
+            store.debug("VideoPanel.load setSource done")
             self._stack.setCurrentWidget(self._video)
         else:
             if path and Path(path).exists():

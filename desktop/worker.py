@@ -15,6 +15,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 
 from desktop import paths  # noqa: F401  (puts backend on sys.path)
+from desktop import store  # noqa: E402
 from app.models import Job  # noqa: E402
 
 
@@ -52,6 +53,7 @@ class PipelineWorker(QObject):
 
         job, o = self.job, self.opts
         try:
+            store.debug(f"run_to_gate begin file={bool(o.get('file'))} url={o.get('url')} src={o.get('subtitle_source')}")
             # 1) source
             self._check()
             if o.get("file"):
@@ -67,6 +69,7 @@ class PipelineWorker(QObject):
                 download.download(job)
                 self.log.emit(f"✓ Tải xong: {job.metadata.get('title')!r}")
 
+            store.debug("source ready (video on disk)")
             # persist metadata so the project is listed/resumable later
             import json as _json
             (job.work_dir / "metadata.json").write_text(
@@ -76,6 +79,7 @@ class PipelineWorker(QObject):
             self._check()
             self.stage_started.emit("subtitle")
             src = o.get("subtitle_source", "asr")
+            store.debug(f"subtitle stage begin src={src}")
             if src == "srt" and o.get("srt"):
                 self.progress.emit(0.4, "Dùng phụ đề tiếng Trung có sẵn…")
                 write_srt(parse_srt(Path(o["srt"])), job.cn_srt)
@@ -93,6 +97,7 @@ class PipelineWorker(QObject):
                 asr.transcribe(job, provider=o.get("asr", "faster_whisper"))
                 self.log.emit("✓ Nhận dạng xong")
 
+            store.debug("subtitle stage ok")
             # 3) translate
             self._check()
             self.stage_started.emit("translate")
@@ -101,12 +106,15 @@ class PipelineWorker(QObject):
                           + (f" → {o['refine']}" if o.get("refine") else ""))
             translate.translate(job, draft=o.get("translator", "passthrough"), refine=o.get("refine"))
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
+            store.debug("translate ok → emit gate_reached")
 
             self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
             self.gate_reached.emit()
         except _Cancelled:
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001 - surface to UI
+            import traceback as _tb
+            store.debug(f"run_to_gate FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
             self.failed.emit(f"{type(exc).__name__}: {exc}")
         finally:
             self.finished.emit()

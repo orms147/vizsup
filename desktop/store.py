@@ -83,6 +83,19 @@ def list_jobs(limit: int = 8) -> list[dict]:
     return out[:limit]
 
 
+def debug(msg: str) -> None:
+    """Append a line to storage/vizsup-debug.log, flushed immediately, so we can
+    pinpoint where a native crash happened (no Python traceback on segfault)."""
+    try:
+        p = _storage() / "vizsup-debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(str(msg) + "\n")
+            f.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def delete_job(job_id: str) -> None:
     """Delete a project's working directory (only within storage/, for safety)."""
     base = _storage().resolve()

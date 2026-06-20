@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         jid = uuid.uuid4().hex[:12]
         self.job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
         store.save_job(self.job, opts, "running")
+        store.debug(f"=== _start_gate job={jid} ===")
         self.input.set_busy(True)
         self.input.append_log(f"▶ Bắt đầu (job {jid})")
         self._run("run_to_gate", opts, {
@@ -145,12 +146,17 @@ class MainWindow(QMainWindow):
         })
 
     def _on_gate(self) -> None:
+        store.debug("on_gate: editor.load begin")
         try:
             self.editor.load(self.job)
+            store.debug("on_gate: editor.load done")
             store.save_job(self.job, self.opts, "await_edit")  # title now known → resumable
             self.stack.setCurrentIndex(EDITOR)
             self.status.setText("● Sửa phụ đề — duyệt khi xong")
+            store.debug("on_gate: switched to editor")
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
+            import traceback as _tb
+            store.debug(f"on_gate FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
             self.input.show_error(f"Lỗi mở trình sửa: {type(exc).__name__}: {exc}")
 
     def _resume(self, job_id: str) -> None:
