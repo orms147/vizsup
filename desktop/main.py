@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         store.debug("on_gate: editor.load begin")
         try:
             self.editor.load(self.job)
+            self.editor.set_context(self.opts)  # tts/voice/translator for preview & shorten
             store.debug("on_gate: editor.load done")
             store.save_job(self.job, self.opts, "await_edit")  # title now known → resumable
             self.stack.setCurrentIndex(EDITOR)
@@ -272,6 +273,10 @@ class MainWindow(QMainWindow):
                     self._thread.terminate()
                     self._thread.wait()
         except RuntimeError:
+            pass
+        try:
+            self.editor.shutdown()  # join any preview/shorten task threads
+        except Exception:  # noqa: BLE001
             pass
         e.accept()
 

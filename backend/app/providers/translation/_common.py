@@ -93,6 +93,18 @@ class OpenAICompatTranslator(TranslationProvider):
         )
         return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
 
+    def rewrite(self, text: str, instruction: str) -> str:
+        """Single-shot rewrite (e.g. shorten a VI line to fit the dub slot)."""
+        resp = self._client().chat.completions.create(
+            model=self.model,
+            temperature=0.4,
+            messages=[
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": text},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip()
+
     def list_models(self) -> list[str]:
         """GET {base_url}/models (works for OpenRouter / DeepSeek / Qwen-compatible)."""
         import httpx

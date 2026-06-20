@@ -100,6 +100,23 @@ class RenderView(QWidget):
 
         # --- subtitle style ---
         ll.addWidget(_section("Kiểu phụ đề"))
+        self.preset = QComboBox()
+        self.btn_save_preset = QPushButton("Lưu")
+        self.btn_save_preset.setObjectName("ghost")
+        self.btn_save_preset.setFixedWidth(46)
+        self.btn_del_preset = QPushButton("Xóa")
+        self.btn_del_preset.setObjectName("ghost")
+        self.btn_del_preset.setFixedWidth(46)
+        self.preset.activated.connect(self._on_preset)
+        self.btn_save_preset.clicked.connect(self._save_preset)
+        self.btn_del_preset.clicked.connect(self._delete_preset)
+        ll.addWidget(QLabel("Mẫu kiểu"))
+        prow = QHBoxLayout()
+        prow.addWidget(self.preset, 1)
+        prow.addWidget(self.btn_save_preset)
+        prow.addWidget(self.btn_del_preset)
+        ll.addLayout(prow)
+
         self.font = QComboBox()
         self.font.addItems(FONTS)
         ll.addLayout(self._row("Phông chữ", self.font))
@@ -237,6 +254,7 @@ class RenderView(QWidget):
         self.right_stack.addWidget(self.style_img)
         rl.addWidget(self.right_stack, 1)
 
+        self._refresh_presets()
         root.addWidget(scroll)
         root.addWidget(right, 1)
 
@@ -263,6 +281,7 @@ class RenderView(QWidget):
         grid = QGridLayout()
         grid.setSpacing(4)
         self.align_group = QButtonGroup(self)
+        self._align_btns: dict[int, QPushButton] = {}
         # numpad layout: rows top(7,8,9) mid(4,5,6) bottom(1,2,3)
         layout = [(0, 7), (1, 8), (2, 9), (3, 4), (4, 5), (5, 6), (6, 1), (7, 2), (8, 3)]
         glyph = {7: "↖", 8: "↑", 9: "↗", 4: "←", 5: "•", 6: "→", 1: "↙", 2: "↓", 3: "↘"}
@@ -274,6 +293,7 @@ class RenderView(QWidget):
                 b.setChecked(True)
             b.clicked.connect(lambda _=False, n=num: setattr(self, "_align", n))
             self.align_group.addButton(b)
+            self._align_btns[num] = b
             grid.addWidget(b, pos // 3, pos % 3)
         return grid
 
@@ -344,6 +364,92 @@ class RenderView(QWidget):
         self.log.setVisible(True)
         self.render_btn.setEnabled(False)
         self.renderRequested.emit(opts)
+
+    # --- style presets -------------------------------------------------------
+    def _presets_file(self) -> Path:
+        from app.config import settings
+        return Path(settings.vizsup_storage_dir) / "style_presets.json"
+
+    def _load_presets(self) -> dict:
+        import json
+        p = self._presets_file()
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                return d if isinstance(d, dict) else {}
+            except Exception:  # noqa: BLE001
+                return {}
+        return {}
+
+    def _refresh_presets(self, select: str | None = None) -> None:
+        self.preset.blockSignals(True)
+        self.preset.clear()
+        self.preset.addItem("— Mẫu —")
+        for name in sorted(self._load_presets()):
+            self.preset.addItem(name)
+        if select:
+            i = self.preset.findText(select)
+            if i >= 0:
+                self.preset.setCurrentIndex(i)
+        self.preset.blockSignals(False)
+
+    def _on_preset(self, _i: int) -> None:
+        data = self._load_presets().get(self.preset.currentText())
+        if data:
+            self._apply_style(data)
+
+    def _save_preset(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        import json
+        name, ok = QInputDialog.getText(self, "Lưu mẫu kiểu", "Tên mẫu:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        presets = self._load_presets()
+        presets[name] = {"font": self.font.currentText(), "size": self.size.value(),
+                         "style": self._style()}
+        p = self._presets_file()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._refresh_presets(select=name)
+
+    def _delete_preset(self) -> None:
+        import json
+        name = self.preset.currentText()
+        presets = self._load_presets()
+        if name in presets:
+            del presets[name]
+            self._presets_file().write_text(json.dumps(presets, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+            self._refresh_presets()
+
+    def _apply_style(self, data: dict) -> None:
+        s = data.get("style", {})
+        if data.get("font"):
+            i = self.font.findText(data["font"])
+            if i >= 0:
+                self.font.setCurrentIndex(i)
+        if data.get("size"):
+            self.size.setValue(int(data["size"]))
+        for btn, key in ((self.c_text, "primary"), (self.c_outline, "outline"), (self.c_box, "box")):
+            if s.get(key):
+                btn.hex = s[key]
+                btn._apply()
+        self.outline_w.setValue(int(s.get("outline_w", self.outline_w.value())))
+        self.bold.setChecked(bool(s.get("bold", False)))
+        self.italic.setChecked(bool(s.get("italic", False)))
+        self.mv.setValue(int(s.get("margin_v", self.mv.value())))
+        bs = (int(s.get("border_style", 1)), int(s.get("box_alpha", 255)))
+        for label, val in BOX_STYLES.items():
+            if val == bs:
+                j = self.box_style.findText(label)
+                if j >= 0:
+                    self.box_style.setCurrentIndex(j)
+                break
+        al = int(s.get("alignment", 2))
+        self._align = al
+        if al in self._align_btns:
+            self._align_btns[al].setChecked(True)
 
     # --- progress API --------------------------------------------------------
     def set_progress(self, frac: float, msg: str) -> None:

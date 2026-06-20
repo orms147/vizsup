@@ -49,6 +49,23 @@ def translate_cues(
     return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, translated)]
 
 
+def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7) -> str:
+    """Ask the LLM to shorten one Vietnamese line (so it fits its dub slot) while
+    keeping the meaning and a natural spoken tone. Returns the shortened line."""
+    prov = get_translator(provider)
+    if not hasattr(prov, "rewrite"):
+        raise RuntimeError(f"Bộ dịch '{provider}' không hỗ trợ rút gọn câu.")
+    if not prov.available():
+        raise RuntimeError(f"Bộ dịch '{provider}' chưa sẵn sàng (thiếu API key).")
+    instruction = (
+        "Bạn là biên tập phụ đề tiếng Việt. Hãy RÚT GỌN câu sau xuống khoảng "
+        f"{int(ratio * 100)}% độ dài, GIỮ NGUYÊN ý nghĩa và giọng nói tự nhiên để lồng tiếng. "
+        "Chỉ trả về DUY NHẤT một câu tiếng Việt đã rút gọn, không kèm giải thích hay dấu ngoặc kép."
+    )
+    out = prov.rewrite(text, instruction).strip().strip('"').strip()
+    return out or text
+
+
 def translate(
     job: Job,
     *,

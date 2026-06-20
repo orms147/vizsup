@@ -64,6 +64,12 @@ class SubtitleTable(QTableWidget):
         if c.too_long:
             num.setForeground(QBrush(QColor(C["amber"])))
             vi.setToolTip(f"Quá dài để lồng tiếng: ~{c.est_speak:.1f}s nói / {c.dur:.1f}s khe")
+        if getattr(c, "mute", False):
+            num.setText("🔇")
+            vi.setForeground(QBrush(QColor(C["muted2"])))
+            vi.setToolTip("Đã tắt tiếng câu này (vẫn hiện phụ đề)")
+        if getattr(c, "gain_db", 0.0):
+            num.setToolTip(f"Âm lượng {c.gain_db:+.0f} dB")
         for col, it in enumerate((num, start, end, vi, zh)):
             self.setItem(r, col, it)
 
