@@ -67,6 +67,7 @@ class VideoPanel(QFrame):
             self._stack.addWidget(self._video)
         else:
             self._player = None
+            self._audio = None
         root.addWidget(stage, 1)
 
         # caption bar (current Vietnamese cue) — directly under the video
@@ -95,6 +96,14 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._play)
         ctl.addWidget(self._time)
         ctl.addWidget(self._scrub, 1)
+        self._vol = QSlider(Qt.Horizontal)
+        self._vol.setFixedWidth(84)
+        self._vol.setRange(0, 100)
+        self._vol.setValue(100)
+        self._vol.setToolTip("Âm lượng xem trước")
+        self._vol.valueChanged.connect(self._on_volume)
+        ctl.addWidget(QLabel("🔊"))
+        ctl.addWidget(self._vol)
         root.addLayout(ctl)
 
     # --- public API ----------------------------------------------------------
@@ -136,6 +145,10 @@ class VideoPanel(QFrame):
     def _on_media_error(self, _error, msg: str = "") -> None:
         self._placeholder.setText("Không phát được video (tệp hỏng).")
         self._stack.setCurrentWidget(self._placeholder)
+
+    def _on_volume(self, v: int) -> None:
+        if self._audio is not None:
+            self._audio.setVolume(v / 100.0)
 
     def set_cues(self, cues: list) -> None:
         self._cues = cues or []

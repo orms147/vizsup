@@ -172,10 +172,13 @@ class PipelineWorker(QObject):
             ass_size = int(round(ui_size * 3)) if ui_size else 60  # UI px → .ass units (1080 canvas)
             out = assemble.assemble(
                 job, segments,
-                replace_audio=not o.get("keep_audio", False),
+                audio_mode=o.get("audio_mode", "replace"),
+                orig_volume=o.get("orig_volume", 1.0),
+                dub_volume=o.get("dub_volume", 1.0),
                 cover_hardsubs=o.get("cover_hardsubs", False),
                 font=o.get("font", "Be Vietnam Pro"),
                 size=ass_size,
+                style=o.get("style"),
                 log=self.log.emit,
             )
             self.progress.emit(1.0, "Hoàn tất")

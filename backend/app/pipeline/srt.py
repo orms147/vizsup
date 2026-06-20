@@ -87,11 +87,39 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,{border_style},2,0,2,40,40,{margin_v},1
+Style: Default,{font},{size},{primary},&H000000FF,{outline_c},{back},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},{shadow},{alignment},{margin_l},{margin_r},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
 """
+
+# Full subtitle style. Colours are "#RRGGBB"; alpha is 0=opaque..255=transparent.
+# border_style: 1=outline+shadow, 3=opaque box (tight), 4=opaque box. alignment is
+# the numpad layout (1-3 bottom, 4-6 middle, 7-9 top; 2=bottom-centre default).
+DEFAULT_STYLE = {
+    "primary": "#FFFFFF",
+    "outline": "#000000",
+    "box": "#000000",
+    "box_alpha": 128,
+    "border_style": 1,
+    "outline_w": 2,
+    "shadow": 0,
+    "bold": False,
+    "italic": False,
+    "alignment": 2,
+    "margin_v": 60,
+    "margin_l": 40,
+    "margin_r": 40,
+}
+
+
+def _ass_colour(hex_str: str, alpha: int = 0) -> str:
+    """'#RRGGBB' + alpha → ASS '&HAABBGGRR' (note BGR order, alpha 0=opaque)."""
+    h = (hex_str or "").lstrip("#")
+    if len(h) != 6:
+        h = "FFFFFF"
+    rr, gg, bb = h[0:2], h[2:4], h[4:6]
+    return f"&H{max(0, min(255, alpha)):02X}{bb}{gg}{rr}".upper()
 
 
 def write_ass(
@@ -102,14 +130,31 @@ def write_ass(
     size: int = 60,
     margin_v: int = 60,
     cover_hardsubs: bool = False,
+    style: dict | None = None,
 ) -> Path:
-    """Write styled ASS. ``cover_hardsubs=True`` uses an opaque box (BorderStyle=4)
-    to hide leftover burned-in Chinese subtitles behind the Vietnamese line."""
+    """Write styled ASS. ``style`` overrides any of DEFAULT_STYLE (colour/box/
+    position/bold/outline…). ``cover_hardsubs=True`` forces an opaque box
+    (BorderStyle=4) to hide leftover burned-in Chinese subtitles."""
+    s = {**DEFAULT_STYLE, **(style or {})}
+    if cover_hardsubs:
+        border, box_alpha = 4, 0           # fully opaque box to hide hardsubs
+    else:
+        border, box_alpha = int(s["border_style"]), int(s["box_alpha"])
     header = _ASS_HEADER.format(
         font=font,
         size=size,
-        margin_v=margin_v,
-        border_style=4 if cover_hardsubs else 1,
+        primary=_ass_colour(s["primary"], 0),
+        outline_c=_ass_colour(s["outline"], 0),
+        back=_ass_colour(s["box"], box_alpha),
+        bold=-1 if s["bold"] else 0,
+        italic=-1 if s["italic"] else 0,
+        outline_w=s["outline_w"],
+        shadow=s["shadow"],
+        border_style=border,
+        alignment=int(s["alignment"]),
+        margin_l=int(s["margin_l"]),
+        margin_r=int(s["margin_r"]),
+        margin_v=int(s.get("margin_v", margin_v)),
     )
     lines = [header]
     for c in cues:

@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.editor.dirtyChanged.connect(self._on_dirty)
         self.render.renderRequested.connect(self._start_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
+        self.render.previewStyleRequested.connect(self._preview_style)
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -197,6 +198,20 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    def _preview_style(self, opts: dict) -> None:
+        """Burn the chosen style onto one frame (fast) and show it in the preview."""
+        if self.job is None:
+            return
+        try:
+            from app.pipeline import assemble
+            size = int(round(opts.get("size", 20) * 3))  # UI px → .ass units (1080 canvas)
+            path = assemble.style_preview_frame(
+                self.job, self.editor.cues, font=opts.get("font", "Be Vietnam Pro"),
+                size=size, cover_hardsubs=False, style=opts.get("style"))
+            self.render.show_style_image(str(path))
+        except Exception as exc:  # noqa: BLE001
+            self.render.status.setText(f"Lỗi xem trước: {exc}")
 
     def _start_render(self, ropts: dict) -> None:
         if self._busy():
