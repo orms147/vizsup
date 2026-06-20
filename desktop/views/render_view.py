@@ -345,8 +345,14 @@ class RenderView(QWidget):
         return "replace"
 
     def _emit_preview(self) -> None:
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.setText("⏳  Đang tạo…")
         self.previewStyleRequested.emit({"font": self.font.currentText(),
                                          "size": self.size.value(), "style": self._style()})
+
+    def reset_preview_btn(self) -> None:
+        self.preview_btn.setEnabled(True)
+        self.preview_btn.setText("🖼  Xem thử kiểu trên video")
 
     def _emit_render(self) -> None:
         speed = self.speed.value() / 100.0

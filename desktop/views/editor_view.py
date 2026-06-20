@@ -446,5 +446,7 @@ class EditorView(QWidget):
             a.end = b.end
             a.vi = (a.vi + " " + b.vi).strip()
             a.zh = (a.zh + b.zh).strip()
+            a.mute = a.mute or b.mute                                  # don't silently un-mute
+            a.gain_db = a.gain_db if abs(a.gain_db) >= abs(b.gain_db) else b.gain_db
             self.cues.pop(i + 1)
             self._reload()

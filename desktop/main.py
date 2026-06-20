@@ -201,18 +201,29 @@ class MainWindow(QMainWindow):
             self.status.setText(f"● Lỗi: {exc}")
 
     def _preview_style(self, opts: dict) -> None:
-        """Burn the chosen style onto one frame (fast) and show it in the preview."""
+        """Burn the chosen style onto one frame and show it — OFF the UI thread
+        (ffmpeg takes ~1-2s; running it inline would freeze the window)."""
         if self.job is None:
             return
-        try:
-            from app.pipeline import assemble
-            size = int(round(opts.get("size", 20) * 3))  # UI px → .ass units (1080 canvas)
-            path = assemble.style_preview_frame(
-                self.job, self.editor.cues, font=opts.get("font", "Be Vietnam Pro"),
-                size=size, cover_hardsubs=False, style=opts.get("style"))
-            self.render.show_style_image(str(path))
-        except Exception as exc:  # noqa: BLE001
-            self.render.status.setText(f"Lỗi xem trước: {exc}")
+        from app.pipeline import assemble
+        job, cues = self.job, self.editor.cues
+        size = int(round(opts.get("size", 20) * 3))  # UI px → .ass units (1080 canvas)
+        font, style = opts.get("font", "Be Vietnam Pro"), opts.get("style")
+        self.render.status.setText("Đang tạo xem trước…")
+
+        def work():
+            return str(assemble.style_preview_frame(
+                job, cues, font=font, size=size, cover_hardsubs=False, style=style))
+
+        def done(path):
+            self.render.show_style_image(path)
+            self.render.reset_preview_btn()
+
+        def fail(msg):
+            self.render.status.setText(f"Lỗi xem trước: {msg}")
+            self.render.reset_preview_btn()
+
+        self.editor._run_async(work, done, fail)  # reuse the editor's joined task runner
 
     def _start_render(self, ropts: dict) -> None:
         if self._busy():
