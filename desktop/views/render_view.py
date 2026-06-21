@@ -57,14 +57,28 @@ class _ColorButton(QPushButton):
         self.clicked.connect(self._pick)
 
     def _apply(self) -> None:
-        self.setStyleSheet(f"background:{self.hex}; border:1px solid #555; border-radius:5px;")
+        h = self.hex.lstrip("#")
+        try:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        except ValueError:
+            r, g, b = 255, 255, 255
+        fg = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 140 else "#ffffff"
+        # scope to QPushButton so the swatch colour never cascades into child widgets
+        self.setStyleSheet(
+            f"QPushButton {{ background:{self.hex}; color:{fg}; "
+            "border:1px solid #555; border-radius:5px; }")
         self.setText(self.hex.upper())
 
     def _pick(self) -> None:
-        c = QColorDialog.getColor(QColor(self.hex), self, "Chọn màu")
-        if c.isValid():
-            self.hex = c.name()
-            self._apply()
+        # parent to the top-level window (NOT this button) and clear the stylesheet,
+        # otherwise the swatch's background cascades and tints the whole dialog.
+        dlg = QColorDialog(QColor(self.hex), self.window())
+        dlg.setStyleSheet("")
+        if dlg.exec():
+            c = dlg.currentColor()
+            if c.isValid():
+                self.hex = c.name()
+                self._apply()
 
 
 class RenderView(QWidget):
