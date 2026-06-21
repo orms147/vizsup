@@ -100,7 +100,7 @@
       </div>
 
       <div style="{{ videoStageStyle }}">
-        <div style="{{ videoFrameStyle }}">
+        <div ref="{{ setVideoFrameRef }}" style="{{ videoFrameStyle }}">
           <div style="position:absolute;inset:0;background:radial-gradient(70% 45% at 50% 32%, rgba(245,181,69,.22), transparent 70%),radial-gradient(50% 30% at 70% 75%, rgba(207,90,60,.18), transparent)"></div>
           <div style="position:absolute;left:18%;right:18%;top:28%;bottom:28%;border-radius:50%;background:radial-gradient(circle at 40% 35%,#caa15f,#8a5a2e 55%,#5a3a1e);opacity:.5;filter:blur(2px)"></div>
           <div style="position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.25) 0%,transparent 22%,transparent 52%,rgba(0,0,0,.72) 100%)"></div>
@@ -113,15 +113,15 @@
             phụ đề cháy
           </div>
 
-          <!-- TRUE SUBTITLE PREVIEW (reflects render style) -->
-          <div style="{{ capWrapStyle }}">
-            <sc-if value="{{ subBox }}" hint-placeholder-val="{{ true }}">
-              <div style="{{ capBoxStyle }}"><span style="{{ capBoxZhStyle }}">{{ capZh }}</span></div>
-            </sc-if>
-            <sc-if value="{{ showRawZh }}" hint-placeholder-val="{{ false }}">
-              <span style="font-size:15px;font-weight:600;color:#fff;text-align:center;line-height:1.25;text-shadow:0 1px 2px #000,0 0 8px rgba(0,0,0,.6);letter-spacing:.5px">{{ capZh }}</span>
-            </sc-if>
-            <span style="{{ capViStyle }}">{{ capVi }}</span>
+          <!-- BURNED-IN CHINESE HARDSUB (covered by opaque box) -->
+          <div style="{{ zhHardsubWrapStyle }}"><span style="{{ zhHardsubStyle }}">{{ capZh }}</span></div>
+          <!-- DRAG/RESIZE STYLED SUBTITLE BOX (WYSIWYG) -->
+          <div data-mode="move" onMouseDown="{{ onBoxDown }}" style="{{ capRectStyle }}">
+            <span style="{{ capBoxStyle }}"><span ref="{{ setCapTextRef }}" style="{{ capTextStyle }}">{{ capVi }}</span></span>
+            <div data-mode="l" onMouseDown="{{ onBoxDown }}" style="{{ handleEdge.l }}"></div>
+            <div data-mode="r" onMouseDown="{{ onBoxDown }}" style="{{ handleEdge.r }}"></div>
+            <div data-mode="t" onMouseDown="{{ onBoxDown }}" style="{{ handleEdge.t }}"></div>
+            <div data-mode="b" onMouseDown="{{ onBoxDown }}" style="{{ handleEdge.b }}"></div>
           </div>
 
           <!-- control bar -->
@@ -139,10 +139,8 @@
               </button>
               <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:rgba(255,255,255,.92);letter-spacing:.2px;white-space:nowrap">{{ curStr }}<span style="color:rgba(255,255,255,.45)"> / {{ durStr }}</span></span>
               <div style="flex:1;min-width:0"></div>
-              <button onClick="{{ toggleSubBox }}" title="Che 中文 gốc bằng khung mờ" style="{{ boxToggleStyle }}">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="4" y="7" width="16" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/></svg>
-                Che 中文
-              </button>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="flex:none"><path d="M11 5L6 9H3v6h3l5 4V5z" fill="rgba(255,255,255,.92)"/><path d="M15 9a4 4 0 010 6" stroke="rgba(255,255,255,.92)" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <input type="range" min="0" max="100" value="{{ vol }}" onChange="{{ onVol }}" style="width:70px;flex:none" />
             </div>
           </div>
         </div>
@@ -151,19 +149,36 @@
       <div style="flex:none;margin-top:11px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#aeb2bc;background:#14171d;border:1px solid #21252d;padding:5px 9px;border-radius:7px">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 18l4-12 4 12M6.5 14h5M14 18l3-9 3 9M15.2 15h3.6" stroke="#868b96" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Be Vietnam Pro · <span style="font-family:'JetBrains Mono',monospace;color:#d6d8df">{{ subSizeStr }}</span>
+          {{ fontName }} · <span style="font-family:'JetBrains Mono',monospace;color:#d6d8df">{{ styleSizeStr }}</span>
         </span>
-        <span style="font-size:10.5px;color:#868b96">Kiểu chữ lấy từ bước Dựng video</span>
+        <span style="font-size:10.5px;color:#868b96">Kéo phụ đề trên video để đặt vị trí · sửa kiểu ở tab <span style="color:#a78bfa">Kiểu chữ</span></span>
       </div>
     </div>
 
     <!-- SPLITTER -->
     <div onMouseDown="{{ onPanelSplit }}" style="{{ panelSplitStyle }}"><div style="{{ panelSplitGrip }}"></div></div>
 
-    <!-- TABLE PANEL -->
+    <!-- RIGHT PANEL (tabbed) -->
     <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:#0b0c10">
-      <div style="height:48px;flex:none;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid #1c2029;background:#0d0f14">
-        <span style="font-size:13px;font-weight:600;color:#d6d8df">Phụ đề</span>
+      <!-- RIGHT TAB BAR -->
+      <div style="flex:none;display:flex;align-items:center;padding:9px 12px;border-bottom:1px solid #1c2029;background:#0d0f14">
+        <div style="display:flex;gap:4px;flex:1;background:#0a0c10;border:1px solid #1c2029;border-radius:10px;padding:4px">
+          <button onClick="{{ setRtabContent }}" style="{{ rtabContentStyle }}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            Nội dung &amp; Lồng tiếng
+          </button>
+          <button onClick="{{ setRtabStyle }}" style="{{ rtabStyleStyle }}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 18l4-12 4 12M6.5 14h5M14 18l3-9 3 9M15.2 15h3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Kiểu chữ
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== CONTENT TAB ===== -->
+      <sc-if value="{{ rtabContent }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <div style="height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid #1c2029;background:#0b0d11">
+        <span style="font-size:12.5px;font-weight:600;color:#d6d8df">Phụ đề</span>
         <span style="{{ countPillStyle }}">{{ cueCountLabel }}</span>
         <span style="{{ warnPillStyle }}">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 3l9 16H3L12 3z" stroke="#f5b545" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 10v4" stroke="#f5b545" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="#f5b545"/></svg>
@@ -218,7 +233,7 @@
       </sc-if>
 
       <!-- body -->
-      <div ref="{{ setTableScroll }}" style="flex:1;overflow-y:auto;min-height:0;position:relative">
+      <div ref="{{ setTableScroll }}" style="flex:1 1 auto;overflow-y:auto;min-height:128px;position:relative">
         <!-- READY -->
         <sc-if value="{{ isReady }}" hint-placeholder-val="{{ true }}">
           <sc-for list="{{ cues }}" as="cue" hint-placeholder-count="6">
@@ -316,6 +331,175 @@
           </div>
         </sc-if>
       </div>
+
+          <!-- ===== CÂU ĐANG CHỌN (per-line dub) ===== -->
+          <div style="flex:0 1 auto;min-height:0;overflow-y:auto;max-height:214px;border-top:1px solid #1c2029;background:#0c0e12;padding:11px 14px 12px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+              <span style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#868b96;font-weight:600">Câu đang chọn</span>
+              <sc-if value="{{ hasSel }}" hint-placeholder-val="{{ true }}"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#a78bfa;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.28);padding:1px 7px;border-radius:5px">#{{ selNum }}</span></sc-if>
+              <div style="flex:1"></div>
+              <span style="{{ fitStyle }}">
+                <sc-if value="{{ scTooLong }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 3l9 16H3L12 3z" stroke="#f5b545" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4" stroke="#f5b545" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="#f5b545"/></svg></sc-if>
+                <sc-if value="{{ scFit }}" hint-placeholder-val="{{ true }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4 4L19 7" stroke="#41c97a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></sc-if>
+                {{ fitLabel }} · {{ scEstStr }}/{{ scSlotStr }}
+              </span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <!-- line-count badge (read-only) + ngắt dòng -->
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:#9aa0ac;background:#0f1117;border:1px solid #21252d;padding:4px 10px;border-radius:7px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h11M4 17h16" stroke="#727783" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  {{ capLineStr }}
+                </span>
+                <div style="flex:1"></div>
+                <button onClick="{{ insertBreak }}" style="height:30px;display:flex;align-items:center;gap:6px;padding:0 11px;background:#13161c;border:1px solid #2c313b;border-radius:8px;color:#d6d8df;font-size:12px;font-weight:500;cursor:pointer" style-hover="background:#1a1f29;border-color:#363c46">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M20 6v6a3 3 0 01-3 3H5M9 11l-4 4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Chèn / bỏ ngắt dòng
+                </button>
+              </div>
+              <!-- volume dB -->
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                  <span style="font-size:12px;color:#aeb2bc;font-weight:500">Âm lượng câu</span>
+                  <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ scDbStr }}</span>
+                </div>
+                <input type="range" min="-12" max="12" step="1" value="{{ scDb }}" onChange="{{ setCueDb }}" style="width:100%" />
+              </div>
+              <!-- actions -->
+              <div style="display:flex;gap:8px">
+                <button onClick="{{ toggleMute }}" style="{{ muteBtnStyle }}">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M11 5L6 9H3v6h3l5 4V5z" fill="currentColor"/><path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Tắt tiếng
+                </button>
+                <button style="flex:1;height:34px;display:flex;align-items:center;justify-content:center;gap:7px;background:#13161c;border:1px solid #2c313b;border-radius:9px;color:#d6d8df;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:#1a1f29;border-color:#363c46">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5l11 7-11 7V5z"/></svg>Nghe thử
+                </button>
+                <button onClick="{{ shortenLine }}" style="flex:1;height:34px;display:flex;align-items:center;justify-content:center;gap:7px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.32);border-radius:9px;color:#cdbcff;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:rgba(139,92,246,.16)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M6 6l5 6-5 6M9 9l3 3-3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="6" r="2" stroke="currentColor" stroke-width="1.6"/><circle cx="18" cy="18" r="2" stroke="currentColor" stroke-width="1.6"/></svg>Rút gọn (AI)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ===== KIỂU CHỮ TAB ===== -->
+      <sc-if value="{{ rtabStyle }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:11px">
+
+          <!-- ÁP DỤNG CHO -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:12px 13px">
+            <div style="font-size:12.5px;color:#aeb2bc;font-weight:500;margin-bottom:8px">Áp dụng cho</div>
+            <div style="display:flex;gap:3px;padding:3px;background:#0a0c10;border:1px solid #21252d;border-radius:9px"><sc-for list="{{ scopeModes }}" as="m" hint-placeholder-count="2"><button onClick="{{ m.onPick }}" style="{{ m.style }}">{{ m.label }}</button></sc-for></div>
+            <div style="font-size:11px;color:#868b96;margin-top:7px">Áp kiểu cho toàn bộ phụ đề, hoặc chỉ các câu đang chọn ở bảng — mỗi nhóm câu có thể có kiểu riêng.</div>
+          </div>
+
+          <!-- preset (cross-project library) -->
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#868b96;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px">Mẫu kiểu<span style="font-size:9px;color:#5b606b;font-weight:600;text-transform:none;letter-spacing:.2px;background:#11141a;border:1px solid #21252d;padding:1px 6px;border-radius:5px">thư viện chung</span><span style="height:1px;flex:1;background:#1c2029"></span></div>
+            <div style="display:flex;gap:7px">
+              <div style="flex:1">
+                <button onClick="{{ openPreset }}" style="{{ presetTriggerStyle }}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="flex:none;color:#8b5cf6"><path d="M6 4h12v16l-6-4-6 4V4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+                  <span style="flex:1;text-align:left;font-size:13px;color:#e9eaee;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ presetName }}</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex:none;color:#727783"><path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <sc-if value="{{ presetOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:6px;background:#0c0e12;border:1px solid #21252d;border-radius:10px;padding:5px">
+                    <sc-for list="{{ stylePresets }}" as="p" hint-placeholder-count="4"><button onClick="{{ p.onPick }}" style="{{ p.rowStyle }}"><span style="font-size:12.5px;color:#e9eaee;font-weight:500;flex:1;text-align:left">{{ p.name }}</span><sc-if value="{{ p.selected }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="#a78bfa" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if></button></sc-for>
+                  </div>
+                </sc-if>
+              </div>
+              <button style="height:40px;padding:0 14px;background:transparent;border:1px solid #2c313b;border-radius:9px;color:#aeb2bc;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:#191c22;color:#e9eaee">Lưu</button>
+              <button style="height:40px;padding:0 14px;background:transparent;border:1px solid #2c313b;border-radius:9px;color:#aeb2bc;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:rgba(240,89,79,.12);border-color:rgba(240,89,79,.4);color:#f0594f">Xóa</button>
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:10.5px;color:#5b606b"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="flex:none"><path d="M4 7a2 2 0 012-2h4l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H6a2 2 0 01-2-2V7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Mẫu đã lưu dùng được cho các dự án khác.</div>
+          </div>
+
+          <!-- font & size -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:13px">
+            <div style="font-size:12.5px;color:#aeb2bc;font-weight:500;margin-bottom:7px">Phông chữ</div>
+            <div style="margin-bottom:14px">
+              <button onClick="{{ openFont }}" style="{{ fontTriggerStyle }}">
+                <span style="{{ fontPreviewStyle }}">Tiếng Việt — Đủ dấu</span>
+                <div style="flex:1"></div>
+                <span style="font-size:11.5px;color:#868b96">{{ fontName }}</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="color:#727783"><path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <sc-if value="{{ fontOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:6px;background:#0c0e12;border:1px solid #21252d;border-radius:10px;padding:5px">
+                  <sc-for list="{{ styleFonts }}" as="f" hint-placeholder-count="3"><button onClick="{{ f.onPick }}" style="{{ f.rowStyle }}"><span style="{{ f.previewStyle }}">Xin chào</span><div style="flex:1"></div><span style="font-size:12px;color:#c6c9d2">{{ f.name }}</span><sc-if value="{{ f.selected }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="#a78bfa" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if></button></sc-for>
+                </div>
+              </sc-if>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><span style="font-size:12.5px;color:#aeb2bc;font-weight:500">Cỡ chữ</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ styleSizeStr }}</span></div>
+            <input type="range" min="12" max="40" step="1" value="{{ styleSize }}" onChange="{{ onSize }}" style="width:100%" />
+            <div style="display:flex;gap:8px;margin-top:14px">
+              <button onClick="{{ toggleBold }}" style="{{ boldStyle }}"><span style="font-weight:800;font-size:14px">B</span> Đậm</button>
+              <button onClick="{{ toggleItalic }}" style="{{ italicStyle }}"><span style="font-style:italic;font-weight:600;font-size:14px;font-family:Georgia,serif">I</span> Nghiêng</button>
+            </div>
+          </div>
+
+          <!-- colour & outline -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:13px;display:flex;flex-direction:column;gap:10px">
+            <div>
+              <button onClick="{{ swText.onToggle }}" style="width:100%;display:flex;align-items:center;gap:11px;height:42px;padding:0 12px;background:#0c0e12;border:1px solid #21252d;border-radius:9px;cursor:pointer" style-hover="border-color:#2c313b"><span style="font-size:12.5px;color:#c6c9d2;font-weight:500;flex:1;text-align:left">{{ swText.label }}</span><span style="{{ swText.chipStyle }}"></span><span style="{{ swText.pillStyle }}">{{ swText.hex }}</span></button>
+              <sc-if value="{{ swText.open }}" hint-placeholder-val="{{ false }}"><div style="margin-top:7px;padding:10px;background:#0c0e12;border:1px solid #21252d;border-radius:9px"><div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px"><sc-for list="{{ swText.palette }}" as="c" hint-placeholder-count="7"><button onClick="{{ c.onPick }}" style="{{ c.style }}"></button></sc-for></div><div style="font-size:10.5px;color:#727783">Bảng nhanh · bấm chip để mở bảng chọn màu hệ thống</div></div></sc-if>
+            </div>
+            <div>
+              <button onClick="{{ swStroke.onToggle }}" style="width:100%;display:flex;align-items:center;gap:11px;height:42px;padding:0 12px;background:#0c0e12;border:1px solid #21252d;border-radius:9px;cursor:pointer" style-hover="border-color:#2c313b"><span style="font-size:12.5px;color:#c6c9d2;font-weight:500;flex:1;text-align:left">{{ swStroke.label }}</span><span style="{{ swStroke.chipStyle }}"></span><span style="{{ swStroke.pillStyle }}">{{ swStroke.hex }}</span></button>
+              <sc-if value="{{ swStroke.open }}" hint-placeholder-val="{{ false }}"><div style="margin-top:7px;padding:10px;background:#0c0e12;border:1px solid #21252d;border-radius:9px"><div style="display:flex;flex-wrap:wrap;gap:7px"><sc-for list="{{ swStroke.palette }}" as="c" hint-placeholder-count="6"><button onClick="{{ c.onPick }}" style="{{ c.style }}"></button></sc-for></div></div></sc-if>
+            </div>
+            <div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><span style="font-size:12.5px;color:#aeb2bc;font-weight:500">Độ dày viền</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ styleStrokeStr }}</span></div>
+              <input type="range" min="0" max="6" step="1" value="{{ styleStroke }}" onChange="{{ onStroke }}" style="width:100%" />
+            </div>
+          </div>
+
+          <!-- background -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:13px;display:flex;flex-direction:column;gap:12px">
+            <div>
+              <div style="font-size:12.5px;color:#aeb2bc;font-weight:500;margin-bottom:8px">Kiểu nền</div>
+              <div style="display:flex;gap:3px;padding:3px;background:#0a0c10;border:1px solid #21252d;border-radius:9px"><sc-for list="{{ styleBgModes }}" as="m" hint-placeholder-count="3"><button onClick="{{ m.onPick }}" style="{{ m.style }}">{{ m.label }}</button></sc-for></div>
+              <div style="font-size:11px;color:#868b96;margin-top:7px">{{ bgModeSub }}</div>
+            </div>
+            <div>
+              <button onClick="{{ swBg.onToggle }}" style="width:100%;display:flex;align-items:center;gap:11px;height:42px;padding:0 12px;background:#0c0e12;border:1px solid #21252d;border-radius:9px;cursor:pointer" style-hover="border-color:#2c313b"><span style="font-size:12.5px;color:#c6c9d2;font-weight:500;flex:1;text-align:left">{{ swBg.label }}</span><span style="{{ swBg.chipStyle }}"></span><span style="{{ swBg.pillStyle }}">{{ swBg.hex }}</span></button>
+              <sc-if value="{{ swBg.open }}" hint-placeholder-val="{{ false }}"><div style="margin-top:7px;padding:10px;background:#0c0e12;border:1px solid #21252d;border-radius:9px"><div style="display:flex;flex-wrap:wrap;gap:7px"><sc-for list="{{ swBg.palette }}" as="c" hint-placeholder-count="6"><button onClick="{{ c.onPick }}" style="{{ c.style }}"></button></sc-for></div></div></sc-if>
+            </div>
+          </div>
+
+          <!-- spacing -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:13px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><span style="font-size:12.5px;color:#aeb2bc;font-weight:500">Giãn chữ</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ styleLetterStr }}</span></div>
+            <input type="range" min="-20" max="40" step="2" value="{{ styleLetter }}" onChange="{{ onLetter }}" style="width:100%" />
+            <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#5b606b;font-family:'JetBrains Mono',monospace"><span>-20%</span><span>+40%</span></div>
+            <div style="font-size:11px;color:#868b96;margin-top:9px">Giãn/nén chữ cho vừa khung. Số dòng do bề rộng khung phụ đề quyết định (kéo cạnh khung trên video).</div>
+          </div>
+
+          <!-- box margins -->
+          <div style="background:#0f1117;border:1px solid #1c2029;border-radius:12px;padding:13px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <span style="font-size:12.5px;color:#aeb2bc;font-weight:500">Khung &amp; lề phụ đề</span>
+              <button onClick="{{ resetBox }}" style="display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;background:transparent;border:1px solid #2c313b;border-radius:7px;color:#9aa0ac;font-size:11px;font-weight:500;cursor:pointer" style-hover="background:#191c22;color:#d6d8df"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M4 9a7 7 0 0111-3l3 3m0 0V4m0 5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Đặt lại</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:#aeb2bc">Lề trái</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ marginLStr }}</span></div>
+                <input type="range" min="0" max="40" step="1" value="{{ marginL }}" onChange="{{ onMarginL }}" style="width:100%" />
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:#aeb2bc">Lề phải</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ marginRStr }}</span></div>
+                <input type="range" min="0" max="40" step="1" value="{{ marginR }}" onChange="{{ onMarginR }}" style="width:100%" />
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:#aeb2bc">Lề dọc (đáy)</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a78bfa">{{ marginVStr }}</span></div>
+                <input type="range" min="0" max="40" step="1" value="{{ marginV }}" onChange="{{ onMarginV }}" style="width:100%" />
+              </div>
+            </div>
+            <div style="margin-top:11px;font-size:10.5px;color:#5b606b;line-height:1.45">Thu hẹp lề trái/phải để ép câu dài xuống 2 dòng. Hoặc kéo trực tiếp các cạnh khung phụ đề trên video.</div>
+          </div>
+        </div>
+      </sc-if>
     </div>
   </div>
 
@@ -470,11 +654,15 @@ class Component extends DCLogic {
     editingField: null,
     loopId: null,
     pps: 74,
-    dockH: 188,
-    videoColW: 332,
+    dockH: 132,
+    videoColW: 426,
     videoRowH: 250,
+    rtab: 'content',
+    font: 'bevn', size: 20, textColor: '#FFFFFF', strokeColor: '#000000', strokeWidth: 2,
+    bgMode: 'box-opaque', bgColor: '#0A0810', bold: false, italic: false,
+    letterSpacing: 0, preset: '__none', open: null,
+    box: null, styleScope: 'all', vol: 80,
     subBox: true,
-    subSize: 15,
     showApprove: false,
     showShortcuts: false,
     showToast: false,
@@ -486,14 +674,42 @@ class Component extends DCLogic {
       { id: 1, start: 0.0,  end: 2.4,  zh: '你好，欢迎来到我的频道',   vi: 'Xin chào, chào mừng đến với kênh của mình' },
       { id: 2, start: 2.4,  end: 5.0,  zh: '今天教大家做一道家常菜',   vi: 'Hôm nay mình hướng dẫn mọi người làm một món ăn nhà' },
       { id: 3, start: 5.0,  end: 8.2,  zh: '首先准备一些新鲜的蔬菜',   vi: 'Đầu tiên, chuẩn bị một ít rau củ tươi' },
-      { id: 4, start: 8.2,  end: 11.0, zh: '记得点赞和关注哦',         vi: 'Nhớ like và theo dõi nha' },
+      { id: 4, start: 8.2,  end: 11.0, zh: '记得点赞和关注哦',         vi: 'Nhớ like và theo dõi nha', muted: true },
       { id: 5, start: 11.0, end: 13.0, zh: '把蔬菜切成小块，放进锅里', vi: 'Cắt tất cả rau củ thành những miếng nhỏ rồi cho vào nồi' },
-      { id: 6, start: 13.0, end: 16.4, zh: '加一点盐和酱油来调味',     vi: 'Nêm một chút muối và nước tương cho vừa miệng', lowConf: true },
+      { id: 6, start: 13.0, end: 16.4, zh: '加一点盐和酱油来调味',     vi: 'Nêm một chút muối và nước tương cho vừa miệng', lowConf: true, db: -2 },
     ],
   };
 
   SPEAK_RATE = 4.5;
   _rowEls = {};
+
+  FONTS = [
+    { id:'bevn', name:'Be Vietnam Pro', css:"'Be Vietnam Pro',sans-serif" },
+    { id:'noto', name:'Noto Sans', css:"'Be Vietnam Pro',sans-serif" },
+    { id:'arial', name:'Arial', css:"Arial,'Be Vietnam Pro',sans-serif" },
+  ];
+  BGMODES = [
+    { id:'outline', label:'Viền chữ', sub:'Không nền — chỉ viền + bóng chữ.' },
+    { id:'box-blur', label:'Hộp mờ', sub:'Nền bán trong suốt sau chữ.' },
+    { id:'box-opaque', label:'Hộp đặc', sub:'Hộp đặc — che hẳn phụ đề Trung gốc.' },
+  ];
+  LINEMODES = [ { id:'auto', label:'Tự động' }, { id:'1', label:'1 dòng' }, { id:'2', label:'2 dòng' } ];
+  PRESETS = [
+    { id:'__none', name:'— Mẫu kiểu —', placeholder:true },
+    { id:'tiktok', name:'TikTok đậm', vals:{ font:'bevn', size:30, textColor:'#FFFFFF', strokeColor:'#000000', strokeWidth:4, bgMode:'outline', bgColor:'#000000', bold:true, italic:false, align:5, margin:0, letterSpacing:0, lineMode:'auto' } },
+    { id:'capcut', name:'CapCut sạch', vals:{ font:'bevn', size:22, textColor:'#FFFFFF', strokeColor:'#1A0E2E', strokeWidth:1, bgMode:'box-blur', bgColor:'#0A0810', bold:false, italic:false, align:2, margin:80, letterSpacing:0, lineMode:'auto' } },
+    { id:'bantin', name:'Bản tin vàng', vals:{ font:'arial', size:21, textColor:'#FFD43B', strokeColor:'#000000', strokeWidth:2, bgMode:'box-opaque', bgColor:'#231104', bold:true, italic:false, align:2, margin:56, letterSpacing:0, lineMode:'auto' } },
+    { id:'cover', name:'Hộp đặc che chữ', vals:{ font:'bevn', size:20, textColor:'#FFFFFF', strokeColor:'#000000', strokeWidth:2, bgMode:'box-opaque', bgColor:'#0A0810', bold:false, italic:false, align:2, margin:60, letterSpacing:0, lineMode:'auto' } },
+  ];
+  COLORS = {
+    text:   ['#FFFFFF','#FFE9A8','#FFD43B','#7CF6C0','#A78BFA','#FF8FA3','#000000'],
+    stroke: ['#000000','#1A0E2E','#3A1F0B','#5C0000','#2A2A2A','#FFFFFF'],
+    bg:     ['#0A0810','#000000','#1A0E2E','#231104','#5C0000','#0E2A1C'],
+  };
+
+  rgba(hex, a) { const h=(hex||'#000').replace('#',''); const n=h.length===3?h.split('').map(x=>x+x).join(''):h; const r=parseInt(n.slice(0,2),16),g=parseInt(n.slice(2,4),16),b=parseInt(n.slice(4,6),16); return 'rgba('+r+','+g+','+b+','+a+')'; }
+  outline(c, w) { if(!w||w<=0) return '0 1px 2px rgba(0,0,0,.55)'; const o=[]; for(let a=0;a<360;a+=45){const x=(Math.cos(a*Math.PI/180)*w).toFixed(1),y=(Math.sin(a*Math.PI/180)*w).toFixed(1);o.push(x+'px '+y+'px 0 '+c);} o.push('0 2px 5px rgba(0,0,0,.5)'); return o.join(','); }
+  alignVH(a) { const v=a>=7?'t':a>=4?'m':'b'; const h=(a%3===1)?'l':(a%3===2)?'c':'r'; return [v,h]; }
 
   componentDidMount() {
     const c = this.state.cues.find(x => x.id === this.state.selectedId);
@@ -527,6 +743,7 @@ class Component extends DCLogic {
       const cur = this.state.cues.find(c => nt >= c.start && nt < c.end);
       if (cur && cur.id !== this._curId) { this._curId = cur.id; this.ensureVisible(cur.id); }
     }
+    this.measureLines();
     this._raf = requestAnimationFrame(this.tick);
   };
 
@@ -720,6 +937,68 @@ class Component extends DCLogic {
   zoomOut = () => this.setState(s => ({ pps: Math.max(28, s.pps / 1.35) }));
   toggleSubBox = () => this.setState(s => ({ subBox: !s.subBox }));
 
+  // right tab + style menus
+  setRtab = (t) => this.setState({ rtab: t, open: null });
+  toggleOpen = (k) => this.setState(s => ({ open: s.open === k ? null : k }));
+  closeMenus = () => this.setState({ open: null });
+  openFont = () => this.toggleOpen('font');
+  openPreset = () => this.toggleOpen('preset');
+  pickFont = (id) => this.setState({ font: id, open: null });
+  pickColor = (kind, hex) => { const k = kind==='text'?'textColor':kind==='stroke'?'strokeColor':'bgColor'; this.setState({ [k]: hex, open: null }); };
+  applyPreset = (id) => { const p = this.PRESETS.find(x=>x.id===id); if(!p||p.placeholder){ this.setState({preset:id,open:null}); return; } this.setState({ preset:id, open:null, ...p.vals }); };
+  setBgMode = (id) => this.setState({ bgMode: id });
+  setStyleScope = (s) => this.setState({ styleScope: s });
+  boxOrDefault() { return this.state.box || { l:9, r:9, t:58, b:3 }; }
+  resetBox = () => this.setState({ box: { l:9, r:9, t:58, b:3 } });
+  onMarginL = (e) => { const v=+e.target.value; this.setState({ box:{ ...this.boxOrDefault(), l:v } }); };
+  onMarginR = (e) => { const v=+e.target.value; this.setState({ box:{ ...this.boxOrDefault(), r:v } }); };
+  onMarginV = (e) => { const v=+e.target.value; const b0=this.boxOrDefault(); const d=v-b0.b; this.setState({ box:{ ...b0, b:v, t:Math.max(0,Math.min(90,b0.t-d)) } }); };
+  toggleBold = () => this.setState(s => ({ bold: !s.bold }));
+  toggleItalic = () => this.setState(s => ({ italic: !s.italic }));
+  onSize = (e) => this.setState({ size: +e.target.value });
+  onStroke = (e) => this.setState({ strokeWidth: +e.target.value });
+  onLetter = (e) => this.setState({ letterSpacing: +e.target.value });
+  onVol = (e) => this.setState({ vol: +e.target.value });
+
+  // per-line dub
+  setCueDb = (e) => { const v = +e.target.value; this.setState(s => ({ cues: s.cues.map(c => c.id===s.selectedId?{...c,db:v}:c) })); };
+  toggleMute = () => this.setState(s => ({ cues: s.cues.map(c => c.id===s.selectedId?{...c,muted:!c.muted}:c) }));
+  shortenLine = () => { this.setState(s => ({ cues: s.cues.map(c => { if(c.id!==s.selectedId) return c; const w=(c.vi||'').replace(/\n/g,' ').trim().split(/\s+/); if(w.length<=4) return c; return {...c, vi:w.slice(0,Math.max(4,Math.round(w.length*0.68))).join(' ')}; }) }), () => this.toast('Đã rút gọn câu bằng AI')); };
+  insertBreak = () => { this.setState(s => ({ cues: s.cues.map(c => { if(c.id!==s.selectedId) return c; if((c.vi||'').includes('\n')) return {...c, vi:c.vi.replace(/\n/g,' ')}; const w=(c.vi||'').trim().split(/\s+/); const h=Math.ceil(w.length/2); return {...c, vi:w.slice(0,h).join(' ')+'\n'+w.slice(h).join(' ')}; }) })); };
+
+  // subtitle BOX: drag body to move, drag edges to resize (wrap width / vertical bounds)
+  setVideoFrameRef = (el) => { this._videoFrame = el; };
+  setCapTextRef = (el) => { this._capText = el; };
+  measureLines() {
+    const el = this._capText; if (!el) return;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || (this.state.size * 1.28);
+    const n = Math.max(1, Math.round(el.scrollHeight / lh));
+    if (n !== this._capLines) { this._capLines = n; this.forceUpdate(); }
+  }
+  onBoxDown = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const fr = this._videoFrame; if (!fr) return;
+    const mode = e.currentTarget.dataset.mode || 'move';
+    const r0 = fr.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY, b0 = { ...this.boxOrDefault() };
+    const move = (ev) => {
+      const dx = ((ev.clientX - sx) / r0.width) * 100, dy = ((ev.clientY - sy) / r0.height) * 100;
+      let nb = { ...b0 };
+      if (mode === 'move') { nb.l = b0.l + dx; nb.r = b0.r - dx; nb.t = b0.t + dy; nb.b = b0.b - dy; }
+      else if (mode === 'l') nb.l = b0.l + dx;
+      else if (mode === 'r') nb.r = b0.r - dx;
+      else if (mode === 't') nb.t = b0.t + dy;
+      else if (mode === 'b') nb.b = b0.b - dy;
+      nb.l = Math.max(0, Math.min(80, nb.l)); nb.r = Math.max(0, Math.min(80, nb.r));
+      nb.t = Math.max(0, Math.min(92, nb.t)); nb.b = Math.max(0, Math.min(92, nb.b));
+      if (nb.l + nb.r > 86) { if (mode==='l') nb.l = 86 - nb.r; else if (mode==='r') nb.r = 86 - nb.l; else { nb.l = b0.l; nb.r = b0.r; } }
+      if (nb.t + nb.b > 90) { if (mode==='t') nb.t = 90 - nb.b; else if (mode==='b') nb.b = 90 - nb.t; else { nb.t = b0.t; nb.b = b0.b; } }
+      this.setState({ box: nb });
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  };
+
   openApprove = () => this.setState({ showApprove: true, playing: false });
   closeApprove = () => this.setState({ showApprove: false });
   toggleShortcuts = () => this.setState(s => ({ showShortcuts: !s.showShortcuts }));
@@ -865,14 +1144,107 @@ class Component extends DCLogic {
       : { width:'6px', flex:'none', cursor:'col-resize', background:'transparent', display:'flex', alignItems:'center', justifyContent:'center', marginLeft:'-3px', marginRight:'-3px', zIndex:4 };
     const panelSplitGrip = { width:'2px', height:'34px', borderRadius:'2px', background:'#262c36' };
 
-    // caption preview style (reflects render font/size + opaque box)
-    const capWrapStyle = { position:'absolute', left:0, right:0, bottom: landscape ? '52px' : '54px', padding:'0 14px', display:'flex', flexDirection:'column', alignItems:'center', gap:'7px' };
-    const capBoxStyle = { background:'rgba(10,8,14,.82)', backdropFilter:'blur(3px)', borderRadius:'5px', padding:'3px 10px', maxWidth:'94%' };
-    const capBoxZhStyle = { fontSize:'12px', fontWeight:500, color:'rgba(255,255,255,.34)', letterSpacing:'.5px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'block' };
-    const capViStyle = { fontSize: S.subSize + 'px', fontWeight:600, color:'#fff', textAlign:'center', lineHeight:1.3,
-      textShadow:'0 1px 3px rgba(0,0,0,.9),0 0 10px rgba(0,0,0,.5)', letterSpacing:'.2px', maxWidth:'96%' };
+    // ===== styled, draggable caption (WYSIWYG) =====
+    const fontObj = this.FONTS.find(f => f.id === S.font) || this.FONTS[0];
+    const bgModeObj = this.BGMODES.find(m => m.id === S.bgMode) || this.BGMODES[0];
+    const box = S.box || { l:9, r:9, t:58, b:3 };
+    const capRectStyle = { position:'absolute', left:box.l+'%', right:box.r+'%', top:box.t+'%', bottom:box.b+'%',
+      display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', cursor:'move', zIndex:4,
+      border:'1px dashed rgba(167,139,250,.5)', borderRadius:'4px', boxSizing:'border-box' };
+    let capBoxStyle;
+    if (S.bgMode === 'outline') capBoxStyle = { display:'inline-block', background:'transparent', padding:'0', borderRadius:'0', maxWidth:'100%', pointerEvents:'none' };
+    else if (S.bgMode === 'box-blur') capBoxStyle = { display:'inline-block', background:this.rgba(S.bgColor,.5), backdropFilter:'blur(4px)', padding:'4px 12px', borderRadius:'8px', maxWidth:'100%', pointerEvents:'none' };
+    else capBoxStyle = { display:'inline-block', background:S.bgColor, padding:'5px 13px', borderRadius:'4px', maxWidth:'100%', pointerEvents:'none' };
+    const capTextStyle = { fontFamily:fontObj.css, fontSize:S.size+'px', fontWeight:S.bold?800:600, fontStyle:S.italic?'italic':'normal',
+      color:S.textColor, lineHeight:1.28, textAlign:'center',
+      letterSpacing:(S.letterSpacing/100*0.4).toFixed(3)+'em', textShadow:this.outline(S.strokeColor,S.strokeWidth),
+      whiteSpace:'pre-line', display:'inline-block', pointerEvents:'none' };
+    const zhHardsubWrapStyle = { position:'absolute', left:0, right:0, bottom:'3.1%', display:'flex', justifyContent:'center', padding:'0 8%', pointerEvents:'none', zIndex:2 };
+    const zhHardsubStyle = { fontFamily:"'Be Vietnam Pro',sans-serif", fontSize:'13px', fontWeight:700, color:'#fff', letterSpacing:'1.5px', textShadow:this.outline('#000',2), whiteSpace:'nowrap' };
+    const grip = (extra) => Object.assign({ position:'absolute', background:'#a78bfa', borderRadius:'2px', boxShadow:'0 0 0 2px rgba(10,11,14,.85)', zIndex:6 }, extra);
+    const handleEdge = {
+      l: grip({ left:'-3px', top:'50%', width:'5px', height:'22px', marginTop:'-11px', cursor:'ew-resize' }),
+      r: grip({ right:'-3px', top:'50%', width:'5px', height:'22px', marginTop:'-11px', cursor:'ew-resize' }),
+      t: grip({ top:'-3px', left:'50%', width:'22px', height:'5px', marginLeft:'-11px', cursor:'ns-resize' }),
+      b: grip({ bottom:'-3px', left:'50%', width:'22px', height:'5px', marginLeft:'-11px', cursor:'ns-resize' }),
+    };
+    const capLines = this._capLines || (((capSrc&&capSrc.vi)||'').includes('\n') ? 2 : 1);
+    const capLineStr = 'đang ' + capLines + ' dòng';
+
+    // ===== Kiểu chữ tab data =====
+    const seg = (on) => ({ flex:1, display:'flex', alignItems:'center', justifyContent:'center', height:'30px', borderRadius:'7px', fontSize:'11.5px', fontWeight:on?600:500, cursor:'pointer', border:'none', fontFamily:'inherit', background:on?'#8b5cf6':'transparent', color:on?'#fff':'#aeb2bc', whiteSpace:'nowrap' });
+    const tgl = (on) => ({ height:'34px', flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:'7px', borderRadius:'9px', cursor:'pointer', fontSize:'13px', fontWeight:on?600:500, fontFamily:'inherit', border:'1px solid '+(on?'#8b5cf6':'#262c36'), background:on?'rgba(139,92,246,.14)':'#0f1117', color:on?'#cdbcff':'#aeb2bc' });
+    const mkSwatch = (kind, label, hex, key) => ({ label, hex:(hex||'').toUpperCase(), open:S.open===key,
+      chipStyle:{ width:'34px', height:'26px', borderRadius:'7px', background:hex, flex:'none', cursor:'pointer', border:'1px solid rgba(255,255,255,.22)', boxShadow:'inset 0 0 0 1px rgba(0,0,0,.4)' },
+      pillStyle:{ fontFamily:"'JetBrains Mono',monospace", fontSize:'11.5px', color:'#e9eaee', background:'#15181f', border:'1px solid #2a2f39', padding:'4px 10px', borderRadius:'6px', letterSpacing:'.6px', flex:'none' },
+      onToggle:()=>this.toggleOpen(key),
+      palette:this.COLORS[kind].map(c=>({ hex:c, selected:c.toUpperCase()===(hex||'').toUpperCase(),
+        style:{ width:'26px', height:'26px', borderRadius:'6px', background:c, cursor:'pointer', border:'2px solid '+(c.toUpperCase()===(hex||'').toUpperCase()?'#a78bfa':'rgba(255,255,255,.16)'), boxShadow:'inset 0 0 0 1px rgba(0,0,0,.4)' },
+        onPick:()=>this.pickColor(kind,c) })) });
+    const styleFonts = this.FONTS.map(f => ({ id:f.id, name:f.name, selected:f.id===S.font,
+      previewStyle:{ fontFamily:f.css, fontSize:'14px', fontWeight:600, color:'#e9eaee' },
+      rowStyle:{ width:'100%', display:'flex', alignItems:'center', gap:'10px', padding:'9px 11px', borderRadius:'8px', border:'none', cursor:'pointer', background:f.id===S.font?'rgba(139,92,246,.1)':'transparent' },
+      onPick:()=>this.pickFont(f.id) }));
+    const stylePresets = this.PRESETS.map(p => ({ id:p.id, name:p.name, selected:p.id===S.preset,
+      rowStyle:{ width:'100%', display:'flex', alignItems:'center', gap:'9px', padding:'9px 11px', borderRadius:'8px', border:'none', cursor:'pointer', background:p.id===S.preset?'rgba(139,92,246,.1)':'transparent' },
+      onPick:()=>this.applyPreset(p.id) }));
+    const styleBgModes = this.BGMODES.map(m => ({ id:m.id, label:m.label, selected:m.id===S.bgMode, style:seg(m.id===S.bgMode), onPick:()=>this.setBgMode(m.id) }));
+    const scopeModes = [ { id:'all', label:'Toàn bộ' }, { id:'selected', label:'Các câu đang chọn' } ].map(o => ({ id:o.id, label:o.label, selected:o.id===S.styleScope, style:seg(o.id===S.styleScope), onPick:()=>this.setStyleScope(o.id) }));
+
+    // ===== selected-cue dub data =====
+    const sc = selCue;
+    const scEst = sc ? this.estSpeech(sc) : 0, scSlot = sc ? (sc.end - sc.start) : 0;
+    const scTooLong = sc ? (scEst > scSlot + 0.05 && scSlot > 0) : false;
+    const scDb = sc && sc.db != null ? sc.db : 0;
+    const scMuted = !!(sc && sc.muted);
+    const scLines = sc ? (((sc.vi||'').includes('\n')) ? 2 : 1) : 1;
+
+    const rtabContent = S.rtab === 'content', rtabStyle = S.rtab === 'style';
+    const rtabBtn = (on) => ({ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:'7px', height:'34px', borderRadius:'8px', fontSize:'12.5px', fontWeight:on?600:500, cursor:'pointer', border:'none', fontFamily:'inherit', background:on?'#1a1f29':'transparent', color:on?'#eef0f3':'#868b96', boxShadow:on?'inset 0 0 0 1px #2c313b':'none' });
 
     return {
+      // right tabs
+      rtabContent, rtabStyle, setRtab:this.setRtab,
+      setRtabContent:()=>this.setRtab('content'), setRtabStyle:()=>this.setRtab('style'),
+      rtabContentStyle: rtabBtn(rtabContent), rtabStyleStyle: rtabBtn(rtabStyle),
+      // styled subtitle box
+      capRectStyle, capBoxStyle, capTextStyle, zhHardsubWrapStyle, zhHardsubStyle, handleEdge, capLineStr,
+      setVideoFrameRef:this.setVideoFrameRef, onBoxDown:this.onBoxDown, setCapTextRef:this.setCapTextRef,
+      vol:S.vol, onVol:this.onVol,
+      // Kiểu chữ tab
+      styleScope:S.styleScope, scopeModes,
+      styleFonts, stylePresets, styleBgModes,
+      fontName:fontObj.name, fontOpen:S.open==='font', openFont:this.openFont,
+      fontTriggerStyle:{ width:'100%', display:'flex', alignItems:'center', gap:'10px', height:'44px', padding:'0 13px', background:'#0f1117', border:'1px solid '+(S.open==='font'?'#8b5cf6':'#262c36'), borderRadius:'10px', cursor:'pointer', boxShadow:S.open==='font'?'0 0 0 3px rgba(139,92,246,.14)':'none' },
+      fontPreviewStyle:{ fontFamily:fontObj.css, fontSize:'14px', fontWeight:600, color:'#e9eaee' },
+      presetName:(this.PRESETS.find(p=>p.id===S.preset)||this.PRESETS[0]).name, presetOpen:S.open==='preset', openPreset:this.openPreset,
+      presetTriggerStyle:{ flex:1, display:'flex', alignItems:'center', gap:'10px', height:'40px', padding:'0 12px', background:'#0f1117', border:'1px solid '+(S.open==='preset'?'#8b5cf6':'#262c36'), borderRadius:'9px', cursor:'pointer', boxShadow:S.open==='preset'?'0 0 0 3px rgba(139,92,246,.14)':'none' },
+      styleSize:S.size, styleSizeStr:S.size+'px', onSize:this.onSize,
+      styleStroke:S.strokeWidth, styleStrokeStr:String(S.strokeWidth), onStroke:this.onStroke,
+      marginL: box.l, marginLStr: Math.round(box.l)+'%', onMarginL:this.onMarginL,
+      marginR: box.r, marginRStr: Math.round(box.r)+'%', onMarginR:this.onMarginR,
+      marginV: box.b, marginVStr: Math.round(box.b)+'%', onMarginV:this.onMarginV,
+      styleLetter:S.letterSpacing, styleLetterStr:(S.letterSpacing>0?'+':'')+S.letterSpacing+'%', onLetter:this.onLetter,
+      bgModeSub:bgModeObj.sub,
+      swText:mkSwatch('text','Màu chữ',S.textColor,'col-text'), swStroke:mkSwatch('stroke','Màu viền',S.strokeColor,'col-stroke'), swBg:mkSwatch('bg','Màu nền',S.bgColor,'col-bg'),
+      boldStyle:tgl(S.bold), italicStyle:tgl(S.italic), toggleBold:this.toggleBold, toggleItalic:this.toggleItalic,
+      resetBox:this.resetBox,
+      // dub panel
+      selNum: sc ? (cues.findIndex(c=>c.id===sc.id)+1) : 0, hasSel: !!sc,
+      selVi: sc ? (sc.vi||'') : '', selZh: sc ? sc.zh : '',
+      scFit: !scTooLong, scTooLong, scEstStr: scEst.toFixed(1)+'s', scSlotStr: scSlot.toFixed(1)+'s',
+      scDb, scDbStr: (scDb>0?'+':'')+scDb+' dB', setCueDb:this.setCueDb,
+      scMuted, toggleMute:this.toggleMute, shortenLine:this.shortenLine, insertBreak:this.insertBreak,
+      scLines, scLine1: scLines===1, scLine2: scLines===2,
+      fitLabel: scTooLong ? 'Quá dài để lồng' : 'Vừa khít',
+      linePills: [1,2,3].map(n => ({ n, style:{ width:'24px', height:'22px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'5px', fontSize:'11px', fontFamily:"'JetBrains Mono',monospace", fontWeight:600, border:'1px solid '+(n===scLines?'#8b5cf6':'#262c36'), background:n===scLines?'rgba(139,92,246,.18)':'#0f1117', color:n===scLines?'#cdbcff':'#5b606b' } })),
+      fitStyle: scTooLong
+        ? { display:'inline-flex', alignItems:'center', gap:'5px', fontSize:'11px', fontWeight:600, color:'#f5b545', background:'rgba(245,181,69,.1)', border:'1px solid rgba(245,181,69,.26)', padding:'3px 9px', borderRadius:'6px' }
+        : { display:'inline-flex', alignItems:'center', gap:'5px', fontSize:'11px', fontWeight:600, color:'#41c97a', background:'rgba(65,201,122,.1)', border:'1px solid rgba(65,201,122,.26)', padding:'3px 9px', borderRadius:'6px' },
+      muteBtnStyle: scMuted
+        ? { display:'flex', alignItems:'center', gap:'7px', height:'34px', padding:'0 13px', borderRadius:'9px', cursor:'pointer', fontSize:'12.5px', fontWeight:500, fontFamily:'inherit', border:'1px solid rgba(240,89,79,.4)', background:'rgba(240,89,79,.12)', color:'#f0594f' }
+        : { display:'flex', alignItems:'center', gap:'7px', height:'34px', padding:'0 13px', borderRadius:'9px', cursor:'pointer', fontSize:'12.5px', fontWeight:500, fontFamily:'inherit', border:'1px solid #262c36', background:'#0f1117', color:'#aeb2bc' },
+
       cues: derived, bars, ticks, skels,
       view, isReady: ready, isLoading: loading, isEmpty: empty,
       showHeader: ready || loading,
@@ -909,7 +1281,6 @@ class Component extends DCLogic {
       // styles
       workspaceStyle, videoPanelStyle, videoStageStyle, videoFrameStyle,
       panelSplitStyle, panelSplitGrip,
-      capWrapStyle, capBoxStyle, capBoxZhStyle, capViStyle,
       dockStyle: { height: S.dockH+'px', flex:'none', background:'#0c0e12', display:'flex', flexDirection:'column', minHeight:0 },
       tabPortrait: tab('portrait'), tabLandscape: tab('landscape'), tabLoading: tab('loading'), tabEmpty: tab('empty'),
       srcDotStyle: { width:'5px', height:'5px', borderRadius:'50%', background: landscape ? '#00a1d6' : '#ff2d55' },

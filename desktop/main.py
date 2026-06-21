@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
         self.editor.dirtyChanged.connect(self._on_dirty)
         self.render.renderRequested.connect(self._start_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
-        self.render.previewStyleRequested.connect(self._preview_style)
+        self.editor.previewStyleRequested.connect(self._preview_style)
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -200,35 +200,62 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
 
-    def _preview_style(self, opts: dict) -> None:
-        """Burn the chosen style onto one frame and show it — OFF the UI thread
-        (ffmpeg takes ~1-2s; running it inline would freeze the window)."""
+    def _preview_style(self) -> None:
+        """Burn the editor's chosen style onto one frame (off the UI thread) and
+        show it in a popup. (Phase B will move this into the live video preview.)"""
         if self.job is None:
             return
         from app.pipeline import assemble
+        sp = self.editor.style_panel
         job, cues = self.job, self.editor.cues
-        size = int(round(opts.get("size", 20) * 3))  # UI px → .ass units (1080 canvas)
-        font, style = opts.get("font", "Be Vietnam Pro"), opts.get("style")
-        self.render.status.setText("Đang tạo xem trước…")
+        size = int(round(self.editor.get_size_px() * 3))  # UI px → .ass units (1080 canvas)
+        font, style = self.editor.get_font(), self.editor.get_style()
+        sp.preview_btn.setEnabled(False)
+        sp.preview_btn.setText("⏳  Đang tạo…")
+
+        def reset():
+            sp.preview_btn.setEnabled(True)
+            sp.preview_btn.setText("🖼  Xem thử kiểu trên video")
 
         def work():
             return str(assemble.style_preview_frame(
                 job, cues, font=font, size=size, cover_hardsubs=False, style=style))
 
         def done(path):
-            self.render.show_style_image(path)
-            self.render.reset_preview_btn()
+            self._show_style_popup(path)
+            reset()
 
         def fail(msg):
-            self.render.status.setText(f"Lỗi xem trước: {msg}")
-            self.render.reset_preview_btn()
+            self.status.setText(f"● Lỗi xem trước: {msg}")
+            reset()
 
         self.editor._run_async(work, done, fail)  # reuse the editor's joined task runner
+
+    def _show_style_popup(self, path: str) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Xem thử kiểu phụ đề")
+        lay = QVBoxLayout(dlg)
+        lbl = QLabel()
+        pm = QPixmap(str(path))
+        if not pm.isNull():
+            lbl.setPixmap(pm.scaledToHeight(760, Qt.SmoothTransformation))
+        lay.addWidget(lbl)
+        dlg.exec()
 
     def _start_render(self, ropts: dict) -> None:
         if self._busy():
             return
-        merged = {"tts": self.opts.get("tts") or "edge", **ropts}
+        merged = {
+            "tts": self.opts.get("tts") or "edge",
+            "style": self.editor.get_style(),
+            "font": self.editor.get_font(),
+            "size": self.editor.get_size_px(),
+            **ropts,
+        }
         self._run("run_render", merged, {
             "stage_started": lambda s: self.render.append_log(f"• {s}"),
             "progress": self.render.set_progress,

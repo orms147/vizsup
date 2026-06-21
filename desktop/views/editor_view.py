@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 from desktop import cuemodel
 from desktop.cuemodel import EditorCue
 from desktop.theme import C
+from desktop.widgets.style_panel import StylePanel
 from desktop.widgets.subtitle_table import SubtitleTable
 from desktop.widgets.timeline import Timeline
 from desktop.widgets.video_panel import VideoPanel
@@ -52,6 +54,7 @@ class _Task(QObject):
 
 class EditorView(QWidget):
     dirtyChanged = Signal(bool)
+    previewStyleRequested = Signal()   # "Xem thử kiểu" — main burns a WYSIWYG frame
 
     def __init__(self) -> None:
         super().__init__()
@@ -87,8 +90,9 @@ class EditorView(QWidget):
         vlay.addWidget(self.video, 1)
         vwrap.setMinimumWidth(280)
 
-        right = QWidget()
-        rlay = QVBoxLayout(right)
+        # right = tabbed: "Nội dung & Lồng tiếng" | "Kiểu chữ"
+        content = QWidget()
+        rlay = QVBoxLayout(content)
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
         rlay.addLayout(self._toolbar())
@@ -96,8 +100,16 @@ class EditorView(QWidget):
         self.table = SubtitleTable()
         rlay.addWidget(self.table, 1)
 
+        self.style_panel = StylePanel()
+        self.style_panel.previewRequested.connect(self.previewStyleRequested)
+        self.style_panel.styleChanged.connect(self._on_style_changed)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(content, "Nội dung & Lồng tiếng")
+        self.tabs.addTab(self.style_panel, "Kiểu chữ")
+
         top.addWidget(vwrap)
-        top.addWidget(right)
+        top.addWidget(self.tabs)
         top.setStretchFactor(0, 0)
         top.setStretchFactor(1, 1)
         top.setSizes([332, 900])
@@ -359,6 +371,9 @@ class EditorView(QWidget):
         self.count.setText(f"{len(self.cues)} dòng")
         self._undo_stack.clear()
         self._update_cue_panel(-1)
+        st = self._load_style(job)
+        if st:
+            self.style_panel.set_from(st)
 
     def _reload(self) -> None:
         self.table.load(self.cues)
@@ -383,7 +398,38 @@ class EditorView(QWidget):
     def _save(self) -> None:
         if self.job is not None:
             cuemodel.save_vi(self.job, self.cues)
+            self._save_style()
             self.dirtyChanged.emit(False)
+
+    # --- style (delegates to the Kiểu chữ tab) -------------------------------
+    def _on_style_changed(self) -> None:
+        self._mark_dirty()
+
+    def get_style(self) -> dict:
+        return self.style_panel.get_style()
+
+    def get_font(self) -> str:
+        return self.style_panel.get_font()
+
+    def get_size_px(self) -> int:
+        return self.style_panel.get_size_px()
+
+    def _load_style(self, job):
+        import json
+        p = job.work_dir / "style.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+    def _save_style(self) -> None:
+        import json
+        data = {"font": self.style_panel.get_font(), "size": self.style_panel.get_size_px(),
+                "style": self.style_panel.get_style()}
+        (self.job.work_dir / "style.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def save_now(self) -> None:
         self._save_timer.stop()

@@ -23,7 +23,8 @@
       "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:QT_QPA_PLATFORM=\"offscreen\"; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -c \"from PySide6.QtWidgets import QApplication; from desktop.main import MainWindow; from desktop.worker import PipelineWorker; from app.pipeline import assemble; import inspect; app=QApplication\\([]\\); w=MainWindow\\(\\); assert 'log' in inspect.signature\\(assemble.assemble\\).parameters; assert hasattr\\(PipelineWorker, '_preflight_translators'\\); print\\('CONSTRUCT_OK + edits present'\\)\")",
       "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe _rendersmoke.py 2>&1 | Select-Object -Last 40; \"exit=$LASTEXITCODE\")",
       "Bash(git add *)",
-      "Bash(git commit -m 'write_ass: free \\\\pos\\(\\) placement + \\\\fsp letter-spacing \\(for drag-to-position & line-fit\\) *)"
+      "Bash(git commit -m 'write_ass: free \\\\pos\\(\\) placement + \\\\fsp letter-spacing \\(for drag-to-position & line-fit\\) *)",
+      "Bash(git commit -m 'docs: refine Screen 2 redesign prompt per feedback *)"
     ]
   }
 }
