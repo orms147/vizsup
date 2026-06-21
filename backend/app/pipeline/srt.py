@@ -110,6 +110,8 @@ DEFAULT_STYLE = {
     "margin_v": 60,
     "margin_l": 40,
     "margin_r": 40,
+    "pos": None,             # (nx, ny) in 0..1 → free \pos() placement; overrides alignment/margins
+    "letter_spacing": 0,     # \fsp: +stretch / -compress letters (to fit 1–2 lines)
 }
 
 
@@ -156,9 +158,19 @@ def write_ass(
         margin_r=int(s["margin_r"]),
         margin_v=int(s.get("margin_v", margin_v)),
     )
+    prefix = ""
+    pos = s.get("pos")
+    if pos:
+        try:
+            prefix = f"{{\\an5\\pos({round(float(pos[0]) * 1920)},{round(float(pos[1]) * 1080)})}}"
+        except (TypeError, ValueError, IndexError):
+            prefix = ""
+    fsp = s.get("letter_spacing")
+    if fsp:
+        prefix += f"{{\\fsp{int(fsp)}}}"
     lines = [header]
     for c in cues:
-        text = c.text.replace("\n", "\\N")
+        text = prefix + c.text.replace("\n", "\\N")
         lines.append(
             f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Default,,0,0,0,,{text}"
         )
