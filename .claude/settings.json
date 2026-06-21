@@ -21,7 +21,9 @@
       "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -m desktop._crashcheck; Remove-Item -LiteralPath \"C:\\\\Work\\\\AI\\\\vizsup\\\\desktop\\\\_crashcheck.py\")",
       "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:QT_QPA_PLATFORM=\"offscreen\"; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -c \"from PySide6.QtWidgets import QApplication; from desktop.theme import load_fonts,qss; from desktop.main import MainWindow; from desktop import store; app=QApplication\\([]\\); load_fonts\\(app\\); app.setStyleSheet\\(qss\\(\\)\\); w=MainWindow\\(\\); store.debug\\('debug-log smoke test'\\); print\\('IMPORTS_OK'\\)\")",
       "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:QT_QPA_PLATFORM=\"offscreen\"; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe -c \"from PySide6.QtWidgets import QApplication; from desktop.main import MainWindow; from desktop.worker import PipelineWorker; from app.pipeline import assemble; import inspect; app=QApplication\\([]\\); w=MainWindow\\(\\); assert 'log' in inspect.signature\\(assemble.assemble\\).parameters; assert hasattr\\(PipelineWorker, '_preflight_translators'\\); print\\('CONSTRUCT_OK + edits present'\\)\")",
-      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe _rendersmoke.py 2>&1 | Select-Object -Last 40; \"exit=$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\Work\\\\AI\\\\vizsup; $env:PYTHONIOENCODING=\"utf-8\"; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; .\\\\backend\\\\.venv\\\\Scripts\\\\python.exe _rendersmoke.py 2>&1 | Select-Object -Last 40; \"exit=$LASTEXITCODE\")",
+      "Bash(git add *)",
+      "Bash(git commit -m 'write_ass: free \\\\pos\\(\\) placement + \\\\fsp letter-spacing \\(for drag-to-position & line-fit\\) *)"
     ]
   }
 }
