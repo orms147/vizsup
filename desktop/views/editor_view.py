@@ -481,7 +481,9 @@ class EditorView(QWidget):
             half = len(words) // 2
             left, right = " ".join(words[:half]), " ".join(words[half:])
             c.end, c.vi = mid, left
-            self.cues.insert(i + 1, EditorCue(start=mid, end=orig_end, vi=right, zh=""))
+            # both halves inherit the per-line dub settings (P0-2 policy)
+            self.cues.insert(i + 1, EditorCue(start=mid, end=orig_end, vi=right, zh="",
+                                              gain_db=c.gain_db, mute=c.mute))
             self._reload()
 
     def _merge(self) -> None:

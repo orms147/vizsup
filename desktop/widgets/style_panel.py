@@ -210,8 +210,23 @@ class StylePanel(QScrollArea):
         self._changed()
 
     def set_drag_position(self, nx: float, ny: float) -> None:
-        """Called by the video canvas when the subtitle is dragged."""
+        """Called by the video canvas when the subtitle body is dragged."""
         self._pos = (nx, ny)
+        self._changed()
+
+    def set_drag_margins(self, left: int, right: int, vertical: int) -> None:
+        """Called by the video canvas when the box edges are dragged — set the 3
+        margin sliders and emit styleChanged exactly once (blockSignals on self
+        suppresses styleChanged while the value labels still update)."""
+        self.blockSignals(True)
+        self.m_left.setValue(int(left))
+        self.m_right.setValue(int(right))
+        self.m_v.setValue(int(vertical))
+        self.blockSignals(False)
+        self._changed()
+
+    def clear_drag_position(self) -> None:
+        self._pos = None
         self._changed()
 
     # --- public API ----------------------------------------------------------
