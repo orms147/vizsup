@@ -434,18 +434,20 @@ class EditorView(QWidget):
         self._g_style = self.style_panel.get_style()
 
     def _on_style_changed(self) -> None:
-        if self.style_panel.get_scope() == "selected":
-            changed = self._apply_style_to_selection()   # apply to the picked lines only
+        # scope "selected" applies to the chosen/current cue; if there is none, fall
+        # back to the global style so an edit is NEVER silently lost.
+        if self.style_panel.get_scope() == "selected" and self._apply_style_to_selection():
+            pass
         else:
             self._set_global_from_panel()                # update the global (Default) style
             self.video.set_style(self._g_style, self._g_size, self._g_font)
-            changed = True
         self._refresh_lines_badge()
-        if changed:                                      # don't dirty/autosave on a no-op
-            self._mark_dirty()
+        self._mark_dirty()
 
     def _apply_style_to_selection(self) -> bool:
         rows = self.table.selected_rows()
+        if not rows and 0 <= self._sel < len(self.cues):
+            rows = [self._sel]                           # fall back to the cue in the panel
         if not rows:
             return False
         s = self.style_panel.get_style()

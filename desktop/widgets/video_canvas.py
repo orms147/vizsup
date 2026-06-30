@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 ASS_W, ASS_H = 1920, 1080
@@ -98,6 +98,21 @@ class VideoCanvas(QWidget):
             return 20.0
         return self._size_px * 3 * self._disp.height() / ASS_H
 
+    def _wrapped_text_h(self, width_px: float) -> float:
+        """Height needed for the caption wrapped to ``width_px`` — so the box grows
+        to fit 2+ lines instead of clipping them (anchored at the bottom)."""
+        one = self._text_h_px()
+        if not self._caption or width_px <= 1:
+            return one * 1.35
+        f = QFont(self._font)
+        f.setPixelSize(max(8, int(one)))
+        f.setBold(bool(self._style.get("bold")))
+        f.setItalic(bool(self._style.get("italic")))
+        fm = QFontMetrics(f)
+        br = fm.boundingRect(QRect(0, 0, int(width_px), 100000),
+                             int(Qt.TextWordWrap | Qt.AlignHCenter), self._caption)
+        return max(one * 1.35, br.height() + one * 0.3)
+
     def _box_rect(self) -> QRectF:
         d = self._disp
         if d.width() <= 0:
@@ -105,7 +120,7 @@ class VideoCanvas(QWidget):
         lx = d.x() + d.width() * (self._box.l / ASS_W)
         rx = d.x() + d.width() * (1 - self._box.r / ASS_W)
         by = d.y() + d.height() * (1 - self._box.v / ASS_H)
-        th = max(self._text_h_px() * 1.4, 16.0)
+        th = self._wrapped_text_h(max(8.0, rx - lx))   # grows with the wrapped line count
         return QRectF(lx, by - th, max(8.0, rx - lx), th)
 
     # --- paint ---------------------------------------------------------------
@@ -142,9 +157,16 @@ class VideoCanvas(QWidget):
             full = QRectF(self._disp.x(), box.y() - 4,
                           self._disp.width(), box.height() + 8)
             p.fillRect(full, bg)
-        p.setPen(QColor(self._style.get("primary", "#ffffff")))
+        rect = self._box_rect()
         flags = int(Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap)
-        p.drawText(self._box_rect(), flags, self._caption)
+        o = int(self._style.get("outline_w", 2))
+        if o > 0:   # approximate the character outline so "Màu viền / Độ dày viền" show
+            p.setPen(QColor(self._style.get("outline", "#000000")))
+            for dxo, dyo in ((-o, 0), (o, 0), (0, -o), (0, o),
+                             (-o, -o), (o, -o), (-o, o), (o, o)):
+                p.drawText(rect.translated(dxo, dyo), flags, self._caption)
+        p.setPen(QColor(self._style.get("primary", "#ffffff")))
+        p.drawText(rect, flags, self._caption)
 
     def _draw_box(self, p: QPainter) -> None:
         if not self._show_box or self._disp.width() <= 0:
