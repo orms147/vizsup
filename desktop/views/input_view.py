@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -100,6 +101,19 @@ class InputView(QWidget):
         self.srt_lbl.setObjectName("mono")
         self.srt_lbl.setVisible(False)
         col.addWidget(self.srt_lbl)
+
+        # OCR region — for subtitles that aren't in the default bottom strip
+        self._ocr_region_lbl = QLabel("Vùng đọc OCR")
+        self._ocr_region_lbl.setStyleSheet(f"color:{C['muted']};font-size:12px;")
+        self.ocr_region = QComboBox()
+        for label, key in (("Dưới màn hình (mặc định)", "bottom-third"),
+                           ("Nửa dưới", "bottom-half"),
+                           ("Giữa màn hình", "middle-third"),
+                           ("Trên màn hình", "top-third"),
+                           ("Toàn khung (phụ đề di động)", "full")):
+            self.ocr_region.addItem(label, key)
+        col.addWidget(self._ocr_region_lbl)
+        col.addWidget(self.ocr_region)
 
         # engines
         col.addSpacing(4)
@@ -227,6 +241,9 @@ class InputView(QWidget):
         # ASR engine only matters when the ASR source is chosen
         self.asr.setEnabled(self.rb_asr.isChecked())
         self._asr_caption.setEnabled(self.rb_asr.isChecked())
+        # OCR region only matters for the OCR source
+        self.ocr_region.setEnabled(self.rb_ocr.isChecked())
+        self._ocr_region_lbl.setEnabled(self.rb_ocr.isChecked())
 
     def _on_srt_radio(self, on: bool) -> None:
         if on:
@@ -260,6 +277,7 @@ class InputView(QWidget):
             "translator": self.draft.current_name(),
             "refine": self.refine.current_name(),
             "tts": self.tts.current_name(),
+            "ocr_region": self.ocr_region.currentData(),
         }
         if self._file:
             opts["file"] = self._file

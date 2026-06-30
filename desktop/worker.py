@@ -117,9 +117,10 @@ class PipelineWorker(QObject):
             elif src == "ocr":
                 from app.pipeline import ocr
 
+                region = o.get("ocr_region", "bottom-third")
                 self.progress.emit(0.4, "Đọc chữ cháy trên video bằng OCR…")
-                self.log.emit("OCR: đọc phụ đề tiếng Trung cháy sẵn…")
-                ocr.extract_hardsubs(job)
+                self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region})")
+                ocr.extract_hardsubs(job, crop=region)
                 self.log.emit("✓ OCR xong")
             else:
                 self.progress.emit(0.4, "Nhận dạng giọng nói (ASR)…")

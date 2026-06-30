@@ -26,11 +26,16 @@ from app.models import Cue, Job
 from app.pipeline.srt import write_srt
 from app.providers.base import _installed
 
-# bottom third, full width: crop=w:h:x:y
+# crop region for OCR (full width): crop=w:h:x:y. Bottom-third is the default
+# (subtitles + drops watermarks); other regions are for subs that sit higher or
+# move around (then use "full" — slower, noisier, but catches them anywhere).
 _CROP = {
     "bottom-third": "crop=iw:ih/3:0:ih*2/3",
     "bottom-quarter": "crop=iw:ih/4:0:ih*3/4",
     "bottom-half": "crop=iw:ih/2:0:ih/2",
+    "middle-third": "crop=iw:ih/3:0:ih/3",
+    "top-third": "crop=iw:ih/3:0:0",
+    "full": "crop=iw:ih:0:0",
 }
 
 _CJK = re.compile(r"[一-鿿]")
