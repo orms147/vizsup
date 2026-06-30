@@ -6,6 +6,7 @@ ASS styling deliberately uses a Vietnamese-diacritic font and an opaque box
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def write_srt(cues: list[Cue], path: Path) -> Path:
     return Path(path)
 
 
-_ASS_HEADER = """[Script Info]
+_HEADER_PRE = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
@@ -86,12 +87,10 @@ WrapStyle: 2
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},{primary},&H000000FF,{outline_c},{back},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},{shadow},{alignment},{margin_l},{margin_r},{margin_v},1
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"""
 
-[Events]
-Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
-"""
+_HEADER_POST = """[Events]
+Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text"""
 
 # Full subtitle style. Colours are "#RRGGBB"; alpha is 0=opaque..255=transparent.
 # border_style: 1=outline+shadow, 3=opaque box (tight), 4=opaque box. alignment is
@@ -124,40 +123,22 @@ def _ass_colour(hex_str: str, alpha: int = 0) -> str:
     return f"&H{max(0, min(255, alpha)):02X}{bb}{gg}{rr}".upper()
 
 
-def write_ass(
-    cues: list[Cue],
-    path: Path,
-    *,
-    font: str = "Be Vietnam Pro",
-    size: int = 60,
-    margin_v: int = 60,
-    cover_hardsubs: bool = False,
-    style: dict | None = None,
-) -> Path:
-    """Write styled ASS. ``style`` overrides any of DEFAULT_STYLE (colour/box/
-    position/bold/outline…). ``cover_hardsubs=True`` forces an opaque box
-    (BorderStyle=4) to hide leftover burned-in Chinese subtitles."""
-    s = {**DEFAULT_STYLE, **(style or {})}
+def _style_line(name: str, s: dict, font: str, size: int, cover_hardsubs: bool) -> str:
     if cover_hardsubs:
-        border, box_alpha = 4, 0           # fully opaque box to hide hardsubs
+        border, box_alpha = 4, 0           # opaque box to hide hardsubs (wins over style)
     else:
         border, box_alpha = int(s["border_style"]), int(s["box_alpha"])
-    header = _ASS_HEADER.format(
-        font=font,
-        size=size,
-        primary=_ass_colour(s["primary"], 0),
-        outline_c=_ass_colour(s["outline"], 0),
-        back=_ass_colour(s["box"], box_alpha),
-        bold=-1 if s["bold"] else 0,
-        italic=-1 if s["italic"] else 0,
-        outline_w=s["outline_w"],
-        shadow=s["shadow"],
-        border_style=border,
-        alignment=int(s["alignment"]),
-        margin_l=int(s["margin_l"]),
-        margin_r=int(s["margin_r"]),
-        margin_v=int(s.get("margin_v", margin_v)),
+    return (
+        f"Style: {name},{font},{size},{_ass_colour(s['primary'], 0)},&H000000FF,"
+        f"{_ass_colour(s['outline'], 0)},{_ass_colour(s['box'], box_alpha)},"
+        f"{-1 if s['bold'] else 0},{-1 if s['italic'] else 0},0,0,100,100,0,0,"
+        f"{border},{s['outline_w']},{s['shadow']},{int(s['alignment'])},"
+        f"{int(s['margin_l'])},{int(s['margin_r'])},{int(s['margin_v'])},1"
     )
+
+
+def _inline_prefix(s: dict) -> str:
+    """Per-line \\pos / \\fsp override tags drawn from a (merged) style dict."""
     prefix = ""
     pos = s.get("pos")
     if pos:
@@ -168,11 +149,55 @@ def write_ass(
     fsp = s.get("letter_spacing")
     if fsp:
         prefix += f"{{\\fsp{int(fsp)}}}"
+    return prefix
+
+
+def write_ass(
+    cues: list[Cue],
+    path: Path,
+    *,
+    font: str = "Be Vietnam Pro",
+    size: int = 60,
+    margin_v: int = 60,
+    cover_hardsubs: bool = False,
+    style: dict | None = None,
+    cue_styles: dict[int, dict] | None = None,
+) -> Path:
+    """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
+    ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
+    top of the global one; identical merged styles are de-duplicated and the cues
+    are routed to ``Default``/``Sub1``/``Sub2``… With ``cue_styles=None`` the output
+    is byte-identical to the single-style path (locked by tests/test_write_ass.py).
+    ``cover_hardsubs=True`` forces an opaque box on every style."""
+    base = {**DEFAULT_STYLE, **(style or {})}
+    ordered: list[tuple[str, dict]] = []   # (name, merged style) — Default first
+    seen: dict[str, str] = {}              # json(merged) → name
+
+    def name_for(merged: dict) -> str:
+        key = json.dumps(merged, sort_keys=True)
+        if key in seen:
+            return seen[key]
+        nm = "Default" if not ordered else f"Sub{len(ordered)}"
+        seen[key] = nm
+        ordered.append((nm, merged))
+        return nm
+
+    default_name = name_for(base)
+    cue_names: list[str] = []
+    cue_prefixes: list[str] = []
+    for i, c in enumerate(cues):
+        ov = (cue_styles or {}).get(i + 1)
+        merged = {**base, **ov} if ov else base
+        cue_names.append(name_for(merged) if ov else default_name)
+        cue_prefixes.append(_inline_prefix(merged))
+
+    style_block = "\n".join(_style_line(nm, st, font, size, cover_hardsubs) for nm, st in ordered)
+    header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
-    for c in cues:
-        text = prefix + c.text.replace("\n", "\\N")
+    for c, nm, pfx in zip(cues, cue_names, cue_prefixes):
+        text = pfx + c.text.replace("\n", "\\N")
         lines.append(
-            f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Default,,0,0,0,,{text}"
+            f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},{nm},,0,0,0,,{text}"
         )
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return Path(path)

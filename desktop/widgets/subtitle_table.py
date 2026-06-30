@@ -28,7 +28,7 @@ class SubtitleTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)  # apply a style to many lines
         self.setWordWrap(True)
         h = self.horizontalHeader()
         self.setColumnWidth(0, 46)
@@ -70,11 +70,17 @@ class SubtitleTable(QTableWidget):
             vi.setToolTip("Đã tắt tiếng câu này (vẫn hiện phụ đề)")
         if getattr(c, "gain_db", 0.0):
             num.setToolTip(f"Âm lượng {c.gain_db:+.0f} dB")
+        if getattr(c, "style", None):
+            vi.setForeground(QBrush(QColor(C["accent"])))
+            vi.setToolTip("Câu này dùng kiểu riêng (Áp dụng cho: các câu đang chọn)")
         for col, it in enumerate((num, start, end, vi, zh)):
             self.setItem(r, col, it)
 
     def get_cues(self) -> list[EditorCue]:
         return self._cues
+
+    def selected_rows(self) -> list[int]:
+        return sorted({ix.row() for ix in self.selectionModel().selectedRows()})
 
     def set_playing_row(self, idx: int) -> None:
         if 0 <= idx < self.rowCount() and idx != self.currentRow():

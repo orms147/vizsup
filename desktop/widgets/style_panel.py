@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -33,6 +33,27 @@ BOX_STYLES = {
     "Hộp mờ": (4, 110),
     "Hộp đặc (che chữ Trung)": (4, 0),
 }
+
+
+def estimate_line_count(text: str, *, size_px: int, font: str, margin_l: int = 60,
+                        margin_r: int = 60, bold: bool = False, letter_spacing: int = 0) -> int:
+    """Approximate how many rows the line wraps to under the style + box width,
+    measured in 1920-wide ASS space (size in .ass units = ui_px*3). Honours \\n."""
+    if not (text or "").strip():
+        return 0
+    f = QFont(font)
+    f.setPixelSize(max(8, int(size_px) * 3))
+    f.setBold(bool(bold))
+    if letter_spacing:
+        f.setLetterSpacing(QFont.AbsoluteSpacing, float(letter_spacing))
+    fm = QFontMetrics(f)
+    wrap_w = max(60, 1920 - int(margin_l) - int(margin_r))
+    ls = fm.lineSpacing() or fm.height() or 1
+    total = 0
+    for para in text.split("\n"):
+        br = fm.boundingRect(0, 0, wrap_w, 100000, int(Qt.TextWordWrap), para or " ")
+        total += max(1, round(br.height() / ls))
+    return total
 
 
 class _ColorButton(QPushButton):
@@ -79,6 +100,7 @@ class _ColorButton(QPushButton):
 class StylePanel(QScrollArea):
     styleChanged = Signal()
     previewRequested = Signal()
+    resetSelectedRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -94,6 +116,10 @@ class StylePanel(QScrollArea):
         self.scope = QComboBox()
         self.scope.addItems(["Toàn bộ", "Các câu đang chọn"])
         ll.addLayout(self._row("Áp dụng cho", self.scope))
+        self.btn_reset_cue = QPushButton("Bỏ kiểu riêng (câu đang chọn)")
+        self.btn_reset_cue.setObjectName("ghost")
+        self.btn_reset_cue.clicked.connect(self.resetSelectedRequested)
+        ll.addWidget(self.btn_reset_cue)
 
         # Mẫu kiểu (cross-project library)
         self.preset = QComboBox()

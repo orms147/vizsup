@@ -64,6 +64,8 @@ class EditorView(QWidget):
         self._sel: int = -1           # selected cue index
         self._tasks: list = []        # keep async (thread, worker) refs alive
         self._burning = False         # guards one style re-burn at a time
+        self._g_font, self._g_size = "Be Vietnam Pro", 20   # cached GLOBAL style (render/preview)
+        self._g_style: dict | None = None                   # — so selected-mode edits can't bleed
         self._dub_player = None
         if _HAVE_MM:
             self._dub_player = QMediaPlayer()
@@ -126,12 +128,14 @@ class EditorView(QWidget):
         self.table.rowSelected.connect(lambda i: self._select(i, seek=True))
         self.table.seekRequested.connect(self.video.seek_seconds)
         self.table.edited.connect(self._mark_dirty)
+        self.table.edited.connect(self._refresh_lines_badge)
         self.timeline.seeked.connect(self.video.seek_seconds)
         self.timeline.blockSelected.connect(lambda i: self.table.selectRow(i))
         self.timeline.cueChanged.connect(self._on_cue_dragged)
         self.video.positionChanged.connect(self.timeline.set_time)
         self.video.marginsChanged.connect(self.style_panel.set_drag_margins)  # drag box → margins
         self.video.dragCommitted.connect(self._reburn_preview)                # release → exact frame
+        self.style_panel.resetSelectedRequested.connect(self._reset_selected_style)
 
         # undo (Ctrl+Z): snapshot before table cell edits and before each tool action
         self._undo_stack: list[list[EditorCue]] = []
@@ -199,6 +203,9 @@ class EditorView(QWidget):
         self.fit_lbl.setObjectName("mono")
         h.addWidget(self.sel_lbl)
         h.addWidget(self.fit_lbl)
+        self.lines_lbl = QLabel("")
+        self.lines_lbl.setObjectName("mono")
+        h.addWidget(self.lines_lbl)
         h.addSpacing(8)
         h.addWidget(QLabel("Âm lượng"))
         self.gain = QSlider(Qt.Horizontal)
@@ -237,6 +244,7 @@ class EditorView(QWidget):
         if not (0 <= idx < len(self.cues)):
             self.sel_lbl.setText("Câu —")
             self.fit_lbl.setText("")
+            self.lines_lbl.setText("")
             self._set_panel_enabled(False)
             return
         c = self.cues[idx]
@@ -251,6 +259,19 @@ class EditorView(QWidget):
         self.mute_cb.setChecked(c.mute)
         self.gain.blockSignals(False)
         self.mute_cb.blockSignals(False)
+        self._refresh_lines_badge()
+
+    def _refresh_lines_badge(self) -> None:
+        if not (0 <= self._sel < len(self.cues)):
+            self.lines_lbl.setText("")
+            return
+        from desktop.widgets.style_panel import estimate_line_count
+        c = self.cues[self._sel]
+        eff = c.style if c.style else self.get_style()
+        n = estimate_line_count(c.vi, size_px=self.get_size_px(), font=self.get_font(),
+                                margin_l=eff.get("margin_l", 60), margin_r=eff.get("margin_r", 60),
+                                bold=eff.get("bold", False), letter_spacing=eff.get("letter_spacing", 0))
+        self.lines_lbl.setText(f"đang {n} dòng")
 
     def _on_gain(self, v: int) -> None:
         if 0 <= self._sel < len(self.cues):
@@ -377,7 +398,8 @@ class EditorView(QWidget):
         st = self._load_style(job)
         if st:
             self.style_panel.set_from(st)
-        self.video.set_style(self.get_style(), self.get_size_px(), self.get_font())
+        self._set_global_from_panel()
+        self.video.set_style(self._g_style, self._g_size, self._g_font)
 
     def _reload(self) -> None:
         self.table.load(self.cues)
@@ -389,7 +411,7 @@ class EditorView(QWidget):
     # --- undo ----------------------------------------------------------------
     def _snapshot(self) -> None:
         self._undo_stack.append(
-            [EditorCue(c.start, c.end, c.vi, c.zh, c.gain_db, c.mute) for c in self.cues])
+            [EditorCue(c.start, c.end, c.vi, c.zh, c.gain_db, c.mute, c.style) for c in self.cues])
         if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
 
@@ -406,9 +428,51 @@ class EditorView(QWidget):
             self.dirtyChanged.emit(False)
 
     # --- style (delegates to the Kiểu chữ tab) -------------------------------
+    def _set_global_from_panel(self) -> None:
+        self._g_font = self.style_panel.get_font()
+        self._g_size = self.style_panel.get_size_px()
+        self._g_style = self.style_panel.get_style()
+
     def _on_style_changed(self) -> None:
-        self.video.set_style(self.get_style(), self.get_size_px(), self.get_font())
+        if self.style_panel.get_scope() == "selected":
+            self._apply_style_to_selection()          # apply to the picked lines only
+        else:
+            self._set_global_from_panel()             # update the global (Default) style
+            self.video.set_style(self._g_style, self._g_size, self._g_font)
+        self._refresh_lines_badge()
         self._mark_dirty()
+
+    def _apply_style_to_selection(self) -> None:
+        rows = self.table.selected_rows()
+        if not rows:
+            return
+        s = self.style_panel.get_style()
+        for r in rows:
+            if 0 <= r < len(self.cues):
+                self.cues[r].style = dict(s)
+                self.table.refresh_row(r)
+        self.video.set_cues(self.cues)
+
+    def _reset_selected_style(self) -> None:
+        rows = self.table.selected_rows()
+        changed = False
+        for r in rows:
+            if 0 <= r < len(self.cues) and self.cues[r].style is not None:
+                self.cues[r].style = None
+                self.table.refresh_row(r)
+                changed = True
+        if changed:
+            self.video.set_cues(self.cues)
+            self._mark_dirty()
+
+    def get_style(self) -> dict:
+        return self._g_style if self._g_style is not None else self.style_panel.get_style()
+
+    def get_font(self) -> str:
+        return self._g_font
+
+    def get_size_px(self) -> int:
+        return self._g_size
 
     def _reburn_preview(self) -> None:
         """After a drag, burn one exact FFmpeg frame at the current time and show it
@@ -435,15 +499,6 @@ class EditorView(QWidget):
 
         self._run_async(work, done, fail)
 
-    def get_style(self) -> dict:
-        return self.style_panel.get_style()
-
-    def get_font(self) -> str:
-        return self.style_panel.get_font()
-
-    def get_size_px(self) -> int:
-        return self.style_panel.get_size_px()
-
     def _load_style(self, job):
         import json
         p = job.work_dir / "style.json"
@@ -456,8 +511,7 @@ class EditorView(QWidget):
 
     def _save_style(self) -> None:
         import json
-        data = {"font": self.style_panel.get_font(), "size": self.style_panel.get_size_px(),
-                "style": self.style_panel.get_style()}
+        data = {"font": self.get_font(), "size": self.get_size_px(), "style": self.get_style()}
         (self.job.work_dir / "style.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -511,9 +565,9 @@ class EditorView(QWidget):
             half = len(words) // 2
             left, right = " ".join(words[:half]), " ".join(words[half:])
             c.end, c.vi = mid, left
-            # both halves inherit the per-line dub settings (P0-2 policy)
+            # both halves inherit the per-line dub + style settings (P0-2 / C-3 policy)
             self.cues.insert(i + 1, EditorCue(start=mid, end=orig_end, vi=right, zh="",
-                                              gain_db=c.gain_db, mute=c.mute))
+                                              gain_db=c.gain_db, mute=c.mute, style=c.style))
             self._reload()
 
     def _merge(self) -> None:

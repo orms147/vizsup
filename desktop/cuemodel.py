@@ -20,8 +20,9 @@ class EditorCue:
     end: float
     vi: str
     zh: str = ""
-    gain_db: float = 0.0   # per-line dub volume trim
-    mute: bool = False     # drop this line's dub (keep the subtitle)
+    gain_db: float = 0.0          # per-line dub volume trim
+    mute: bool = False            # drop this line's dub (keep the subtitle)
+    style: dict | None = None     # per-line subtitle style override (sparse)
 
     @property
     def dur(self) -> float:
@@ -74,26 +75,50 @@ def load_overrides(job) -> list[dict]:
     return []
 
 
+def _style_overrides_path(job):
+    return job.work_dir / "style_overrides.json"
+
+
+def load_style_overrides(job) -> dict:
+    """Per-cue subtitle-style overrides keyed by 1-based cue position (string)."""
+    p = _style_overrides_path(job)
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
 def load_pair(job) -> list[EditorCue]:
-    """Load vi.srt (editable) aligned with cn.srt (reference) + dub overrides."""
+    """Load vi.srt (editable) aligned with cn.srt (reference) + dub & style overrides."""
     vi = parse_srt(job.vi_srt) if job.vi_srt.exists() else []
     zh = parse_srt(job.cn_srt) if job.cn_srt.exists() else []
     ov = load_overrides(job)
+    sov = load_style_overrides(job)
     out: list[EditorCue] = []
     for i, c in enumerate(vi):
         zh_text = zh[i].text if i < len(zh) else ""
         o = ov[i] if i < len(ov) else {}
         out.append(EditorCue(start=c.start, end=c.end, vi=c.text, zh=zh_text,
-                             gain_db=float(o.get("gain_db", 0.0)), mute=bool(o.get("mute", False))))
+                             gain_db=float(o.get("gain_db", 0.0)), mute=bool(o.get("mute", False)),
+                             style=sov.get(str(i + 1))))
     return out
 
 
 def save_vi(job, cues: list[EditorCue]) -> None:
     rows = [Cue(index=i + 1, start=c.start, end=c.end, text=c.vi) for i, c in enumerate(cues)]
     write_srt(rows, job.vi_srt)
-    # sidecar overrides, aligned with vi.srt order (write only when any are set)
+    # dub overrides sidecar (aligned with vi.srt order; written only when any set)
     ov = [{"gain_db": round(c.gain_db, 2), "mute": c.mute} for c in cues]
     if any(o["gain_db"] or o["mute"] for o in ov):
         _overrides_path(job).write_text(json.dumps(ov, ensure_ascii=False), encoding="utf-8")
     elif _overrides_path(job).exists():
-        _overrides_path(job).unlink()  # all defaults → no sidecar
+        _overrides_path(job).unlink()
+    # per-line style sidecar, keyed by 1-based position
+    sov = {str(i + 1): c.style for i, c in enumerate(cues) if c.style}
+    if sov:
+        _style_overrides_path(job).write_text(json.dumps(sov, ensure_ascii=False), encoding="utf-8")
+    elif _style_overrides_path(job).exists():
+        _style_overrides_path(job).unlink()

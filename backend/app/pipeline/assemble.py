@@ -19,6 +19,7 @@ filename (avoids Windows drive-colon escaping headaches).
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -26,6 +27,18 @@ from pathlib import Path
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_ass
+
+
+def _load_cue_styles(job: Job) -> dict[int, dict] | None:
+    """Read style_overrides.json (1-based string keys) → {int: style} for write_ass."""
+    p = job.work_dir / "style_overrides.json"
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return {int(k): v for k, v in data.items()} or None
+        except Exception:  # noqa: BLE001
+            return None
+    return None
 
 # Dub-fit constants (KrillinAI/VideoLingo consensus).
 SPEED_ACCEPT = 1.15   # below this, speed-up is inaudible → no warning
@@ -82,8 +95,9 @@ def style_preview_frame(
     """Burn the styled subtitles onto a single source frame → a PNG, for a fast
     WYSIWYG style preview in the UI (no full render). Returns the PNG path."""
     wd = job.work_dir
+    cue_styles = {i + 1: c.style for i, c in enumerate(cues) if getattr(c, "style", None)} or None
     write_ass(cues, wd / "_preview.ass", font=font, size=size,
-              cover_hardsubs=cover_hardsubs, style=style)
+              cover_hardsubs=cover_hardsubs, style=style, cue_styles=cue_styles)
     if at is None:
         at = 1.0
         for c in cues:
@@ -163,7 +177,7 @@ def assemble(
 
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
     write_ass(cues_for_subs, job.subs_ass, font=font, size=size,
-              cover_hardsubs=cover_hardsubs, style=style)
+              cover_hardsubs=cover_hardsubs, style=style, cue_styles=_load_cue_styles(job))
 
     cmd = [ffmpeg, "-y", "-i", "source.mp4"]
     for _, seg in segments:

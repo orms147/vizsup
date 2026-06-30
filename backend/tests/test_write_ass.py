@@ -54,3 +54,26 @@ def test_margins_in_style_line():
     fields = sl[len("Style: "):].split(",")
     # ...,Alignment,MarginL,MarginR,MarginV,Encoding
     assert fields[19:22] == ["120", "130", "200"]
+
+
+# --- C-1: multi-style (cue_styles) ------------------------------------------
+
+def test_cue_styles_none_byte_identical():
+    assert _ass(style={"primary": "#FF0000"}) == _ass(style={"primary": "#FF0000"}, cue_styles=None)
+
+
+def test_cue_styles_routes_selected_line():
+    t = _ass(cue_styles={2: {"primary": "#FFD400", "bold": True}})
+    assert t.count("\nStyle: ") == 2 and "Style: Sub1," in t   # Default + Sub1
+    dia = [ln for ln in t.splitlines() if ln.startswith("Dialogue:")]
+    assert ",Default,," in dia[0] and ",Sub1,," in dia[1] and ",Default,," in dia[2]
+    sub1 = next(ln for ln in t.splitlines() if ln.startswith("Style: Sub1,"))
+    assert "&H0000D4FF" in sub1 and ",-1,0," in sub1            # Sub1 = yellow + bold
+    assert "&H00FFFFFF" in _style_line(t)                       # Default stays white
+
+
+def test_cue_styles_dedup_identical_overrides():
+    t = _ass(cue_styles={1: {"bold": True}, 3: {"bold": True}})
+    assert t.count("\nStyle: ") == 2                            # Default + one deduped Sub
+    dia = [ln for ln in t.splitlines() if ln.startswith("Dialogue:")]
+    assert ",Sub1,," in dia[0] and ",Default,," in dia[1] and ",Sub1,," in dia[2]
