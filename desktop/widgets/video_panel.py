@@ -1,13 +1,14 @@
-"""Video player panel: QMediaPlayer + QVideoWidget with scrub + play/pause, and a
-live caption bar UNDER the video showing the Vietnamese cue at the current time
-(a bar, not an overlay — QVideoWidget's native surface can hide overlaid widgets,
-so a dedicated strip is the reliable way to always see the subtitle).
+"""Video player panel. The video is rendered via QVideoSink → QImage into a
+VideoCanvas (not a QVideoWidget) so the Vietnamese subtitle can be drawn ON the
+frame as a draggable/resizable box. Play/pause, scrub, seek, volume preserved.
+A caption bar under the video is kept as a redundant always-visible readout.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,10 +23,10 @@ from PySide6.QtWidgets import (
 from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.theme import C
+from desktop.widgets.video_canvas import VideoCanvas
 
 try:
-    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-    from PySide6.QtMultimediaWidgets import QVideoWidget
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 
     HAVE_MM = True
 except Exception:  # noqa: BLE001
@@ -33,8 +34,10 @@ except Exception:  # noqa: BLE001
 
 
 class VideoPanel(QFrame):
-    positionChanged = Signal(float)   # seconds
-    durationChanged = Signal(float)   # seconds
+    positionChanged = Signal(float)          # seconds
+    durationChanged = Signal(float)          # seconds
+    marginsChanged = Signal(int, int, int)   # subtitle box dragged → margin_l/r/v
+    dragCommitted = Signal()                 # drag released → re-burn an exact frame
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,7 +47,6 @@ class VideoPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # stage (video or placeholder)
         stage = QWidget()
         self._stack = QStackedLayout(stage)
         self._placeholder = QLabel("Chưa có video")
@@ -54,30 +56,34 @@ class VideoPanel(QFrame):
         )
         self._stack.addWidget(self._placeholder)
 
+        self._canvas = VideoCanvas()
+        self._canvas.marginsChanged.connect(self.marginsChanged)
+        self._canvas.dragCommitted.connect(self.dragCommitted)
+        self._stack.addWidget(self._canvas)
+
         if HAVE_MM:
-            self._video = QVideoWidget()
-            self._video.setStyleSheet("background:#000;border-radius:14px;")
             self._player = QMediaPlayer()
             self._audio = QAudioOutput()
             self._player.setAudioOutput(self._audio)
-            self._player.setVideoOutput(self._video)
+            self._sink = QVideoSink()
+            self._player.setVideoSink(self._sink)
+            self._sink.videoFrameChanged.connect(self._on_frame)
             self._player.positionChanged.connect(self._on_pos)
             self._player.durationChanged.connect(self._on_dur)
             self._player.errorOccurred.connect(self._on_media_error)
-            self._stack.addWidget(self._video)
         else:
             self._player = None
             self._audio = None
         root.addWidget(stage, 1)
 
-        # caption bar (current Vietnamese cue) — directly under the video
+        # caption bar (current Vietnamese cue) — redundant always-visible readout
         self._sub = QLabel("")
         self._sub.setWordWrap(True)
         self._sub.setAlignment(Qt.AlignCenter)
-        self._sub.setMinimumHeight(46)
+        self._sub.setMinimumHeight(40)
         self._sub.setStyleSheet(
             f"color:#fff; background:{C['deep']}; border:1px solid {C['line2']};"
-            "border-radius:8px; padding:7px 12px; font-size:16px; font-weight:600;"
+            "border-radius:8px; padding:6px 12px; font-size:15px; font-weight:600;"
         )
         root.addWidget(self._sub)
 
@@ -109,25 +115,30 @@ class VideoPanel(QFrame):
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:
         self._placeholder.setText("Chưa có video")
-        store.debug(f"VideoPanel.load path={path} HAVE_MM={HAVE_MM}")
-        ok = bool(HAVE_MM and path and Path(path).exists() and self._probe_ok(path))
-        store.debug(f"VideoPanel.load probe_ok={ok}")
+        ok = bool(HAVE_MM and self._player and path and Path(path).exists() and self._probe_ok(path))
+        store.debug(f"VideoPanel.load path={path} ok={ok}")
         if ok:
             from PySide6.QtCore import QUrl
 
-            store.debug("VideoPanel.load setSource begin")
             self._player.setSource(QUrl.fromLocalFile(str(path)))
-            store.debug("VideoPanel.load setSource done")
-            self._stack.setCurrentWidget(self._video)
+            self._stack.setCurrentWidget(self._canvas)
         else:
             if path and Path(path).exists():
                 self._placeholder.setText("Không mở được video (tệp hỏng hoặc tải dở).")
             self._stack.setCurrentWidget(self._placeholder)
 
+    def set_style(self, style: dict, size_px: int, font: str) -> None:
+        self._canvas.set_style(style, size_px, font)
+
+    def set_burned_overlay(self, path: str) -> None:
+        self._canvas.set_burned_overlay(QImage(str(path)))
+
+    def current_time(self) -> float:
+        return (self._player.position() / 1000.0) if self._player else 0.0
+
     @staticmethod
     def _probe_ok(path: Path) -> bool:
-        """Validate the file with ffprobe before handing it to QMediaPlayer —
-        a corrupt/incomplete mp4 can otherwise hard-crash the ffmpeg backend."""
+        """Validate the file with ffprobe before handing it to QMediaPlayer."""
         import subprocess
 
         try:
@@ -141,6 +152,20 @@ class VideoPanel(QFrame):
             return r.returncode == 0 and r.stdout.strip() not in ("", "N/A")
         except Exception:  # noqa: BLE001
             return False
+
+    def _on_frame(self, frame) -> None:
+        try:
+            if not frame.isValid():
+                return
+            img = frame.toImage()
+        except Exception:  # noqa: BLE001
+            return
+        if img.isNull():
+            return
+        nw, nh = img.width(), img.height()
+        if max(nw, nh) > 960:
+            img = img.scaled(960, 960, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._canvas.set_frame(img, nw, nh)
 
     def _on_media_error(self, _error, msg: str = "") -> None:
         self._placeholder.setText("Không phát được video (tệp hỏng).")
@@ -179,6 +204,7 @@ class VideoPanel(QFrame):
         txt = self._active_text(t)
         if txt != self._sub.text():
             self._sub.setText(txt)
+        self._canvas.set_caption(txt)
 
     def _on_pos(self, ms: int) -> None:
         if not self._scrub.isSliderDown():

@@ -63,6 +63,7 @@ class EditorView(QWidget):
         self._ctx: dict = {}          # tts/voice/translator context from step 1
         self._sel: int = -1           # selected cue index
         self._tasks: list = []        # keep async (thread, worker) refs alive
+        self._burning = False         # guards one style re-burn at a time
         self._dub_player = None
         if _HAVE_MM:
             self._dub_player = QMediaPlayer()
@@ -129,6 +130,8 @@ class EditorView(QWidget):
         self.timeline.blockSelected.connect(lambda i: self.table.selectRow(i))
         self.timeline.cueChanged.connect(self._on_cue_dragged)
         self.video.positionChanged.connect(self.timeline.set_time)
+        self.video.marginsChanged.connect(self.style_panel.set_drag_margins)  # drag box → margins
+        self.video.dragCommitted.connect(self._reburn_preview)                # release → exact frame
 
         # undo (Ctrl+Z): snapshot before table cell edits and before each tool action
         self._undo_stack: list[list[EditorCue]] = []
@@ -374,6 +377,7 @@ class EditorView(QWidget):
         st = self._load_style(job)
         if st:
             self.style_panel.set_from(st)
+        self.video.set_style(self.get_style(), self.get_size_px(), self.get_font())
 
     def _reload(self) -> None:
         self.table.load(self.cues)
@@ -403,7 +407,33 @@ class EditorView(QWidget):
 
     # --- style (delegates to the Kiểu chữ tab) -------------------------------
     def _on_style_changed(self) -> None:
+        self.video.set_style(self.get_style(), self.get_size_px(), self.get_font())
         self._mark_dirty()
+
+    def _reburn_preview(self) -> None:
+        """After a drag, burn one exact FFmpeg frame at the current time and show it
+        on the canvas (true WYSIWYG). Off-thread; one at a time."""
+        if self.job is None or self._burning:
+            return
+        self._burning = True
+        from app.pipeline import assemble
+        job, cues = self.job, self.cues
+        size = int(round(self.get_size_px() * 3))
+        font, style = self.get_font(), self.get_style()
+        at = self.video.current_time()
+
+        def work():
+            return str(assemble.style_preview_frame(
+                job, cues, at=at, font=font, size=size, cover_hardsubs=False, style=style))
+
+        def done(path):
+            self.video.set_burned_overlay(path)
+            self._burning = False
+
+        def fail(_msg):
+            self._burning = False
+
+        self._run_async(work, done, fail)
 
     def get_style(self) -> dict:
         return self.style_panel.get_style()
