@@ -435,23 +435,26 @@ class EditorView(QWidget):
 
     def _on_style_changed(self) -> None:
         if self.style_panel.get_scope() == "selected":
-            self._apply_style_to_selection()          # apply to the picked lines only
+            changed = self._apply_style_to_selection()   # apply to the picked lines only
         else:
-            self._set_global_from_panel()             # update the global (Default) style
+            self._set_global_from_panel()                # update the global (Default) style
             self.video.set_style(self._g_style, self._g_size, self._g_font)
+            changed = True
         self._refresh_lines_badge()
-        self._mark_dirty()
+        if changed:                                      # don't dirty/autosave on a no-op
+            self._mark_dirty()
 
-    def _apply_style_to_selection(self) -> None:
+    def _apply_style_to_selection(self) -> bool:
         rows = self.table.selected_rows()
         if not rows:
-            return
+            return False
         s = self.style_panel.get_style()
         for r in rows:
             if 0 <= r < len(self.cues):
                 self.cues[r].style = dict(s)
                 self.table.refresh_row(r)
         self.video.set_cues(self.cues)
+        return True
 
     def _reset_selected_style(self) -> None:
         rows = self.table.selected_rows()
@@ -463,6 +466,7 @@ class EditorView(QWidget):
                 changed = True
         if changed:
             self.video.set_cues(self.cues)
+            self._refresh_lines_badge()   # selected cue reverts to the global line count
             self._mark_dirty()
 
     def get_style(self) -> dict:
