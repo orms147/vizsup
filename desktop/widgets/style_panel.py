@@ -129,14 +129,20 @@ class StylePanel(QScrollArea):
         self.btn_del_preset = QPushButton("Xóa")
         self.btn_del_preset.setObjectName("ghost")
         self.btn_del_preset.setFixedWidth(46)
+        self.btn_reset = QPushButton("↻")
+        self.btn_reset.setObjectName("ghost")
+        self.btn_reset.setFixedWidth(34)
+        self.btn_reset.setToolTip("Cài lại (về mẫu đang chọn, hoặc mặc định)")
         self.preset.activated.connect(self._on_preset)
         self.btn_save_preset.clicked.connect(self._save_preset)
         self.btn_del_preset.clicked.connect(self._delete_preset)
+        self.btn_reset.clicked.connect(self._reset_to_applied)
         ll.addWidget(QLabel("Mẫu kiểu (dùng chung mọi dự án)"))
         prow = QHBoxLayout()
         prow.addWidget(self.preset, 1)
         prow.addWidget(self.btn_save_preset)
         prow.addWidget(self.btn_del_preset)
+        prow.addWidget(self.btn_reset)
         ll.addLayout(prow)
 
         # font + size
@@ -153,15 +159,23 @@ class StylePanel(QScrollArea):
         for cb in (self.c_text, self.c_outline, self.c_box):
             cb.changed.connect(self._changed)
         ll.addLayout(self._row("Màu chữ", self.c_text))
-        ll.addLayout(self._row("Màu viền", self.c_outline))
+        ll.addLayout(self._row("Màu viền (rìa chữ)", self.c_outline))
 
-        self.outline_w = self._slider(ll, "Độ dày viền", 0, 6, 2, "")
+        self.outline_w = self._slider(ll, "Độ dày viền (rìa chữ)", 0, 6, 2, "")
 
         self.box_style = QComboBox()
         self.box_style.addItems(list(BOX_STYLES))
         self.box_style.currentTextChanged.connect(self._changed)
+        self.box_style.currentTextChanged.connect(self._sync_box_color)
         ll.addLayout(self._row("Kiểu nền", self.box_style))
-        ll.addLayout(self._row("Màu nền", self.c_box))
+        # "Màu nền" only matters for the box styles → hide it for "Viền chữ"
+        self._box_color_row = QWidget()
+        _bc = QVBoxLayout(self._box_color_row)
+        _bc.setContentsMargins(0, 0, 0, 0)
+        _bc.setSpacing(3)
+        _bc.addWidget(QLabel("Màu nền (hộp)"))
+        _bc.addWidget(self.c_box)
+        ll.addWidget(self._box_color_row)
 
         self.bold = QRadioButton("Đậm")
         self.italic = QRadioButton("Nghiêng")
@@ -198,8 +212,10 @@ class StylePanel(QScrollArea):
         ll.addWidget(self.preview_btn)
         ll.addStretch(1)
 
-        self._pos = None  # free drag position (nx, ny); set by the video canvas
+        self._pos = None       # free drag position (nx, ny); set by the video canvas
+        self._applied = None   # last preset applied (for the ↻ reset button)
         self._refresh_presets()
+        self._sync_box_color()
 
     # --- layout helpers ------------------------------------------------------
     def _row(self, label: str, w: QWidget) -> QVBoxLayout:
@@ -227,6 +243,10 @@ class StylePanel(QScrollArea):
     # --- change / preview ----------------------------------------------------
     def _changed(self, *_a) -> None:
         self.styleChanged.emit()
+
+    def _sync_box_color(self, *_a) -> None:
+        border_style, _ = BOX_STYLES[self.box_style.currentText()]
+        self._box_color_row.setVisible(border_style in (3, 4))
 
     def _reset_pos(self) -> None:
         self._pos = None
@@ -351,10 +371,23 @@ class StylePanel(QScrollArea):
                 self.preset.setCurrentIndex(i)
         self.preset.blockSignals(False)
 
+    _FACTORY = {
+        "font": "Be Vietnam Pro", "size": 20,
+        "style": {"primary": "#ffffff", "outline": "#000000", "box": "#000000",
+                  "box_alpha": 255, "border_style": 1, "outline_w": 2, "bold": False,
+                  "italic": False, "margin_l": 60, "margin_r": 60, "margin_v": 60,
+                  "line_mode": "Tự động", "pos": None},
+    }
+
     def _on_preset(self, _i: int) -> None:
         data = self._load_presets().get(self.preset.currentText())
         if data:
+            self._applied = data
             self.set_from(data)
+
+    def _reset_to_applied(self) -> None:
+        """↻ — revert controls to the applied preset, or the factory default."""
+        self.set_from(self._applied or self._FACTORY)
 
     def _save_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Lưu mẫu kiểu", "Tên mẫu:")
@@ -363,6 +396,7 @@ class StylePanel(QScrollArea):
         name = name.strip()
         presets = self._load_presets()
         presets[name] = {"font": self.get_font(), "size": self.get_size_px(), "style": self.get_style()}
+        self._applied = presets[name]
         p = self._presets_file()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")

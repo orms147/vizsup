@@ -8,12 +8,43 @@ The result is written to ``job.vi_srt``, which the human edit gate then edits.
 """
 from __future__ import annotations
 
+import re
+from difflib import SequenceMatcher
+
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
 from app.providers.registry import get_translator
 
 # Batch size keeps each request bounded while giving the model surrounding context.
 BATCH = 50
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", "", s or "")
+
+
+def dedupe_adjacent(cues: list[Cue], sim: float = 0.85) -> list[Cue]:
+    """Merge consecutive (near-)identical cues into one spanning the combined time.
+
+    A burned-in subtitle that lingers on screen gets OCR'd into several near-identical
+    cues; without this they'd each be translated separately into slightly different
+    Vietnamese. Merging first means one translation per real subtitle, and the VN line
+    covers the subtitle's full duration. Safe for distinct ASR/SRT lines (only merges
+    when the text is genuinely near-identical)."""
+    out: list[Cue] = []
+    for c in cues:
+        if out:
+            a, b = _norm(out[-1].text), _norm(c.text)
+            shorter = min(a, b, key=len)
+            same = (a == b) or (len(shorter) >= 3 and (a in b or b in a)) \
+                or (a and b and SequenceMatcher(None, a, b).ratio() >= sim)
+            if same:
+                out[-1].end = max(out[-1].end, c.end)
+                if len(c.text) > len(out[-1].text):     # keep the cleaner/longer read
+                    out[-1].text = c.text
+                continue
+        out.append(Cue(index=len(out) + 1, start=c.start, end=c.end, text=c.text))
+    return out
 
 
 def _batched(seq: list, n: int):
@@ -74,7 +105,7 @@ def translate(
     glossary: dict[str, str] | None = None,
 ) -> Job:
     """Read ``job.cn_srt``, translate, write ``job.vi_srt``."""
-    cues = parse_srt(job.cn_srt)
+    cues = dedupe_adjacent(parse_srt(job.cn_srt))   # one translation per real subtitle
     context = {
         "title": job.metadata.get("title"),
         "platform": job.metadata.get("platform"),
