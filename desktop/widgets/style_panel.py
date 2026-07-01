@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop.widgets.no_wheel import NoWheelComboBox, NoWheelSlider
+
 FONTS = ["Be Vietnam Pro", "Noto Sans", "Arial"]
 # "Kiểu nền" → (border_style, box_alpha)
 BOX_STYLES = {
@@ -114,7 +116,7 @@ class StylePanel(QScrollArea):
         ll.setSpacing(10)
 
         # Áp dụng cho (scope)
-        self.scope = QComboBox()
+        self.scope = NoWheelComboBox()
         self.scope.addItems(["Toàn bộ", "Các câu đang chọn"])
         self.scope.currentIndexChanged.connect(self.scopeChanged)
         ll.addLayout(self._row("Áp dụng cho", self.scope))
@@ -128,7 +130,7 @@ class StylePanel(QScrollArea):
         ll.addWidget(self.btn_reset_cue)
 
         # Mẫu kiểu (cross-project library)
-        self.preset = QComboBox()
+        self.preset = NoWheelComboBox()
         self.btn_save_preset = QPushButton("Lưu")
         self.btn_save_preset.setObjectName("ghost")
         self.btn_save_preset.setFixedWidth(46)
@@ -152,7 +154,7 @@ class StylePanel(QScrollArea):
         ll.addLayout(prow)
 
         # font + size
-        self.font = QComboBox()
+        self.font = NoWheelComboBox()
         self.font.addItems(FONTS)
         self.font.currentTextChanged.connect(self._changed)
         ll.addLayout(self._row("Phông chữ", self.font))
@@ -169,7 +171,7 @@ class StylePanel(QScrollArea):
 
         self.outline_w = self._slider(ll, "Độ dày viền (rìa chữ)", 0, 6, 2, "")
 
-        self.box_style = QComboBox()
+        self.box_style = NoWheelComboBox()
         self.box_style.addItems(list(BOX_STYLES))
         self.box_style.currentTextChanged.connect(self._changed)
         self.box_style.currentTextChanged.connect(self._sync_box_color)
@@ -197,7 +199,7 @@ class StylePanel(QScrollArea):
 
         # letter spacing + line mode (fit to 1-2 lines without shrinking)
         self.letter = self._slider(ll, "Giãn chữ", -20, 40, 0, "%")
-        self.line_mode = QComboBox()
+        self.line_mode = NoWheelComboBox()
         self.line_mode.addItems(["Tự động", "1 dòng", "2 dòng"])
         self.line_mode.currentTextChanged.connect(self._changed)
         ll.addLayout(self._row("Chế độ dòng", self.line_mode))
@@ -238,7 +240,7 @@ class StylePanel(QScrollArea):
         vlbl = QLabel(f"{val}{unit}")
         vlbl.setObjectName("mono")
         head.addWidget(vlbl)
-        s = QSlider(Qt.Horizontal)
+        s = NoWheelSlider(Qt.Horizontal)
         s.setRange(lo, hi)
         s.setValue(val)
         s.valueChanged.connect(lambda v: (vlbl.setText(f"{v}{unit}"), self._changed()))

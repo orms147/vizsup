@@ -18,11 +18,13 @@ class SubtitleTable(QTableWidget):
     rowSelected = Signal(int)
     seekRequested = Signal(float)
     edited = Signal()
-    beforeEdit = Signal()  # fires before a cell edit is applied (for undo snapshots)
+    beforeEdit = Signal()      # fires before a cell edit is applied (for undo snapshots)
+    checksChanged = Signal()   # a "#" checkbox toggled → the styling selection changed
 
     def __init__(self) -> None:
         super().__init__(0, len(COLS))
         self._cues: list[EditorCue] = []
+        self._checked: set[int] = set()   # rows ticked for per-line styling
         self._loading = False
         self.setHorizontalHeaderLabels(COLS)
         self.verticalHeader().setVisible(False)
@@ -42,6 +44,7 @@ class SubtitleTable(QTableWidget):
 
     def load(self, cues: list[EditorCue]) -> None:
         self._loading = True
+        self._checked = set()
         self._cues = cues
         self.setRowCount(len(cues))
         for r, c in enumerate(cues):
@@ -52,7 +55,8 @@ class SubtitleTable(QTableWidget):
     def _set_row(self, r: int, c: EditorCue) -> None:
         num = QTableWidgetItem(str(r + 1))
         num.setTextAlignment(Qt.AlignCenter)
-        num.setFlags(Qt.ItemIsEnabled)
+        num.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)  # tick to pick lines
+        num.setCheckState(Qt.Checked if r in self._checked else Qt.Unchecked)
         start = QTableWidgetItem(fmt_time(c.start))
         end = QTableWidgetItem(fmt_time(c.end))
         for it in (start, end):
@@ -82,6 +86,19 @@ class SubtitleTable(QTableWidget):
     def selected_rows(self) -> list[int]:
         return sorted({ix.row() for ix in self.selectionModel().selectedRows()})
 
+    def checked_rows(self) -> list[int]:
+        return sorted(i for i in self._checked if 0 <= i < self.rowCount())
+
+    def set_all_checked(self, on: bool) -> None:
+        self._loading = True
+        self._checked = set(range(self.rowCount())) if on else set()
+        for r in range(self.rowCount()):
+            it = self.item(r, 0)
+            if it is not None:
+                it.setCheckState(Qt.Checked if on else Qt.Unchecked)
+        self._loading = False
+        self.checksChanged.emit()
+
     def set_playing_row(self, idx: int) -> None:
         if 0 <= idx < self.rowCount() and idx != self.currentRow():
             self.selectRow(idx)
@@ -99,6 +116,13 @@ class SubtitleTable(QTableWidget):
             return
         r, col = item.row(), item.column()
         if not (0 <= r < len(self._cues)):
+            return
+        if col == 0:                       # "#" checkbox toggled → styling selection
+            if item.checkState() == Qt.Checked:
+                self._checked.add(r)
+            else:
+                self._checked.discard(r)
+            self.checksChanged.emit()
             return
         if col in (1, 2, 3):
             self.beforeEdit.emit()  # snapshot the pre-edit state (cues still old here)

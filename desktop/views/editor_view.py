@@ -130,6 +130,7 @@ class EditorView(QWidget):
         self.table.seekRequested.connect(self.video.seek_seconds)
         self.table.edited.connect(self._mark_dirty)
         self.table.itemSelectionChanged.connect(self._update_scope_hint)
+        self.table.checksChanged.connect(self._update_scope_hint)
         self.table.edited.connect(self._refresh_lines_badge)
         self.timeline.seeked.connect(self.video.seek_seconds)
         self.timeline.blockSelected.connect(lambda i: self.table.selectRow(i))
@@ -154,6 +155,15 @@ class EditorView(QWidget):
         bar.addWidget(title)
         bar.addWidget(self.count)
         bar.addStretch(1)
+        chk_all = QPushButton("☑ Tất cả")
+        chk_all.setObjectName("ghost")
+        chk_all.setToolTip("Tích tất cả câu (áp kiểu hàng loạt)")
+        chk_all.clicked.connect(lambda: self.table.set_all_checked(True))
+        chk_none = QPushButton("☐ Bỏ tích")
+        chk_none.setObjectName("ghost")
+        chk_none.clicked.connect(lambda: self.table.set_all_checked(False))
+        bar.addWidget(chk_all)
+        bar.addWidget(chk_none)
         for label, slot in [("Tách", self._split), ("Gộp", self._merge),
                             ("Thêm", self._add), ("Xóa", self._delete)]:
             b = QPushButton(label)
@@ -447,28 +457,37 @@ class EditorView(QWidget):
         self._refresh_lines_badge()
         self._mark_dirty()
 
+    def _scope_rows(self) -> tuple[list[int], str]:
+        """Which cues a per-line style edit targets: ticked rows first, else the
+        highlighted rows, else the cue in the panel."""
+        checked = self.table.checked_rows()
+        if checked:
+            return checked, "đã tích"
+        sel = self.table.selected_rows()
+        if sel:
+            return sel, "đang chọn"
+        if 0 <= self._sel < len(self.cues):
+            return [self._sel], "đang xem"
+        return [], ""
+
     def _update_scope_hint(self) -> None:
         """Show what a style edit will hit — the biggest source of the 'không áp
         được' confusion (selection is on the other tab)."""
         if self.style_panel.get_scope() != "selected":
             self.style_panel.set_scope_hint("→ áp cho toàn bộ phụ đề")
             return
-        rows = self.table.selected_rows()
-        if not rows and 0 <= self._sel < len(self.cues):
-            rows = [self._sel]
+        rows, src = self._scope_rows()
         if not rows:
             self.style_panel.set_scope_hint(
-                "→ chưa chọn câu nào (sẽ áp cho toàn bộ). Chọn dòng ở tab “Nội dung "
-                "& Lồng tiếng” (Ctrl/Shift để chọn nhiều câu).")
+                "→ chưa chọn câu nào. Tích ô ☑ ở cột # (tab “Nội dung & Lồng tiếng”) "
+                "để chọn câu — hoặc bấm “Chọn tất cả”.")
         else:
             nums = ", ".join("#" + str(r + 1) for r in rows[:8])
             more = "…" if len(rows) > 8 else ""
-            self.style_panel.set_scope_hint(f"→ áp cho {len(rows)} câu: {nums}{more}")
+            self.style_panel.set_scope_hint(f"→ áp cho {len(rows)} câu {src}: {nums}{more}")
 
     def _apply_style_to_selection(self) -> bool:
-        rows = self.table.selected_rows()
-        if not rows and 0 <= self._sel < len(self.cues):
-            rows = [self._sel]                           # fall back to the cue in the panel
+        rows, _src = self._scope_rows()
         if not rows:
             return False
         s = self.style_panel.get_style()
