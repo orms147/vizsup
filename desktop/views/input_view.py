@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -158,6 +160,7 @@ class InputView(QWidget):
         pb = QVBoxLayout(self.prog_box)
         pb.setContentsMargins(0, 10, 0, 0)
         self.status = QLabel("Đang chuẩn bị…")
+        self.status.setWordWrap(True)  # long errors (e.g. cookie help) wrap instead of truncating
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.log = QPlainTextEdit()
@@ -177,7 +180,22 @@ class InputView(QWidget):
         col.addWidget(self.prog_box)
 
         col.addStretch(1)
-        outer.addWidget(wrap, 0, Qt.AlignHCenter)
+
+        # Whole screen scrolls: the form + live log can exceed the window height,
+        # so without this the bottom (e.g. a long error in the log, and its own
+        # scrollbar) is pushed off-screen and unreachable.
+        center = QWidget()
+        clay = QHBoxLayout(center)
+        clay.setContentsMargins(0, 0, 0, 0)
+        clay.addStretch(1)
+        clay.addWidget(wrap)
+        clay.addStretch(1)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setWidget(center)
+        outer.addWidget(self._scroll)
 
         # wire subtitle-source behavior (after asr combo exists)
         self.rb_srt.toggled.connect(self._on_srt_radio)
@@ -299,6 +317,7 @@ class InputView(QWidget):
         if busy:
             self.log.clear()
             self.prog_box.setVisible(True)  # keep visible after the run so errors stay readable
+            self._scroll.ensureWidgetVisible(self.prog_box)  # scroll the page down to the log
         self.start.setEnabled(not busy)
 
     def set_progress(self, frac: float, msg: str) -> None:
@@ -312,3 +331,4 @@ class InputView(QWidget):
         self.status.setText(f"Lỗi: {msg}")
         self.append_log(f"✕ {msg}")
         self.start.setEnabled(True)
+        self._scroll.ensureWidgetVisible(self.prog_box)  # bring the full error into view
