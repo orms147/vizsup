@@ -152,6 +152,14 @@ override; FunASR+WhisperX selectable and improves Mandarin CER while staying wit
 proofread is opt-in, budget-gated, and corrects low-confidence lines. Each verified headless via
 `/run-stage`.
 
+> **E-3 light DONE (commit `87a06e1`).** Text-only proofread (no vision/frame upload) so it runs on
+> just an OpenRouter key: `TranslationProvider.proofread_texts()` (no-op default, OpenAICompat
+> override) + `PROOFREAD_SYSTEM_PROMPT`; `ocr.proofread_srt()` rewrites `cn.srt` after OCR, reusing
+> the picked draft translator; opt-in checkbox on Screen 1 (OCR-gated, off by default). Parse falls
+> back to the original line (never blanks); skips cleanly for passthrough/missing key. **Deferred:**
+> confidence-thresholding (currently proofreads all lines, not just low-confidence) and the vision
+> variant. **Still open in E-1/E-2:** auto hardsub-detect and FunASR+WhisperX.
+
 ---
 
 ## Backlog (research/design needed — not scheduled)
