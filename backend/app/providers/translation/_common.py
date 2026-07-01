@@ -33,7 +33,30 @@ REFINE_SYSTEM_PROMPT = (
     "- If a draft line is already good, keep it."
 )
 
+PROOFREAD_SYSTEM_PROMPT = (
+    "You are correcting OCR errors in Chinese subtitle lines read off a video.\n"
+    "Each line may have character-recognition mistakes: wrong/similar-looking hanzi,\n"
+    "stray Latin letters or symbols, or missing punctuation. Repair ONLY obvious OCR\n"
+    "errors so each line reads as correct, natural Chinese.\n"
+    "Rules:\n"
+    "- DO NOT translate. Keep the language as-is (a real inserted English line stays English).\n"
+    "- Only fix mis-recognized characters — do not rephrase, summarize, add, or drop content.\n"
+    "- Preserve the exact line numbering and count. Output ONLY lines of the form `n| <text>`.\n"
+    "- If a line is already correct, output it unchanged. No commentary, no extra text."
+)
+
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
+
+
+def build_proofread_prompt(texts: list[str], *, context: dict | None = None) -> str:
+    parts: list[str] = []
+    if context:
+        meta = ", ".join(f"{k}: {v}" for k, v in context.items() if v)
+        if meta:
+            parts.append(f"Video context: {meta}")
+    parts.append("Correct OCR errors in each numbered Chinese line. Reply only as `n| <text>`:\n")
+    parts.append("\n".join(f"{i}| {t}" for i, t in enumerate(texts, 1)))
+    return "\n".join(parts)
 
 
 def build_refine_prompt(
@@ -146,6 +169,20 @@ class OpenAICompatTranslator(TranslationProvider):
         )
         # fallback is the draft (vi_texts), so a parse miss keeps the draft, not the source
         return parse_numbered(resp.choices[0].message.content or "", len(vi_texts), vi_texts)
+
+    def proofread_texts(self, texts, *, context=None):
+        if not texts:
+            return []
+        resp = self._client().chat.completions.create(
+            model=self.model,
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
+                {"role": "user", "content": build_proofread_prompt(texts, context=context)},
+            ],
+        )
+        # fallback is the original OCR text, so a parse miss keeps it (never blanks a line)
+        return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
 
     def rewrite(self, text: str, instruction: str) -> str:
         """Single-shot rewrite (e.g. shorten a VI line to fit the dub slot)."""

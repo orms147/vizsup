@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -117,6 +118,15 @@ class InputView(QWidget):
         col.addWidget(self._ocr_region_lbl)
         col.addWidget(self.ocr_region)
 
+        # opt-in: after OCR, let the (already-picked) LLM fix recognition errors in
+        # the Chinese lines. Text only — no frames uploaded. Off by default (costs API).
+        self.ocr_proofread = QCheckBox("  Dùng AI sửa lỗi OCR (dùng bộ dịch bản nháp · chỉ gửi chữ · tốn API)")
+        self.ocr_proofread.setToolTip(
+            "Sau khi OCR, gửi các dòng chữ Trung cho bộ dịch bản nháp để sửa lỗi nhận dạng "
+            "(không gửi hình ảnh). Mặc định tắt vì có tốn API."
+        )
+        col.addWidget(self.ocr_proofread)
+
         # engines
         col.addSpacing(4)
         col.addWidget(_section("Công cụ xử lý"))
@@ -208,6 +218,7 @@ class InputView(QWidget):
         st = store.load_ui_state()
         if st.get("subtitle_source") == "ocr":
             self.rb_ocr.setChecked(True)  # don't auto-restore 'srt' (would pop a file dialog)
+        self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
         self.asr.select(st.get("asr"))
         self.draft.select(st.get("translator"))
         self.refine.select(st.get("refine"))
@@ -259,9 +270,10 @@ class InputView(QWidget):
         # ASR engine only matters when the ASR source is chosen
         self.asr.setEnabled(self.rb_asr.isChecked())
         self._asr_caption.setEnabled(self.rb_asr.isChecked())
-        # OCR region only matters for the OCR source
+        # OCR region + proofread only matter for the OCR source
         self.ocr_region.setEnabled(self.rb_ocr.isChecked())
         self._ocr_region_lbl.setEnabled(self.rb_ocr.isChecked())
+        self.ocr_proofread.setEnabled(self.rb_ocr.isChecked())
 
     def _on_srt_radio(self, on: bool) -> None:
         if on:
@@ -296,6 +308,7 @@ class InputView(QWidget):
             "refine": self.refine.current_name(),
             "tts": self.tts.current_name(),
             "ocr_region": self.ocr_region.currentData(),
+            "ocr_proofread": self.ocr_proofread.isChecked(),
         }
         if self._file:
             opts["file"] = self._file

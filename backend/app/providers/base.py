@@ -82,6 +82,17 @@ class TranslationProvider(Provider):
         """
         return list(vi_texts)
 
+    def proofread_texts(
+        self,
+        texts: list[str],
+        *,
+        context: dict | None = None,
+    ) -> list[str]:
+        """Opt-in OCR cleanup: fix character-recognition errors in already-Chinese
+        lines WITHOUT translating (text only — no frames leave the machine). Default
+        is a no-op; chat providers override. One line per input, same order/count."""
+        return list(texts)
+
 
 class TTSProvider(Provider):
     """Synthesize one line of speech to ``out_path``. Return the written path."""

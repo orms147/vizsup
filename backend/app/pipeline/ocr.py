@@ -26,8 +26,10 @@ from difflib import SequenceMatcher
 
 from app.ffmpegutil import ffmpeg_bin
 from app.models import Cue, Job
-from app.pipeline.srt import write_srt
+from app.pipeline.srt import parse_srt, write_srt
 from app.providers.base import _installed
+
+_PROOF_BATCH = 50   # lines per LLM proofread request
 
 # crop region for OCR (full width): crop=w:h:x:y. Bottom-third is the default
 # (subtitles + drops watermarks); other regions are for subs that sit higher or
@@ -222,3 +224,34 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         c.index = i
     write_srt(cues, job.cn_srt)
     return job
+
+
+def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=None) -> int:
+    """Opt-in OCR cleanup: send the OCR'd Chinese lines to an LLM to fix recognition
+    errors (TEXT ONLY — no frames uploaded) and rewrite ``job.cn_srt`` in place.
+
+    Reuses the translator the user already picked (e.g. OpenRouter). Returns the
+    number of lines proofread; a no-op returns 0. Never blanks a line: on a parse
+    miss the provider keeps the original OCR text. Skips cleanly when the provider
+    can't proofread (passthrough / missing key) so it can't break the OCR run.
+    """
+    from app.providers.registry import get_translator
+
+    prov = get_translator(provider)
+    if provider == "passthrough" or not prov.available():
+        if log:
+            log("⚠ Bỏ qua sửa lỗi OCR: bộ dịch chưa sẵn sàng (thiếu key) hoặc là passthrough.")
+        return 0
+
+    cues = parse_srt(job.cn_srt)
+    if not cues:
+        return 0
+    texts = [c.text for c in cues]
+    fixed: list[str] = []
+    for i in range(0, len(texts), _PROOF_BATCH):
+        fixed.extend(prov.proofread_texts(texts[i:i + _PROOF_BATCH], context=context))
+    for c, t in zip(cues, fixed):
+        if t and t.strip():
+            c.text = t.strip()
+    write_srt(cues, job.cn_srt)
+    return len(cues)

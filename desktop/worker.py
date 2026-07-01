@@ -122,6 +122,18 @@ class PipelineWorker(QObject):
                 self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region})")
                 ocr.extract_hardsubs(job, crop=region)
                 self.log.emit("✓ OCR xong")
+                if o.get("ocr_proofread"):
+                    self._check()
+                    prov = o.get("translator", "passthrough")
+                    self.progress.emit(0.6, "AI đang sửa lỗi OCR…")
+                    self.log.emit(f"Sửa lỗi OCR bằng AI ({prov})…")
+                    n = ocr.proofread_srt(
+                        job, provider=prov,
+                        context={"title": job.metadata.get("title")},
+                        log=self.log.emit,
+                    )
+                    if n:
+                        self.log.emit(f"✓ Đã rà soát {n} dòng OCR")
             else:
                 self.progress.emit(0.4, "Nhận dạng giọng nói (ASR)…")
                 self.log.emit(f"ASR: {o.get('asr', 'faster_whisper')}")
