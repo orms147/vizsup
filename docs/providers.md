@@ -16,7 +16,7 @@ web before relying on them — don't trust memory.
 | `claude-opus` | Claude Opus 4.8 | `ANTHROPIC_API_KEY` | | `claude-opus-4-8`; premium |
 | `glm` | GLM-5.2 (Zhipu) | `ZHIPU_API_KEY` | | latest GLM, 744B MoE, MIT weights, 1M ctx; verify API id |
 | `gemini` | Gemini 2.5 Flash | `GEMINI_API_KEY` | | cheap, good VI fluency |
-| `qwen` | Qwen3 (DashScope) | `DASHSCOPE_API_KEY` | | Chinese-native, cheap |
+| `qwen` | Qwen-Plus (DashScope) | `DASHSCOPE_API_KEY` | | `qwen-plus` rolling alias (→ current Qwen-Plus snapshot); Chinese-native, cheap |
 | `deepl` | DeepL | `DEEPL_API_KEY` | | gist baseline; VI support limited |
 
 > **Two-pass recommendation**: draft with a CN-native model (`deepseek` / `glm` / `qwen`)

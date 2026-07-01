@@ -4,7 +4,9 @@ more accurate than ASR (and works when there's little/no speech).
 
 Approach (Windows-friendly, no PaddlePaddle): sample frames with ffmpeg cropped
 to the bottom third (where subs live, also drops watermarks), OCR each crop with
-RapidOCR (ONNX PP-OCR models, CPU), then post-process into clean timed cues.
+RapidOCR (ONNX PP-OCRv5 models), then post-process into clean timed cues. Prefers
+the current `rapidocr` package (PP-OCRv5, CUDA when onnxruntime-gpu is present)
+and falls back to the legacy `rapidocr_onnxruntime` build and to CPU.
 
 Post-processing (this is what keeps cn.srt readable):
 - per OCR line, drop low-confidence reads and lines with no Chinese that aren't
@@ -51,21 +53,92 @@ def _cjk_count(s: str) -> int:
     return len(_CJK.findall(s or ""))
 
 
-def _clean_frame(res, min_conf: float) -> str:
-    """Join the OCR lines of one frame, dropping low-confidence reads and lines
-    that are neither Chinese nor plain numbers (typical Latin OCR noise)."""
-    kept: list[str] = []
-    for item in res or []:
-        text = (item[1] if len(item) > 1 else "").strip()
+def _to_lines(result) -> list[tuple[str, float]]:
+    """Normalize a RapidOCR call result into (text, score) pairs, hiding the API
+    difference between the two packages:
+    - new `rapidocr` (>=3.0): a RapidOCROutput with .txts / .scores;
+    - legacy `rapidocr_onnxruntime`: a (result_list, elapse) tuple where each
+      item is ``[box, text, score]``.
+    A blank frame (either returns None) yields ``[]``.
+    """
+    if result is None:
+        return []
+    if hasattr(result, "txts"):  # new RapidOCROutput (blank frame → .txts is None/empty)
+        txts = list(result.txts or ())
+        scores = list(getattr(result, "scores", None) or [])
+        scores += [1.0] * (len(txts) - len(scores))
+        out: list[tuple[str, float]] = []
+        for t, s in zip(txts, scores):
+            try:
+                out.append(((t or ""), float(s)))
+            except (TypeError, ValueError):
+                out.append(((t or ""), 1.0))
+        return out
+    res_list = result[0] if isinstance(result, tuple) else result  # legacy (list, elapse)
+    out = []
+    for item in res_list or []:
+        text = item[1] if len(item) > 1 else ""
         try:
             score = float(item[2]) if len(item) > 2 else 1.0
         except (TypeError, ValueError):
             score = 1.0
+        out.append((text, score))
+    return out
+
+
+def _clean_frame(lines: list[tuple[str, float]], min_conf: float) -> str:
+    """Join the OCR lines of one frame, dropping low-confidence reads and lines
+    that are neither Chinese nor plain numbers (typical Latin OCR noise)."""
+    kept: list[str] = []
+    for text, score in lines:
+        text = (text or "").strip()
         if not text or score < min_conf:
             continue
         if _CJK.search(text) or _NUMERIC.match(text):
             kept.append(text)
     return " ".join(kept).strip()
+
+
+def _build_ocr():
+    """Construct a RapidOCR engine. Prefer the current `rapidocr` package (PP-OCRv5,
+    CUDA when onnxruntime-gpu is installed); if it isn't installed, fall back to the
+    legacy `rapidocr_onnxruntime` build. A new package that's installed-but-failing
+    surfaces its real error rather than masking it with the legacy engine.
+
+    ONNX Runtime already falls back to CPU on its own when CUDA is unavailable, so the
+    GPU→CPU retry below only guards against `rapidocr` *rejecting* the CUDA/PP-OCRv5
+    param keys — OCR still works (on CPU) even then. Caveat: a rejected GPU key
+    degrades to CPU silently, so after installing rapidocr v3 + onnxruntime-gpu,
+    confirm the GPU actually engaged (nvidia-smi / frame timing).
+    """
+    if _installed("rapidocr"):
+        from rapidocr import RapidOCR
+
+        v5: dict = {}
+        try:  # pin PP-OCRv5 detection+recognition when the enum is exposed
+            from rapidocr import OCRVersion
+
+            v5 = {"Det.ocr_version": OCRVersion.PPOCRV5, "Rec.ocr_version": OCRVersion.PPOCRV5}
+        except Exception:  # noqa: BLE001 - older/newer layout: fall back to defaults
+            v5 = {}
+        # Try CUDA first, then CPU. ORT silently uses CPU when CUDA is absent; this
+        # retry only fires if rapidocr *rejects* the CUDA keys — then we rebuild
+        # without them (PP-OCRv5 is preserved on the CPU attempt either way).
+        for gpu in (True, False):
+            params = dict(v5)
+            if gpu:
+                params["EngineConfig.onnxruntime.use_cuda"] = True
+                params["EngineConfig.onnxruntime.cuda_ep_cfg.device_id"] = 0
+            try:
+                return RapidOCR(params=params) if params else RapidOCR()
+            except Exception:  # noqa: BLE001 - drop to the next (less capable) config
+                continue
+        return RapidOCR()  # last resort: all defaults
+    if _installed("rapidocr_onnxruntime"):
+        from rapidocr_onnxruntime import RapidOCR
+
+        return RapidOCR()
+    raise RuntimeError('OCR chưa được cài. Chạy: pip install -e ".[ocr]"')
 
 
 def _similar(a: str, b: str, sim: float) -> bool:
@@ -87,9 +160,7 @@ def _best(texts: list[str]) -> str:
 def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5) -> Job:
     """OCR burned-in subtitles → job.cn_srt."""
-    if not _installed("rapidocr_onnxruntime"):
-        raise RuntimeError('OCR chưa được cài. Chạy: pip install -e ".[ocr]"')
-    from rapidocr_onnxruntime import RapidOCR
+    ocr = _build_ocr()
 
     frames_dir = job.work_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
@@ -102,10 +173,9 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         check=True, capture_output=True,
     )
 
-    ocr = RapidOCR()
     frames = sorted(frames_dir.glob("*.png"))
-    # 1) OCR + clean each frame to a single text line
-    per_frame = [(k / fps, _clean_frame(ocr(str(fp))[0], min_conf)) for k, fp in enumerate(frames)]
+    # 1) OCR + clean each frame to a single text line (normalizing both RapidOCR APIs)
+    per_frame = [(k / fps, _clean_frame(_to_lines(ocr(str(fp))), min_conf)) for k, fp in enumerate(frames)]
 
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     cues: list[Cue] = []

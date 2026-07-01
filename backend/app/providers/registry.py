@@ -14,7 +14,7 @@ from app.providers.translation.gemini import GeminiTranslator
 from app.providers.translation.glm import GLM
 from app.providers.translation.openrouter import OpenRouter
 from app.providers.translation.passthrough import PassthroughTranslator
-from app.providers.translation.qwen import Qwen3
+from app.providers.translation.qwen import Qwen
 from app.providers.tts.azure import AzureTTS
 from app.providers.tts.edge import EdgeTTS
 from app.providers.tts.fpt import FptTTS
@@ -31,7 +31,7 @@ TRANSLATORS = {
         ClaudeOpus(),
         GLM(),
         GeminiTranslator(),
-        Qwen3(),
+        Qwen(),
         DeepLTranslator(),
     )
 }
