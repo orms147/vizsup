@@ -63,6 +63,25 @@ class TranslationProvider(Provider):
     ) -> list[str]:
         ...
 
+    def refine_texts(
+        self,
+        cn_texts: list[str],
+        vi_texts: list[str],
+        *,
+        context: dict | None = None,
+        glossary: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Second-pass polish: improve a Vietnamese draft against its Chinese source.
+
+        The two-pass design drafts with a CN-native model then refines with a
+        frontier model. A refiner must see BOTH the source and the draft — a plain
+        ``translate_texts`` call would re-run CN→VI on Vietnamese input. Providers
+        with a chat endpoint override this to run a real editor pass; the default is
+        a no-op (returns the draft unchanged) so a non-chat engine can't corrupt it.
+        Must return one line per input, same order and count as ``vi_texts``.
+        """
+        return list(vi_texts)
+
 
 class TTSProvider(Provider):
     """Synthesize one line of speech to ``out_path``. Return the written path."""

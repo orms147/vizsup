@@ -60,24 +60,37 @@ def translate_cues(
     context: dict | None = None,
     glossary: dict[str, str] | None = None,
 ) -> list[Cue]:
-    texts = [c.text for c in cues]
+    cn = [c.text for c in cues]
 
-    def run(provider_name: str, src: list[str]) -> list[str]:
+    def _require(provider_name: str):
         provider = get_translator(provider_name)
         if not provider.available():
             raise RuntimeError(
                 f"Translator '{provider_name}' is not available (missing key or dependency)."
             )
+        return provider
+
+    def draft_pass(provider_name: str, src: list[str]) -> list[str]:
+        provider = _require(provider_name)
         out: list[str] = []
         for batch in _batched(src, BATCH):
             out.extend(provider.translate_texts(batch, context=context, glossary=glossary))
         return out
 
-    translated = run(draft, texts)
-    if refine:
-        translated = run(refine, translated)
+    def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
+        # Feed the refiner BOTH the Chinese source and the VI draft (batches stay
+        # aligned since cn/vi are 1:1); parse falls back to the draft, never the source.
+        provider = _require(provider_name)
+        out: list[str] = []
+        for cn_b, vi_b in zip(_batched(cn_src, BATCH), _batched(vi_draft, BATCH)):
+            out.extend(provider.refine_texts(cn_b, vi_b, context=context, glossary=glossary))
+        return out
 
-    return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, translated)]
+    vi = draft_pass(draft, cn)
+    if refine:
+        vi = refine_pass(refine, cn, vi)
+
+    return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, vi)]
 
 
 def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7) -> str:

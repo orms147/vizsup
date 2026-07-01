@@ -6,7 +6,13 @@ from __future__ import annotations
 
 from app.config import settings
 from app.providers.base import TranslationProvider, _installed
-from app.providers.translation._common import SYSTEM_PROMPT, build_user_prompt, parse_numbered
+from app.providers.translation._common import (
+    REFINE_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_refine_prompt,
+    build_user_prompt,
+    parse_numbered,
+)
 
 
 class ClaudeTranslator(TranslationProvider):
@@ -32,6 +38,22 @@ class ClaudeTranslator(TranslationProvider):
         )
         reply = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
         return parse_numbered(reply, len(texts), texts)
+
+    def refine_texts(self, cn_texts, vi_texts, *, context=None, glossary=None):
+        if not vi_texts:
+            return []
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model=self.model,
+            max_tokens=8192,
+            system=REFINE_SYSTEM_PROMPT,
+            messages=[{"role": "user",
+                       "content": build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary)}],
+        )
+        reply = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        return parse_numbered(reply, len(vi_texts), vi_texts)
 
     def list_models(self) -> list[str]:
         import anthropic

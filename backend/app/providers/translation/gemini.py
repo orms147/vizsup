@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from app.config import settings
 from app.providers.base import TranslationProvider, _installed
-from app.providers.translation._common import SYSTEM_PROMPT, build_user_prompt, parse_numbered
+from app.providers.translation._common import (
+    REFINE_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_refine_prompt,
+    build_user_prompt,
+    parse_numbered,
+)
 
 
 class GeminiTranslator(TranslationProvider):
@@ -24,6 +30,17 @@ class GeminiTranslator(TranslationProvider):
         prompt = SYSTEM_PROMPT + "\n\n" + build_user_prompt(texts, context=context, glossary=glossary)
         resp = client.models.generate_content(model=self.model, contents=prompt)
         return parse_numbered(resp.text or "", len(texts), texts)
+
+    def refine_texts(self, cn_texts, vi_texts, *, context=None, glossary=None):
+        if not vi_texts:
+            return []
+        from google import genai
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        prompt = (REFINE_SYSTEM_PROMPT + "\n\n"
+                  + build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary))
+        resp = client.models.generate_content(model=self.model, contents=prompt)
+        return parse_numbered(resp.text or "", len(vi_texts), vi_texts)
 
     def list_models(self) -> list[str]:
         from google import genai

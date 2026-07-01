@@ -20,7 +20,46 @@ SYSTEM_PROMPT = (
     "- Keep proper nouns / brand names consistent; follow the glossary if given."
 )
 
+REFINE_SYSTEM_PROMPT = (
+    "You are a senior Vietnamese subtitle editor doing a SECOND-PASS polish.\n"
+    "For each line you get the Chinese source and a first-pass Vietnamese draft.\n"
+    "Rewrite each Vietnamese line into natural, fluent spoken Vietnamese with the right\n"
+    "register, staying faithful to the Chinese meaning and fixing any mistranslation.\n"
+    "Rules:\n"
+    "- Keep each line roughly the same length as the source (it must fit on screen and be dubbable).\n"
+    "- Preserve the exact line numbering and count. Output ONLY lines of the form `n| <vietnamese>`.\n"
+    "- Do not merge, split, reorder, add, or drop lines. No commentary, no extra text.\n"
+    "- Keep proper nouns / brand names consistent; follow the glossary if given.\n"
+    "- If a draft line is already good, keep it."
+)
+
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
+
+
+def build_refine_prompt(
+    cn_texts: list[str],
+    vi_texts: list[str],
+    *,
+    context: dict | None = None,
+    glossary: dict[str, str] | None = None,
+) -> str:
+    """Pair each Chinese source line with its Vietnamese draft for the refine pass.
+    The source is echoed as ``[n] …`` so it can't be mistaken for the required
+    ``n| <vietnamese>`` answer format (only the latter is parsed back)."""
+    parts: list[str] = []
+    if context:
+        meta = ", ".join(f"{k}: {v}" for k, v in context.items() if v)
+        if meta:
+            parts.append(f"Video context: {meta}")
+    if glossary:
+        gl = "; ".join(f"{k} -> {v}" for k, v in glossary.items())
+        parts.append(f"Glossary (zh -> vi): {gl}")
+    parts.append("Polish each Vietnamese draft against its Chinese source. "
+                 "Reply with only the improved Vietnamese as `n| <vietnamese>`:\n")
+    body = [f"[{i}] 中文: {zh}\n[{i}] nháp: {vi}"
+            for i, (zh, vi) in enumerate(zip(cn_texts, vi_texts), 1)]
+    parts.append("\n".join(body))
+    return "\n".join(parts)
 
 
 def build_user_prompt(
@@ -92,6 +131,21 @@ class OpenAICompatTranslator(TranslationProvider):
             ],
         )
         return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
+
+    def refine_texts(self, cn_texts, vi_texts, *, context=None, glossary=None):
+        if not vi_texts:
+            return []
+        resp = self._client().chat.completions.create(
+            model=self.model,
+            temperature=0.3,
+            messages=[
+                {"role": "system", "content": REFINE_SYSTEM_PROMPT},
+                {"role": "user",
+                 "content": build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary)},
+            ],
+        )
+        # fallback is the draft (vi_texts), so a parse miss keeps the draft, not the source
+        return parse_numbered(resp.choices[0].message.content or "", len(vi_texts), vi_texts)
 
     def rewrite(self, text: str, instruction: str) -> str:
         """Single-shot rewrite (e.g. shorten a VI line to fit the dub slot)."""
