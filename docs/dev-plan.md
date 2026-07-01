@@ -122,6 +122,18 @@ don't trust memory (CLAUDE.md hard constraint).
 (GPU when available, CPU fallback intact); the 2-pass CN→VI chain is selectable and produces a
 refined `vi.srt` on a real clip; all model ids/pricing web-verified and noted in the commit.
 
+> **✅ DONE (commits `01336ba`, `2260bbc`).** Q-1: `Qwen3`→`Qwen`, labelled "Qwen-Plus (DashScope)"
+> by the rolling `qwen-plus` alias. Q-2: OCR prefers `rapidocr` v3 (PP-OCRv5, CUDA via
+> onnxruntime-gpu) with GPU→CPU→legacy-package degradation; `_to_lines` normalizes both result
+> APIs; `[ocr]` extra bumped to `rapidocr>=3.0`. Q-3: already wired end-to-end; `deepseek-v4-flash`/
+> `-pro` and `gemini-2.5-flash` web-verified current → no id change. **Bonus:** fixed the refine pass
+> (it re-ran CN→VI on the VI draft) → new `TranslationProvider.refine_texts(cn, vi_draft)` + a
+> dedicated `REFINE_SYSTEM_PROMPT` editor pass (chat providers override; DeepL/passthrough no-op).
+> All headless-verified; a real-clip OCR/translate smoke still wants the heavy deps + a hardsub clip.
+> Adversarial review (pipeline-debugger) on the OCR change found no confirmed defects. **Not yet
+> verified on-device:** whether the CUDA path actually engages (needs rapidocr v3 + onnxruntime-gpu
+> installed → check nvidia-smi/timing; a wrong param key degrades to CPU silently).
+
 ---
 
 ## Milestone 4 — Engine depth (medium effort, deferrable)
