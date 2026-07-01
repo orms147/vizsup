@@ -100,6 +100,7 @@ class _ColorButton(QPushButton):
 class StylePanel(QScrollArea):
     styleChanged = Signal()
     previewRequested = Signal()
+    scopeChanged = Signal()
     resetSelectedRequested = Signal()
 
     def __init__(self) -> None:
@@ -115,7 +116,12 @@ class StylePanel(QScrollArea):
         # Áp dụng cho (scope)
         self.scope = QComboBox()
         self.scope.addItems(["Toàn bộ", "Các câu đang chọn"])
+        self.scope.currentIndexChanged.connect(self.scopeChanged)
         ll.addLayout(self._row("Áp dụng cho", self.scope))
+        self.scope_hint = QLabel("→ áp cho toàn bộ phụ đề")
+        self.scope_hint.setWordWrap(True)
+        self.scope_hint.setStyleSheet("color:#8b8b9a;font-size:11px;")
+        ll.addWidget(self.scope_hint)
         self.btn_reset_cue = QPushButton("Bỏ kiểu riêng (câu đang chọn)")
         self.btn_reset_cue.setObjectName("ghost")
         self.btn_reset_cue.clicked.connect(self.resetSelectedRequested)
@@ -284,6 +290,9 @@ class StylePanel(QScrollArea):
 
     def get_scope(self) -> str:
         return "selected" if self.scope.currentIndex() == 1 else "all"
+
+    def set_scope_hint(self, text: str) -> None:
+        self.scope_hint.setText(text)
 
     def get_style(self) -> dict:
         border_style, box_alpha = BOX_STYLES[self.box_style.currentText()]

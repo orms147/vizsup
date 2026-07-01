@@ -106,6 +106,7 @@ class EditorView(QWidget):
         self.style_panel = StylePanel()
         self.style_panel.previewRequested.connect(self.previewStyleRequested)
         self.style_panel.styleChanged.connect(self._on_style_changed)
+        self.style_panel.scopeChanged.connect(self._update_scope_hint)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(content, "Nội dung & Lồng tiếng")
@@ -128,6 +129,7 @@ class EditorView(QWidget):
         self.table.rowSelected.connect(lambda i: self._select(i, seek=True))
         self.table.seekRequested.connect(self.video.seek_seconds)
         self.table.edited.connect(self._mark_dirty)
+        self.table.itemSelectionChanged.connect(self._update_scope_hint)
         self.table.edited.connect(self._refresh_lines_badge)
         self.timeline.seeked.connect(self.video.seek_seconds)
         self.timeline.blockSelected.connect(lambda i: self.table.selectRow(i))
@@ -400,6 +402,7 @@ class EditorView(QWidget):
             self.style_panel.set_from(st)
         self._set_global_from_panel()
         self.video.set_style(self._g_style, self._g_size, self._g_font)
+        self._update_scope_hint()
 
     def _reload(self) -> None:
         self.table.load(self.cues)
@@ -443,6 +446,24 @@ class EditorView(QWidget):
             self.video.set_style(self._g_style, self._g_size, self._g_font)
         self._refresh_lines_badge()
         self._mark_dirty()
+
+    def _update_scope_hint(self) -> None:
+        """Show what a style edit will hit — the biggest source of the 'không áp
+        được' confusion (selection is on the other tab)."""
+        if self.style_panel.get_scope() != "selected":
+            self.style_panel.set_scope_hint("→ áp cho toàn bộ phụ đề")
+            return
+        rows = self.table.selected_rows()
+        if not rows and 0 <= self._sel < len(self.cues):
+            rows = [self._sel]
+        if not rows:
+            self.style_panel.set_scope_hint(
+                "→ chưa chọn câu nào (sẽ áp cho toàn bộ). Chọn dòng ở tab “Nội dung "
+                "& Lồng tiếng” (Ctrl/Shift để chọn nhiều câu).")
+        else:
+            nums = ", ".join("#" + str(r + 1) for r in rows[:8])
+            more = "…" if len(rows) > 8 else ""
+            self.style_panel.set_scope_hint(f"→ áp cho {len(rows)} câu: {nums}{more}")
 
     def _apply_style_to_selection(self) -> bool:
         rows = self.table.selected_rows()
