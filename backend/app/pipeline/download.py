@@ -64,8 +64,19 @@ def download(job: Job) -> Job:
         **_cookie_opts(),
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as exc:  # noqa: BLE001 - give a fixable message for the cookie case
+        m = str(exc).lower()
+        if "cookie" in m or "fresh cookies" in m:
+            raise RuntimeError(
+                "Douyin cần cookie mới để tải. Trong file .env đặt "
+                "YTDLP_COOKIES_FROM_BROWSER=edge  (hoặc chrome/firefox — trình duyệt bạn "
+                "đã mở douyin.com), ĐÓNG trình duyệt đó rồi chạy lại. Hoặc xuất cookies.txt "
+                "và đặt YTDLP_COOKIES_FILE=<đường dẫn>."
+            ) from exc
+        raise
 
     # Locate the produced file (merge yields source.mp4; otherwise pick newest source.*).
     produced = job.work_dir / "source.mp4"
