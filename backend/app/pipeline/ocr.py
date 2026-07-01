@@ -9,8 +9,9 @@ the current `rapidocr` package (PP-OCRv5, CUDA when onnxruntime-gpu is present)
 and falls back to the legacy `rapidocr_onnxruntime` build and to CPU.
 
 Post-processing (this is what keeps cn.srt readable):
-- per OCR line, drop low-confidence reads and lines with no Chinese that aren't
-  plain numbers/prices (kills Latin gibberish OCR'd off transitions/backgrounds);
+- per OCR line, drop low-confidence reads and Latin symbol-soup, while keeping
+  Chinese, numbers/prices, and word-like Latin (so an English line the author
+  burned in survives OCR'd transitions/background noise);
 - group *consecutive* frames that show the same subtitle by text similarity, not
   exact match (so a slightly-misread or garbage-suffixed frame doesn't split one
   subtitle into many fragments);
@@ -43,10 +44,25 @@ _CROP = {
 _CJK = re.compile(r"[一-鿿]")
 # pure number/price/punct lines are legit subtitle content (e.g. "800 1+1", "2900元")
 _NUMERIC = re.compile(r"^[\d\s+\-.,:;%×xX*元¥$/()~]+$")
+_LATIN = re.compile(r"[A-Za-z]")
 
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
+
+
+def _keep_line(text: str) -> bool:
+    """Is this OCR line real subtitle content (vs Latin gibberish off the background)?
+    Keep Chinese, numeric/price lines, AND word-like Latin so author-inserted English
+    lines survive — only drop short symbol-soup. Recall-biased on purpose: the human
+    edit gate removes the occasional stray line, but a dropped real line is lost."""
+    if _CJK.search(text) or _NUMERIC.match(text):
+        return True
+    letters = len(_LATIN.findall(text))
+    if letters < 2:                       # 1 stray letter amid symbols → noise
+        return False
+    compact = _norm(text)
+    return bool(compact) and sum(c.isalnum() for c in compact) >= 0.6 * len(compact)
 
 
 def _cjk_count(s: str) -> int:
@@ -87,14 +103,15 @@ def _to_lines(result) -> list[tuple[str, float]]:
 
 
 def _clean_frame(lines: list[tuple[str, float]], min_conf: float) -> str:
-    """Join the OCR lines of one frame, dropping low-confidence reads and lines
-    that are neither Chinese nor plain numbers (typical Latin OCR noise)."""
+    """Join the OCR lines of one frame, dropping low-confidence reads and Latin
+    symbol-soup while keeping Chinese, numbers/prices, and real inserted text
+    (e.g. an English line the author burned in)."""
     kept: list[str] = []
     for text, score in lines:
         text = (text or "").strip()
         if not text or score < min_conf:
             continue
-        if _CJK.search(text) or _NUMERIC.match(text):
+        if _keep_line(text):
             kept.append(text)
     return " ".join(kept).strip()
 
