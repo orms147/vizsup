@@ -104,6 +104,7 @@ def translate_cues(
     glossary: dict[str, str] | None = None,
     work_dir: Path | None = None,
     log: Callable[[str], None] | None = None,
+    auto_shorten: bool = True,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[Cue]:
     cn = [c.text for c in cues]
@@ -180,8 +181,40 @@ def translate_cues(
     if refine:
         vi = refine_pass(refine, cn, vi)
         _check_count(vi, "tinh chỉnh", refine)
+    if auto_shorten:
+        vi = _autoshorten(cues, vi, refine or draft, log=log)
 
     return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, vi)]
+
+
+def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
+                 *, log: Callable[[str], None] | None = None) -> list[str]:
+    """N-6 light: one shorten_line rewrite for every line that can't be spoken
+    inside its slot even at the 1.30× cap — BEFORE the gate, so the user reviews
+    already-fitting lines. Skips silently when the provider can't rewrite; a
+    rewrite that fails or doesn't get shorter keeps the original."""
+    from app.pipeline.fit_estimate import MAX_TEMPO, fits, slot_seconds, speech_seconds
+
+    prov = get_translator(provider_name)
+    if not hasattr(prov, "rewrite") or not prov.available():
+        return vi
+    out = list(vi)
+    shortened = 0
+    for i in range(len(cues)):
+        slot = slot_seconds(cues, i)
+        if slot <= 0 or fits(out[i], slot):
+            continue
+        ratio = max(0.5, min(0.9, (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i]))))
+        try:
+            short = shorten_line(out[i], provider=provider_name, ratio=ratio)
+        except Exception:  # noqa: BLE001 - optional polish; keep the draft line
+            continue
+        if short and speech_seconds(short) < speech_seconds(out[i]):
+            out[i] = short
+            shortened += 1
+    if shortened and log:
+        log(f"✂ Tự rút gọn {shortened} câu quá dài so với khe thời gian (trước cổng duyệt)")
+    return out
 
 
 def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7) -> str:
