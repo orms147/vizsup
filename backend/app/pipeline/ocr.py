@@ -20,6 +20,7 @@ Remaining errors get fixed at the human edit gate.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from difflib import SequenceMatcher
@@ -104,18 +105,39 @@ def _to_lines(result) -> list[tuple[str, float]]:
     return out
 
 
-def _clean_frame(lines: list[tuple[str, float]], min_conf: float) -> str:
+def _clean_frame_conf(lines: list[tuple[str, float]], min_conf: float) -> tuple[str, float]:
     """Join the OCR lines of one frame, dropping low-confidence reads and Latin
     symbol-soup while keeping Chinese, numbers/prices, and real inserted text
-    (e.g. an English line the author burned in)."""
+    (e.g. an English line the author burned in). Returns (text, confidence) —
+    confidence = the weakest kept line's score, so a shaky read taints the frame."""
     kept: list[str] = []
+    scores: list[float] = []
     for text, score in lines:
         text = (text or "").strip()
         if not text or score < min_conf:
             continue
         if _keep_line(text):
             kept.append(text)
-    return " ".join(kept).strip()
+            scores.append(score)
+    return " ".join(kept).strip(), (min(scores) if scores else 1.0)
+
+
+def _clean_frame(lines: list[tuple[str, float]], min_conf: float) -> str:
+    return _clean_frame_conf(lines, min_conf)[0]
+
+
+_MIXED = re.compile(r"[A-Za-z][一-鿿]|[一-鿿][A-Za-z]")
+
+
+def _suspect(text: str, conf: float, *, thr: float = 0.82) -> bool:
+    """Is this OCR'd cue worth sending to the LLM proofreader? Low confidence,
+    Latin glued to CJK (classic misread shape), or a very short shaky read."""
+    t = _norm(text)
+    if conf < thr:
+        return True
+    if _MIXED.search(t):
+        return True
+    return len(t) <= 2 and conf < 0.9
 
 
 def _build_ocr():
@@ -198,40 +220,63 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
     from app.heavy import heavy_task
 
     with heavy_task("OCR"):
-        per_frame = [(k / fps, _clean_frame(_to_lines(ocr(str(fp))), min_conf))
+        per_frame = [(k / fps, *_clean_frame_conf(_to_lines(ocr(str(fp))), min_conf))
                      for k, fp in enumerate(frames)]
 
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     cues: list[Cue] = []
+    confs: list[float] = []
     group: list[str] = []
+    gconf: list[float] = []
     start = 0.0
     rep = ""
 
     def flush(end_t: float) -> None:
         if group and rep:
             cues.append(Cue(index=len(cues) + 1, start=start, end=end_t, text=rep))
+            confs.append(gconf[group.index(rep)])   # confidence of the chosen read
 
-    for t, text in per_frame:
+    for t, text, conf in per_frame:
         if text and (not rep or _similar(text, rep, sim)):
             if not group:
                 start = t
             group.append(text)
+            gconf.append(conf)
             rep = _best(group)
         else:  # empty frame or a different subtitle → close the current group
             flush(t)
-            group, rep = ([text], text) if text else ([], "")
+            group, gconf, rep = ([text], [conf], text) if text else ([], [], "")
             start = t if text else start
 
     flush(len(frames) / fps if frames else 0.0)
 
-    cues = [c for c in cues if c.duration >= min_dur]
-    for i, c in enumerate(cues, 1):
+    kept = [(c, cf) for c, cf in zip(cues, confs) if c.duration >= min_dur]
+    cues = []
+    report: list[dict] = []
+    for i, (c, cf) in enumerate(kept, 1):
         c.index = i
+        cues.append(c)
+        report.append({"index": i, "conf": round(cf, 3), "suspect": _suspect(c.text, cf)})
+    # per-cue confidence sidecar — proofread_srt(only_suspect=True) reads this so
+    # the LLM only sees lines worth fixing (cost drops sharply on clean videos)
+    (job.work_dir / "ocr_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     write_srt(cues, job.cn_srt)
     return job
 
 
-def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=None) -> int:
+def _suspect_indexes(job: Job, n: int) -> list[int] | None:
+    """0-based indexes of suspect cues per ocr_report.json; None = no usable
+    report (old job dir) → caller proofreads everything."""
+    try:
+        rep = json.loads((job.work_dir / "ocr_report.json").read_text(encoding="utf-8"))
+        return [r["index"] - 1 for r in rep if r.get("suspect") and 0 < r["index"] <= n]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=None,
+                  only_suspect: bool = True) -> int:
     """Opt-in OCR cleanup: send the OCR'd Chinese lines to an LLM to fix recognition
     errors (TEXT ONLY — no frames uploaded) and rewrite ``job.cn_srt`` in place.
 
@@ -258,20 +303,31 @@ def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=N
     if not cues:
         return 0
     texts = [c.text for c in cues]
+    idxs = list(range(len(texts)))
+    if only_suspect:
+        sus = _suspect_indexes(job, len(texts))
+        if sus is not None:
+            if not sus:
+                if log:
+                    log("✓ OCR không có dòng nghi ngờ — bỏ qua rà soát AI (0 token).")
+                return 0
+            idxs = sus
+            if log:
+                log(f"… chỉ rà soát {len(idxs)}/{len(texts)} dòng nghi ngờ")
     done = 0
-    for i in range(0, len(texts), _PROOF_BATCH):
-        batch = texts[i:i + _PROOF_BATCH]
+    for i in range(0, len(idxs), _PROOF_BATCH):
+        batch_ix = idxs[i:i + _PROOF_BATCH]
         try:
-            out = prov.proofread_texts(batch, context=context)
+            out = prov.proofread_texts([texts[j] for j in batch_ix], context=context)
         except Exception as exc:  # noqa: BLE001 - optional polish must never kill the run
             if log:
                 log(f"⚠ Sửa lỗi OCR dừng giữa chừng ({type(exc).__name__}: {exc}) — "
                     f"giữ {done} dòng đã rà soát, phần còn lại giữ nguyên bản OCR.")
             break
-        for c, t in zip(cues[i:i + _PROOF_BATCH], out):
+        for j, t in zip(batch_ix, out):
             if t and t.strip():
-                c.text = t.strip()
-        done += len(batch)
+                cues[j].text = t.strip()
+        done += len(batch_ix)
     if done:
         write_srt(cues, job.cn_srt)
     return done
