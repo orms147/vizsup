@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -149,12 +151,29 @@ def translate(
     draft: str = "deepseek",
     refine: str | None = None,
     glossary: dict[str, str] | None = None,
+    force: bool = False,
 ) -> Job:
     """Read ``job.cn_srt``, translate, write ``job.vi_srt``.
 
     ``glossary=None`` auto-loads the user's glossary files (see load_glossary);
     pass an explicit dict (or {}) to override.
+
+    ``vi.srt`` is THE file the human edit gate produces — an existing one is
+    never silently overwritten: without ``force`` this raises before any paid
+    API call; with ``force`` the old file is first backed up to
+    ``vi.srt.bak-<timestamp>``. (An mtime "was it edited?" heuristic can't work:
+    translate itself always leaves vi.srt newer than cn.srt.)
     """
+    if job.vi_srt.exists():
+        if not force:
+            raise RuntimeError(
+                "vi.srt đã tồn tại (có thể chứa bản sửa tay ở cổng duyệt) — không ghi đè. "
+                "Dùng --force (CLI) hoặc tùy chọn 'Dịch lại' để dịch đè; bản cũ sẽ được "
+                "sao lưu thành vi.srt.bak-<thời điểm>."
+            )
+        backup = job.work_dir / f"vi.srt.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(job.vi_srt, backup)
+
     cues = dedupe_adjacent(parse_srt(job.cn_srt))   # one translation per real subtitle
     context = {
         "title": job.metadata.get("title"),

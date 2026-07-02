@@ -44,12 +44,20 @@ def _save_meta(job: Job) -> None:
     )
 
 
+def _skip(name: str, stage: str) -> None:
+    print(f"[run] found existing {name} -> skipping {stage} (use --force to redo)")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     jid = hashlib.sha1(args.url.encode()).hexdigest()[:10]
     work_dir = Path(args.workdir) if args.workdir else settings.vizsup_storage_dir / jid
     job = _load_job(work_dir, url=args.url)
+    force = args.force
 
-    if args.file:
+    # 1) source — the same URL maps to the same workdir (sha1), so re-runs resume
+    if job.source_video.exists() and not force:
+        _skip("source.mp4", "download")
+    elif args.file:
         shutil.copy(args.file, job.source_video)
         job.metadata.setdefault("platform", "local")
         print(f"[run] using local file -> {job.source_video}")
@@ -59,33 +67,43 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"[run] downloaded: {job.metadata.get('title')!r} ({job.metadata.get('platform')})")
     _save_meta(job)
 
-    src = "srt" if args.srt else args.source
-    if src == "auto":
-        # E-1: sampled-frame OCR routes OCR vs ASR; missing OCR deps → ASR.
-        from app.pipeline import hardsub_detect
-
-        print("[run] detecting burned-in subtitles ...")
-        try:
-            src = "ocr" if hardsub_detect.detect_hardsubs(job, crop=args.ocr_region) else "asr"
-            print(f"[run] hardsubs {'found -> OCR' if src == 'ocr' else 'not found -> ASR'}")
-        except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
-            print(f"[run] detection unavailable ({exc}) -> ASR")
-            src = "asr"
-
-    if src == "srt":
-        write_srt(parse_srt(Path(args.srt)), job.cn_srt)
-        print(f"[run] using provided Chinese subtitles -> {job.cn_srt}")
-    elif src == "ocr":
-        from app.pipeline import ocr
-
-        print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
-        ocr.extract_hardsubs(job, crop=args.ocr_region)
+    # 2) Chinese subtitles
+    if job.cn_srt.exists() and not force:
+        _skip("cn.srt", "subtitle stage")
     else:
-        print(f"[run] transcribing (ASR: {args.asr}) ...")
-        asr.transcribe(job, provider=args.asr)
+        src = "srt" if args.srt else args.source
+        if src == "auto":
+            # E-1: sampled-frame OCR routes OCR vs ASR; missing OCR deps → ASR.
+            from app.pipeline import hardsub_detect
 
-    print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
-    translate.translate(job, draft=args.translator, refine=args.refine)
+            print("[run] detecting burned-in subtitles ...")
+            try:
+                src = "ocr" if hardsub_detect.detect_hardsubs(job, crop=args.ocr_region) else "asr"
+                print(f"[run] hardsubs {'found -> OCR' if src == 'ocr' else 'not found -> ASR'}")
+            except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
+                print(f"[run] detection unavailable ({exc}) -> ASR")
+                src = "asr"
+            job.metadata["has_hardsubs"] = job.has_hardsubs
+            _save_meta(job)  # metadata was saved before detection — persist the verdict
+
+        if src == "srt":
+            write_srt(parse_srt(Path(args.srt)), job.cn_srt)
+            print(f"[run] using provided Chinese subtitles -> {job.cn_srt}")
+        elif src == "ocr":
+            from app.pipeline import ocr
+
+            print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
+            ocr.extract_hardsubs(job, crop=args.ocr_region)
+        else:
+            print(f"[run] transcribing (ASR: {args.asr}) ...")
+            asr.transcribe(job, provider=args.asr)
+
+    # 3) translate — never silently overwrite the gate's edited vi.srt
+    if job.vi_srt.exists() and not force:
+        _skip("vi.srt", "translate (edits preserved)")
+    else:
+        print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
+        translate.translate(job, draft=args.translator, refine=args.refine, force=force)
 
     print("\n" + "=" * 64)
     print("EDIT GATE — review/fix the Vietnamese subtitles, then render:")
@@ -141,9 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("url", help="Douyin/Bilibili URL (or any yt-dlp URL)")
     r.add_argument("--file", help="use a local video file instead of downloading")
     r.add_argument("--srt", help="use this Chinese .srt instead of running ASR")
-    r.add_argument("--source", choices=["auto", "asr", "ocr"], default="asr",
-                   help="Chinese-subtitle source: auto-detect hardsubs, force ASR, or force OCR "
-                        "(default: asr; --srt overrides)")
+    r.add_argument("--source", choices=["auto", "asr", "ocr"], default="auto",
+                   help="Chinese-subtitle source: auto-detect hardsubs (default, falls back to "
+                        "ASR when OCR deps are missing), force ASR, or force OCR (--srt overrides)")
+    r.add_argument("--force", action="store_true",
+                   help="redo stages whose output already exists (an existing vi.srt is backed "
+                        "up to vi.srt.bak-<timestamp> first)")
     r.add_argument("--ocr-region", default="bottom-third",
                    choices=["bottom-third", "bottom-quarter", "bottom-half", "middle-third", "top-third", "full"],
                    help="crop region for OCR/detection (default: bottom-third)")

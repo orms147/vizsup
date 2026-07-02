@@ -84,16 +84,17 @@ class PipelineWorker(QObject):
             store.debug(f"run_to_gate begin file={bool(o.get('file'))} url={o.get('url')} src={o.get('subtitle_source')}")
             # 0) pre-flight: validate the translator choice BEFORE spending download/OCR
             self._preflight_translators(o)
-            # 1) source
+            # 1) source — skip when the artifact already exists (resume-friendly)
             self._check()
-            if o.get("file"):
-                self.stage_started.emit("download")
+            self.stage_started.emit("download")
+            if job.source_video.exists():
+                self.log.emit("↷ Đã có video nguồn — dùng lại, không tải lại")
+            elif o.get("file"):
                 self.progress.emit(0.1, "Đang chép tệp cục bộ…")
                 shutil.copy(o["file"], job.source_video)
                 job.metadata.setdefault("platform", "local")
                 self.log.emit(f"✓ Dùng tệp: {Path(o['file']).name}")
             else:
-                self.stage_started.emit("download")
                 self.progress.emit(0.1, "Đang tải video…")
                 self.log.emit(f"$ yt-dlp {download.normalize_url(job.url)}")
                 download.download(job)
@@ -110,7 +111,10 @@ class PipelineWorker(QObject):
             self.stage_started.emit("subtitle")
             src = o.get("subtitle_source", "asr")
             store.debug(f"subtitle stage begin src={src}")
-            if src == "auto":
+            if job.cn_srt.exists():
+                src = "existing"  # resume: keep the already-extracted subtitles
+                self.log.emit("↷ Đã có cn.srt — dùng lại, không chạy lại OCR/ASR")
+            elif src == "auto":
                 # E-1: sampled-frame OCR decides OCR vs ASR; any failure (no OCR
                 # deps, unreadable video) falls back to ASR instead of aborting.
                 from app.pipeline import hardsub_detect
@@ -123,11 +127,16 @@ class PipelineWorker(QObject):
                     src = "ocr" if has else "asr"
                     self.log.emit("✓ Có phụ đề cháy sẵn → đọc chữ bằng OCR" if has
                                   else "✓ Không thấy phụ đề cháy sẵn → nhận dạng giọng nói (ASR)")
+                    job.metadata["has_hardsubs"] = has
+                    (job.work_dir / "metadata.json").write_text(
+                        _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
                     src = "asr"
                     self.log.emit(f"⚠ Không dò được phụ đề cháy sẵn ({exc}) → dùng ASR.")
                 store.debug(f"auto hardsub-detect → src={src}")
-            if src == "srt" and o.get("srt"):
+            if src == "existing":
+                pass
+            elif src == "srt" and o.get("srt"):
                 self.progress.emit(0.4, "Dùng phụ đề tiếng Trung có sẵn…")
                 write_srt(parse_srt(Path(o["srt"])), job.cn_srt)
                 self.log.emit("✓ Nạp .srt tiếng Trung")
@@ -161,15 +170,19 @@ class PipelineWorker(QObject):
             # 3) translate
             self._check()
             self.stage_started.emit("translate")
-            self.progress.emit(0.75, "Đang dịch CN→VI…")
-            self.log.emit(f"Dịch: {o.get('translator', 'passthrough')}"
-                          + (f" → {o['refine']}" if o.get("refine") else ""))
-            gl = translate.load_glossary(job)
-            if gl:
-                self.log.emit(f"… dùng bảng thuật ngữ ({len(gl)} mục: storage/glossary.json + của dự án)")
-            translate.translate(job, draft=o.get("translator", "passthrough"),
-                                refine=o.get("refine"), glossary=gl or None)
-            self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
+            if job.vi_srt.exists():
+                # resume: vi.srt may hold hand edits from the gate — never redo it silently
+                self.log.emit("↷ Đã có vi.srt — bỏ qua dịch (giữ bản sửa tay)")
+            else:
+                self.progress.emit(0.75, "Đang dịch CN→VI…")
+                self.log.emit(f"Dịch: {o.get('translator', 'passthrough')}"
+                              + (f" → {o['refine']}" if o.get("refine") else ""))
+                gl = translate.load_glossary(job)
+                if gl:
+                    self.log.emit(f"… dùng bảng thuật ngữ ({len(gl)} mục: storage/glossary.json + của dự án)")
+                translate.translate(job, draft=o.get("translator", "passthrough"),
+                                    refine=o.get("refine"), glossary=gl or None)
+                self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             store.debug("translate ok → emit gate_reached")
 
             self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
