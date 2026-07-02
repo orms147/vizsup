@@ -237,7 +237,7 @@ def assemble(
             parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
             parts.append("[bg][scin]sidechaincompress=threshold=0.05:ratio=8:"
                          "attack=20:release=300:makeup=1:level_sc=1[duck]")
-            parts.append(f"[duck][dubv]amix=inputs=2:normalize=0[outa]")
+            parts.append("[duck][dubv]amix=inputs=2:normalize=0[outa]")
             audio_map = "[outa]"
         else:  # replace
             audio_map = dub

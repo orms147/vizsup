@@ -1,0 +1,6 @@
+# Repo-wide lint config: covers backend/app AND desktop/ (backend/pyproject.toml
+# used to carry its own [tool.ruff], which silently left desktop/ unlinted).
+line-length = 100
+target-version = "py311"
+
+extend-exclude = ["backend/.venv", "storage", "frontend"]

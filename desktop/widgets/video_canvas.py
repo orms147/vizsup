@@ -24,7 +24,7 @@ MIN_W = 120       # min wrap width in ASS px (keeps the box usable)
 
 @dataclass
 class SubBox:
-    l: int = 60
+    l: int = 60  # noqa: E741 - margin_l; symmetric with r/v, mirrors the ASS field names
     r: int = 60
     v: int = 60
 

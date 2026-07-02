@@ -14,7 +14,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QColorDialog,
-    QComboBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,

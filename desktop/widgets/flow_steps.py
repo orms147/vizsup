@@ -49,8 +49,8 @@ class FlowSteps(QFrame):
             )
             if i == idx:
                 chip.setStyleSheet(
-                    f"background:rgba(139,92,246,0.13);border:1px solid rgba(139,92,246,0.34);"
-                    f"border-radius:8px;padding:5px 11px;"
+                    "background:rgba(139,92,246,0.13);border:1px solid rgba(139,92,246,0.34);"
+                    "border-radius:8px;padding:5px 11px;"
                 )
             else:
                 chip.setStyleSheet("padding:5px 7px;background:transparent;border:none;")

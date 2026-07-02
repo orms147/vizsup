@@ -76,6 +76,4 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["app*"]
 
-[tool.ruff]
-line-length = 100
-target-version = "py311"
+# lint config lives in the repo-root ruff.toml (covers backend/app AND desktop/)
