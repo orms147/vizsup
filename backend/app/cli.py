@@ -192,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Legacy Windows consoles default to cp1252, which can't print the pipeline's
+    # Vietnamese log lines ("⚠ Câu …") — every CLI path prints them via log=print.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:  # noqa: BLE001 - non-console streams lack reconfigure
+        pass
     args = build_parser().parse_args(argv)
     return args.func(args)
 

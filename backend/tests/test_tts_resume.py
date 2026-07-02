@@ -114,6 +114,31 @@ def test_cancel_between_cues_returns_partial(job, monkeypatch):
     assert len(fake.calls) == 2
 
 
+class NoAudioReceived(RuntimeError):
+    """Mirror of edge_tts.exceptions.NoAudioReceived (matched by class name)."""
+
+
+class UnvoiceableTTS(FakeTTS):
+    """Voice can't speak Chinese-only lines (the passthrough smoke path)."""
+
+    def synthesize(self, text, out_path, *, voice=None, rate=None):
+        if "câu hai" in text:
+            raise NoAudioReceived("No audio was received.")
+        return super().synthesize(text, out_path, voice=voice, rate=rate)
+
+
+def test_unvoiceable_line_skipped_not_fatal(job, monkeypatch):
+    fake = _use(monkeypatch, UnvoiceableTTS())
+    logs: list[str] = []
+    sleeps: list[float] = []
+    segs = synthesize(job, provider="fake", log=logs.append, _sleep=sleeps.append)
+    assert [c.index for c, _ in segs] == [1, 3]     # line 2 has no dub, render continues
+    assert sleeps == []                             # deterministic error → NO retries
+    assert any("không phát âm được" in m for m in logs)
+    manifest = json.loads((job.tts_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "2" not in manifest                      # no cache entry for the skipped line
+
+
 def test_hash_covers_every_audio_knob():
     base = _seg_hash("edge", "voiceA", "+10%", "xin chào")
     assert _seg_hash("azure", "voiceA", "+10%", "xin chào") != base

@@ -59,13 +59,23 @@ def _save_manifest(job: Job, manifest: dict) -> None:
         json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _unvoiceable(exc: Exception) -> bool:
+    """edge-tts raises NoAudioReceived when a line contains nothing the picked
+    voice can speak — e.g. pure-Chinese text on a vi-VN voice, which is exactly
+    what the no-keys passthrough smoke path produces. Deterministic, so retrying
+    is waste and aborting the render at its LAST stage is hostile; the caller
+    skips that line's dub instead (subtitle still shows). Matched by class name
+    to keep this module free of an edge_tts import."""
+    return type(exc).__name__ == "NoAudioReceived"
+
+
 def _synth_retry(tts, text: str, seg: Path, *, voice, rate, sleep) -> None:
     for delay in (*_RETRY_DELAYS, None):
         try:
             tts.synthesize(text, seg, voice=voice, rate=rate)
             return
-        except Exception:  # noqa: BLE001 - transient 403/timeouts get the retries
-            if delay is None:
+        except Exception as exc:  # noqa: BLE001 - transient 403/timeouts get the retries
+            if delay is None or _unvoiceable(exc):
                 raise
             sleep(delay)
 
@@ -101,7 +111,16 @@ def synthesize(
         if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
             kept += 1
         else:
-            _synth_retry(tts, c.text, seg, voice=voice, rate=rate, sleep=_sleep)
+            try:
+                _synth_retry(tts, c.text, seg, voice=voice, rate=rate, sleep=_sleep)
+            except Exception as exc:  # noqa: BLE001
+                if _unvoiceable(exc):
+                    manifest.pop(key, None)
+                    if log:
+                        log(f"⚠ Câu {c.index}: giọng đọc không phát âm được văn bản này "
+                            f"— bỏ lồng tiếng câu này (phụ đề vẫn hiện).")
+                    continue
+                raise
             manifest[key] = want
             _save_manifest(job, manifest)   # write-after-each: a crash keeps progress
             made += 1
