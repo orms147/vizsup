@@ -1,8 +1,8 @@
 """Stage: ASR (no-hardsub path). Thin orchestrator over the chosen ASR provider.
 
 Extracts audio from the video, runs the provider, and writes the Chinese cues to
-``job.cn_srt``. The heavy lifting (WhisperX + FunASR) lives in the provider
-(STUB until P2); this wiring is ready.
+``job.cn_srt``. Working providers: faster-whisper (CUDA→CPU fallback) and FunASR
+Paraformer (CN-native). The fused word-timing provider is planned as N-7.
 """
 from __future__ import annotations
 

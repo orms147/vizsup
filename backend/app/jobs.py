@@ -57,6 +57,21 @@ class CancelledError(RuntimeError):
     pass
 
 
+def _render_kwargs(opts: dict) -> dict:
+    """Map API render options onto assemble.assemble's real signature — kept as
+    one pure function so the contract test can bind it against the signature
+    (this call once passed a removed ``replace_audio`` kwarg and every API
+    render died with a TypeError after TTS had already been paid for)."""
+    return {
+        "audio_mode": opts.get("audio_mode")
+                      or ("mix" if opts.get("keep_audio") else "replace"),
+        "orig_volume": float(opts.get("orig_volume", 1.0)),
+        "dub_volume": float(opts.get("dub_volume", 1.0)),
+        "cover_hardsubs": bool(opts.get("cover_hardsubs", False)),
+        "font": opts.get("font", "Be Vietnam Pro"),
+    }
+
+
 class JobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, JobState] = {}
@@ -148,7 +163,9 @@ class JobManager:
                 await loop.run_in_executor(None, download.download, job)
             self._save_meta(state)
 
-            # 2) Chinese subtitles: provided SRT, else ASR (OCR path is P5)
+            # 2) Chinese subtitles: provided SRT, else ASR. (The OCR/auto-detect
+            # route exists in the CLI and desktop but is not yet wired here — the
+            # API cannot process hardsubbed videos correctly until it is.)
             self._check_cancel(state)
             self._emit(state, stage=Stage.SUBTITLE, progress=0.4, message="preparing Chinese subtitles")
             if opts.get("srt"):
@@ -156,7 +173,8 @@ class JobManager:
 
                 await loop.run_in_executor(None, lambda: write_srt(parse_srt(Path(opts["srt"])), job.cn_srt))
             else:
-                fn = functools.partial(asr.transcribe, job, provider=opts.get("asr", settings.vizsup_default_asr))
+                fn = functools.partial(asr.transcribe, job,
+                                       provider=opts.get("asr") or settings.vizsup_default_asr)
                 await loop.run_in_executor(None, fn)
 
             # 3) translate CN -> VI
@@ -194,14 +212,7 @@ class JobManager:
 
             self._check_cancel(state)
             self._emit(state, stage=Stage.ASSEMBLE, progress=0.6, message="assembling final video")
-            fn = functools.partial(
-                assemble.assemble,
-                job,
-                segments,
-                replace_audio=not opts.get("keep_audio", False),
-                cover_hardsubs=opts.get("cover_hardsubs", False),
-                font=opts.get("font", "Be Vietnam Pro"),
-            )
+            fn = functools.partial(assemble.assemble, job, segments, **_render_kwargs(opts))
             await loop.run_in_executor(None, fn)
             self._emit(state, stage=Stage.DONE, progress=1.0, message="done")
         except CancelledError:

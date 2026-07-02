@@ -3,9 +3,9 @@ translate → EDIT GATE → render), with live progress over WebSocket.
 
 Run: uvicorn app.main:app --reload   (from backend/)
 
-Note: automatic Chinese subtitles need ASR (P2) or OCR (P5), which are stubs.
-Until then, pass a Chinese ``srt`` path when creating a job, or upload one via the
-subtitles endpoint. The translate/TTS/assemble path is fully wired.
+Note: the API's subtitle stage supports a provided Chinese ``srt`` or ASR.
+The OCR / auto hardsub-detect route (present in the CLI and desktop) is not
+wired here yet — hardsubbed videos should go through those front-ends.
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ class CreateJob(BaseModel):
     srt: str | None = None         # provided Chinese .srt (skips ASR/OCR)
     translator: str = "passthrough"
     refine: str | None = None
-    asr: str = "whisperx_funasr"
+    asr: str | None = None         # None → settings.vizsup_default_asr (resolved in jobs.py)
 
 
 @app.post("/api/jobs")
@@ -113,7 +113,10 @@ def save_subtitles(job_id: str, body: SaveSubtitles) -> dict:
 class RenderOptions(BaseModel):
     tts: str = "edge"
     voice: str | None = None
-    keep_audio: bool = False
+    keep_audio: bool = False           # legacy shorthand for audio_mode="mix"
+    audio_mode: str | None = None      # "replace" | "mix" | "duck" (wins over keep_audio)
+    orig_volume: float = 1.0
+    dub_volume: float = 1.0
     cover_hardsubs: bool = False
     font: str = "Be Vietnam Pro"
 
