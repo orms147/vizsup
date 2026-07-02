@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # download
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_from_browser: str = ""
+    bbdown_path: str = ""  # BBDown.exe — optional Bilibili fallback when yt-dlp fails
 
     # paths / defaults
     ffmpeg_path: str = ""  # explicit ffmpeg(.exe) or its bin dir; empty → resolve from PATH

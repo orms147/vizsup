@@ -6,6 +6,7 @@ fallbacks (BBDown / TikTokDownloader) are a later addition.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.config import settings
@@ -45,13 +46,60 @@ def _cookie_opts() -> dict:
     return opts
 
 
-def download(job: Job) -> Job:
-    """Download ``job.url`` into ``job.source_video`` and record metadata."""
-    import yt_dlp
+def _find_produced(job: Job) -> Path:
+    """Locate the downloaded file and normalize it to the canonical source.mp4
+    (every downstream stage hardcodes that name; ffmpeg reads by content)."""
+    produced = job.source_video
+    if not produced.exists():
+        exts = {".mp4", ".mkv", ".webm", ".flv", ".mov"}
+        candidates = [c for c in job.work_dir.iterdir()
+                      if c.suffix.lower() in exts and not c.name.endswith(".part")]
+        if not candidates:
+            raise RuntimeError("downloader finished but no output file was found.")
+        produced = max(candidates, key=lambda p: p.stat().st_mtime)
+    if produced != job.source_video:
+        produced.replace(job.source_video)
+    return job.source_video
 
+
+def _bbdown(job: Job, url: str) -> Job:
+    """Bilibili fallback via BBDown (nilaoda/BBDown; `--work-dir` + `-F` verified
+    2026-07-02). Only attempted when BBDOWN_PATH is configured."""
+    import subprocess
+
+    exe = settings.bbdown_path
+    if not exe or not Path(exe).exists():
+        raise RuntimeError(f"BBDown chưa cấu hình hoặc không tồn tại: {exe or '(trống)'}")
+    subprocess.run([exe, url, "--work-dir", str(job.work_dir), "-F", "source"],
+                   check=True, capture_output=True, text=True)
+    _find_produced(job)
+    job.metadata.setdefault("title", url)
+    job.metadata["platform"] = "bilibili"
+    job.metadata["downloader"] = "bbdown"
+    return job
+
+
+def download(job: Job) -> Job:
+    """Download ``job.url`` into ``job.source_video``. yt-dlp is the baseline;
+    Bilibili gets a BBDown fallback when configured (Douyin's fallback tool churns
+    too fast to wire blind — still yt-dlp-only)."""
     if not job.url:
         raise ValueError("Job has no URL to download.")
     url = normalize_url(job.url)
+    try:
+        return _ytdlp(job, url)
+    except Exception as exc:
+        if platform_of(job.url) == "bilibili" and settings.bbdown_path:
+            try:
+                return _bbdown(job, url)
+            except Exception as exc2:  # noqa: BLE001 - report BOTH failures
+                raise RuntimeError(
+                    f"yt-dlp thất bại ({exc}) và BBDown cũng thất bại ({exc2}).") from exc2
+        raise
+
+
+def _ytdlp(job: Job, url: str) -> Job:
+    import yt_dlp
 
     outtmpl = str(job.work_dir / "source.%(ext)s")
     opts = {
@@ -100,5 +148,6 @@ def download(job: Job) -> Job:
         "description": (info.get("description") or "")[:500],
         "platform": platform_of(job.url),
         "downloaded_file": produced.name,
+        "downloader": "yt-dlp",
     }
     return job

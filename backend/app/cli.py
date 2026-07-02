@@ -49,9 +49,25 @@ def _skip(name: str, stage: str) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    jid = hashlib.sha1(args.url.encode()).hexdigest()[:10]
+    if len(args.url) > 1 and (args.file or args.srt or args.workdir):
+        print("--file/--srt/--workdir chỉ dùng được với MỘT URL.", file=sys.stderr)
+        return 2
+    rc = 0
+    for i, url in enumerate(args.url, 1):
+        if len(args.url) > 1:
+            print(f"\n===== [{i}/{len(args.url)}] {url} =====")
+        try:
+            rc = max(rc, _run_one(args, url))
+        except Exception as exc:  # noqa: BLE001 - one bad URL must not kill the batch
+            print(f"[run] LỖI với {url}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            rc = 1
+    return rc
+
+
+def _run_one(args: argparse.Namespace, url: str) -> int:
+    jid = hashlib.sha1(url.encode()).hexdigest()[:10]
     work_dir = Path(args.workdir) if args.workdir else settings.vizsup_storage_dir / jid
-    job = _load_job(work_dir, url=args.url)
+    job = _load_job(work_dir, url=url)
     force = args.force
 
     # 1) source — the same URL maps to the same workdir (sha1), so re-runs resume
@@ -62,7 +78,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         job.metadata.setdefault("platform", "local")
         print(f"[run] using local file -> {job.source_video}")
     else:
-        print(f"[run] downloading {args.url} ...")
+        print(f"[run] downloading {url} ...")
         download.download(job)
         print(f"[run] downloaded: {job.metadata.get('title')!r} ({job.metadata.get('platform')})")
     _save_meta(job)
@@ -157,7 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     r = sub.add_parser("run", help="download + subtitles + translate (stops at the edit gate)")
-    r.add_argument("url", help="Douyin/Bilibili URL (or any yt-dlp URL)")
+    r.add_argument("url", nargs="+",
+                   help="one or more Douyin/Bilibili URLs — several run sequentially, each "
+                        "parking at its own edit gate (batch mode)")
     r.add_argument("--file", help="use a local video file instead of downloading")
     r.add_argument("--srt", help="use this Chinese .srt instead of running ASR")
     r.add_argument("--source", choices=["auto", "asr", "ocr"], default="auto",

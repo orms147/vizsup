@@ -94,6 +94,14 @@ def _check_download() -> list[Check]:
     else:
         out.append(("info", "cookies Douyin",
                     "chưa cấu hình — Douyin thường cần cookie (YTDLP_COOKIES_FROM_BROWSER=edge trong .env)"))
+    if settings.bbdown_path:
+        ok = Path(settings.bbdown_path).exists()
+        out.append(("ok" if ok else "warn", "BBDown (bilibili)",
+                    settings.bbdown_path if ok
+                    else f"đường dẫn không tồn tại: {settings.bbdown_path}"))
+    else:
+        out.append(("info", "BBDown (bilibili)",
+                    "chưa cấu hình — fallback khi yt-dlp lỗi (BBDOWN_PATH trong .env)"))
     return out
 
 
