@@ -72,15 +72,55 @@ def _tempo_filter(tempo: float) -> str:
 
 
 def probe_duration(path: Path) -> float:
-    out = subprocess.run(
-        [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=nw=1:nk=1", str(path)],
-        capture_output=True, text=True, check=True,
-    )
+    try:
+        out = subprocess.run(
+            [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        return 0.0   # corrupt/zero-byte segment → the planner skips it (seg_dur<=0)
     try:
         return float(out.stdout.strip())
     except ValueError:
         return 0.0
+
+
+def _has_audio_stream(src: Path) -> bool:
+    """Whether the source has any audio track — mix/duck reference [0:a] and hard-
+    fail on silent screen-recordings without this check. Probe failure assumes
+    audio (the old behavior)."""
+    try:
+        out = subprocess.run(
+            [ffprobe_bin(), "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(src)],
+            capture_output=True, text=True, check=True,
+        )
+        return bool(out.stdout.strip())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _mix_chunked(labels: list[str], parts: list[str], *, group: int = 32) -> str:
+    """amix an arbitrary number of segment labels without one giant N-input amix
+    (a 30-60 min video yields hundreds of segments; a single 500-input amix is
+    slow and fragile): mix in chunks of ``group``, then mix the chunk outputs,
+    repeating until one label remains. Returns that final label."""
+    level = 0
+    while len(labels) > 1:
+        nxt: list[str] = []
+        for ci in range(0, len(labels), group):
+            chunk = labels[ci:ci + group]
+            if len(chunk) == 1:
+                nxt.append(chunk[0])
+                continue
+            lbl = f"[mx{level}_{ci // group}]"
+            parts.append(f"{''.join(chunk)}amix=inputs={len(chunk)}"
+                         f":normalize=0:dropout_transition=0{lbl}")
+            nxt.append(lbl)
+        labels = nxt
+        level += 1
+    return labels[0]
 
 
 def style_preview_frame(
@@ -161,28 +201,24 @@ def _plan_segments(segments: list[tuple[Cue, Path]]):
     return placements, sped, flagged
 
 
-def assemble(
+def _build_render(
     job: Job,
     segments: list[tuple[Cue, Path]],
     *,
-    burn_cues: list[Cue] | None = None,
-    audio_mode: str = "replace",   # "replace" | "mix" | "duck"
-    orig_volume: float = 1.0,      # original-audio gain (0..1+) for mix/duck
-    dub_volume: float = 1.0,       # Vietnamese dub gain
-    cover_hardsubs: bool = False,
-    font: str = "Be Vietnam Pro",
-    size: int = 60,
-    style: dict | None = None,
+    audio_mode: str,
+    orig_volume: float,
+    dub_volume: float,
     log: Callable[[str], None] | None = None,
-) -> Path:
-    ffmpeg = ffmpeg_bin()
+) -> list[str]:
+    """Plan the timeline and build the ffmpeg command. The filter graph goes to
+    ``<work_dir>/filter_complex.txt`` (+ ``-filter_complex_script``) instead of
+    the argv — one giant ``-filter_complex`` argument used to hit the Windows
+    32k CreateProcess ceiling at roughly 200-250 cues. Pure construction (plus
+    ffprobe calls through probe_duration/_has_audio_stream) — no encode here,
+    so tests can assert on the produced command/graph without running ffmpeg."""
     wd = job.work_dir
 
-    cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
-    write_ass(cues_for_subs, job.subs_ass, font=font, size=size,
-              cover_hardsubs=cover_hardsubs, style=style, cue_styles=_load_cue_styles(job))
-
-    cmd = [ffmpeg, "-y", "-i", "source.mp4"]
+    cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
     for _, seg in segments:
         cmd += ["-i", str(Path(seg).relative_to(wd).as_posix())]
 
@@ -236,12 +272,16 @@ def assemble(
             for cue, sd, sp in flagged[:6]:
                 log(f"   • [{cue.start:6.1f}s] cần ~{sd:.1f}s nhưng chỉ có {sp:.1f}s")
 
+    if audio_mode in ("mix", "duck") and not _has_audio_stream(job.source_video):
+        if log:
+            log("⚠ Video nguồn không có track âm thanh — chuyển sang chế độ thay (replace).")
+        audio_mode = "replace"
+
     if labels:
-        parts.append(f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0:dropout_transition=0[dubraw]")
-        dub = "[dubraw]"
+        dub = _mix_chunked(labels, parts)
         if abs(dub_volume - 1.0) > 1e-3:
-            parts.append(f"[dubraw]volume={dub_volume:.3f}[dub]")
-            dub = "[dub]"
+            parts.append(f"{dub}volume={dub_volume:.3f}[dubvol]")
+            dub = "[dubvol]"
 
         if audio_mode == "mix":
             parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
@@ -261,13 +301,36 @@ def assemble(
         audio_map = "0:a?"
 
     parts.append("[0:v]ass=subs.ass[v]")
+    (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
     cmd += [
-        "-filter_complex", ";".join(parts),
+        "-filter_complex_script", "filter_complex.txt",
         "-map", "[v]", "-map", audio_map,
         "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
         "-c:a", "aac", "-b:a", "192k",
         "output.mp4",
     ]
+    return cmd
 
-    subprocess.run(cmd, cwd=str(wd), check=True)
+
+def assemble(
+    job: Job,
+    segments: list[tuple[Cue, Path]],
+    *,
+    burn_cues: list[Cue] | None = None,
+    audio_mode: str = "replace",   # "replace" | "mix" | "duck"
+    orig_volume: float = 1.0,      # original-audio gain (0..1+) for mix/duck
+    dub_volume: float = 1.0,       # Vietnamese dub gain
+    cover_hardsubs: bool = False,
+    font: str = "Be Vietnam Pro",
+    size: int = 60,
+    style: dict | None = None,
+    log: Callable[[str], None] | None = None,
+) -> Path:
+    cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
+    write_ass(cues_for_subs, job.subs_ass, font=font, size=size,
+              cover_hardsubs=cover_hardsubs, style=style, cue_styles=_load_cue_styles(job))
+
+    cmd = _build_render(job, segments, audio_mode=audio_mode,
+                        orig_volume=orig_volume, dub_volume=dub_volume, log=log)
+    subprocess.run(cmd, cwd=str(job.work_dir), check=True)
     return job.output_video
