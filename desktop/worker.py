@@ -232,6 +232,7 @@ class PipelineWorker(QObject):
                 orig_volume=o.get("orig_volume", 1.0),
                 dub_volume=o.get("dub_volume", 1.0),
                 cover_hardsubs=o.get("cover_hardsubs", False),
+                cover_mode=o.get("cover_mode"),
                 font=o.get("font", "Be Vietnam Pro"),
                 size=ass_size,
                 style=o.get("style"),

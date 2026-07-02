@@ -93,6 +93,15 @@ class RenderView(QWidget):
         ll.addLayout(self._slider_row("Âm lượng lồng tiếng", self.dub_vol, self.dub_vol_lbl))
         self._sync_audio_enabled()
 
+        # cover the original CN hardsubs (previously only reachable from the CLI)
+        ll.addSpacing(6)
+        self.cover = QComboBox()
+        for label, key in (("Không che", "off"),
+                           ("Hộp mờ dưới phụ đề (che chắc)", "box"),
+                           ("Làm mờ dải dưới video (nhẹ nhàng)", "blur")):
+            self.cover.addItem(label, key)
+        ll.addLayout(self._row("Che phụ đề tiếng Trung gốc", self.cover))
+
         ll.addStretch(1)
         self.render_btn = QPushButton("⧉  Dựng video")
         self.render_btn.setObjectName("primary")
@@ -195,6 +204,7 @@ class RenderView(QWidget):
             "audio_mode": self._audio_mode(),
             "orig_volume": self.orig_vol.value() / 100.0,
             "dub_volume": self.dub_vol.value() / 100.0,
+            "cover_mode": self.cover.currentData(),
         }
         self.bar.setVisible(True)
         self.log.setVisible(True)

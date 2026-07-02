@@ -131,6 +131,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         segments,
         audio_mode="mix" if args.keep_audio else "replace",
         cover_hardsubs=args.cover_hardsubs,
+        cover_mode=args.cover,
         font=args.font,
         log=print,  # surface the "câu QUÁ DÀI" fit warnings headless too
     )
@@ -179,7 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--tts", default=settings.vizsup_default_tts, help="TTS provider (default: edge)")
     rn.add_argument("--voice", default=None, help="voice id (e.g. vi-VN-NamMinhNeural)")
     rn.add_argument("--keep-audio", action="store_true", help="mix the dub over the original audio")
-    rn.add_argument("--cover-hardsubs", action="store_true", help="opaque box to hide leftover CN hardsubs")
+    rn.add_argument("--cover-hardsubs", action="store_true", help="legacy alias for --cover box")
+    rn.add_argument("--cover", choices=["off", "box", "blur"], default=None,
+                    help="hide leftover CN hardsubs: opaque box or a blurred bottom band")
     rn.add_argument("--font", default="Be Vietnam Pro", help="subtitle font (Vietnamese-diacritic)")
     rn.set_defaults(func=cmd_render)
 

@@ -222,6 +222,7 @@ def _build_render(
     audio_mode: str,
     orig_volume: float,
     dub_volume: float,
+    cover_mode: str = "off",   # "off" | "box" (opaque box in the ASS style) | "blur"
     log: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Plan the timeline and build the ffmpeg command. The filter graph goes to
@@ -319,7 +320,15 @@ def _build_render(
     else:
         audio_map = "0:a?"
 
-    parts.append("[0:v]ass=subs.ass[v]")
+    if cover_mode == "blur":
+        # blur the bottom-third band (where CN hardsubs live) before burning the
+        # VI subs on top — softer than the opaque box, still hides the original
+        parts.append("[0:v]split[vsrc][vband]")
+        parts.append("[vband]crop=iw:ih/3:0:ih*2/3,boxblur=10:2[vblur]")
+        parts.append("[vsrc][vblur]overlay=0:main_h*2/3[vbg]")
+        parts.append("[vbg]ass=subs.ass[v]")
+    else:
+        parts.append("[0:v]ass=subs.ass[v]")
     (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
     cmd += [
         "-filter_complex_script", "filter_complex.txt",
@@ -339,17 +348,19 @@ def assemble(
     audio_mode: str = "replace",   # "replace" | "mix" | "duck"
     orig_volume: float = 1.0,      # original-audio gain (0..1+) for mix/duck
     dub_volume: float = 1.0,       # Vietnamese dub gain
-    cover_hardsubs: bool = False,
+    cover_hardsubs: bool = False,        # legacy bool → "box"
+    cover_mode: str | None = None,       # "off" | "box" | "blur" (wins over the bool)
     font: str = "Be Vietnam Pro",
     size: int = 60,
     style: dict | None = None,
     log: Callable[[str], None] | None = None,
 ) -> Path:
+    mode = cover_mode or ("box" if cover_hardsubs else "off")
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
     write_ass(cues_for_subs, job.subs_ass, font=font, size=size,
-              cover_hardsubs=cover_hardsubs, style=style, cue_styles=_load_cue_styles(job))
+              cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job))
 
-    cmd = _build_render(job, segments, audio_mode=audio_mode,
-                        orig_volume=orig_volume, dub_volume=dub_volume, log=log)
+    cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
+                        dub_volume=dub_volume, cover_mode=mode, log=log)
     subprocess.run(cmd, cwd=str(job.work_dir), check=True)
     return job.output_video
