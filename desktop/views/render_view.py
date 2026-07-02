@@ -35,10 +35,12 @@ def _section(t: str) -> QLabel:
 class RenderView(QWidget):
     renderRequested = Signal(dict)
     backRequested = Signal()
+    cancelRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self._out: str | None = None
+        self._has_real_voices = False
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -50,10 +52,10 @@ class RenderView(QWidget):
         ll.setContentsMargins(22, 20, 18, 16)
         ll.setSpacing(11)
 
-        back = QPushButton("←  Quay lại sửa phụ đề")
-        back.setObjectName("ghost")
-        back.clicked.connect(self.backRequested)
-        ll.addWidget(back)
+        self.back_btn = QPushButton("←  Quay lại sửa phụ đề")
+        self.back_btn.setObjectName("ghost")
+        self.back_btn.clicked.connect(self.backRequested)
+        ll.addWidget(self.back_btn)
 
         # --- voice ---
         ll.addWidget(_section("Giọng lồng tiếng"))
@@ -97,6 +99,13 @@ class RenderView(QWidget):
         self.render_btn.setFixedHeight(44)
         self.render_btn.clicked.connect(self._emit_render)
         ll.addWidget(self.render_btn)
+        # cancel is only visible while a render runs (see set_rendering); TTS stops
+        # between cues, a started ffmpeg pass runs to completion
+        self.cancel_btn = QPushButton("✕  Hủy dựng")
+        self.cancel_btn.setObjectName("danger")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancelRequested)
+        ll.addWidget(self.cancel_btn)
 
         self.status = QLabel("Sẵn sàng dựng")
         self.status.setObjectName("muted")
@@ -159,7 +168,17 @@ class RenderView(QWidget):
     # --- public API ----------------------------------------------------------
     def set_voices(self, voices: list[str]) -> None:
         self.voice.clear()
+        self._has_real_voices = bool(voices)
         self.voice.addItems(voices or ["(mặc định)"])
+
+    def set_rendering(self, on: bool) -> None:
+        """Lock/unlock this screen around a render run. Every exit path (done,
+        failed, cancelled) unlocks via MainWindow._on_finished — one point, so
+        the app can't soft-lock."""
+        self.render_btn.setEnabled(not on)
+        self.back_btn.setEnabled(not on)
+        self.cancel_btn.setVisible(on)
+        self.cancel_btn.setEnabled(on)
 
     def set_preview(self, video_path: Path, cues: list | None = None) -> None:
         self.preview.load(video_path)
@@ -169,7 +188,9 @@ class RenderView(QWidget):
     def _emit_render(self) -> None:
         speed = self.speed.value() / 100.0
         opts = {
-            "voice": self.voice.currentText() if self.voice.count() else None,
+            # the "(mặc định)" placeholder is UI text, not a voice id — sending it
+            # to edge-tts as a literal voice name broke every render without voices()
+            "voice": self.voice.currentText() if self._has_real_voices else None,
             "rate": f"{int(round((speed - 1) * 100)):+d}%",
             "audio_mode": self._audio_mode(),
             "orig_volume": self.orig_vol.value() / 100.0,

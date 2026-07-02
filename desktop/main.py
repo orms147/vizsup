@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         self.input.deleteRequested.connect(self._delete_job)
         self.editor.dirtyChanged.connect(self._on_dirty)
         self.render.renderRequested.connect(self._start_render)
+        self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
         self.editor.previewStyleRequested.connect(self._preview_style)
         self.steps.clicked.connect(self._goto_step)
@@ -261,13 +262,20 @@ class MainWindow(QMainWindow):
     def _start_render(self, ropts: dict) -> None:
         if self._busy():
             return
+        from app.pipeline.srt import parse_srt
+
+        self.editor.save_now()  # vi.srt == exactly what the user approved
         merged = {
             "tts": self.opts.get("tts") or settings.vizsup_default_tts,
             "style": self.editor.get_style(),
             "font": self.editor.get_font(),
             "size": self.editor.get_size_px(),
             **ropts,
+            # snapshot the approved cues: the burned subs always match the text
+            # TTS just spoke, even if vi.srt were somehow rewritten mid-render
+            "burn_cues": parse_srt(self.job.vi_srt),
         }
+        self._set_render_locked(True)
         self._run("run_render", merged, {
             "stage_started": lambda s: self.render.append_log(f"• {s}"),
             "progress": self.render.set_progress,
@@ -275,6 +283,19 @@ class MainWindow(QMainWindow):
             "failed": self.render.show_error,
             "render_done": self.render.show_done,
         })
+
+    def _set_render_locked(self, on: bool) -> None:
+        """One switch for everything that could mutate vi.srt or hijack the job
+        while a render worker is reading it."""
+        self.render.set_rendering(on)
+        self.steps.setEnabled(not on)     # no FlowSteps navigation mid-render
+        self.editor.setEnabled(not on)    # no edits landing in autosave mid-render
+
+    def _cancel_render(self) -> None:
+        if self._busy() and self._worker:
+            self._worker.cancel()
+            self.render.status.setText("Đang hủy… (TTS dừng giữa câu; ffmpeg đã chạy thì chạy nốt)")
+            self.render.append_log("⏳ Đang hủy…")
 
     # --- worker plumbing -----------------------------------------------------
     def _run(self, method: str, opts: dict, connections: dict) -> None:
@@ -302,6 +323,9 @@ class MainWindow(QMainWindow):
         # gate failed/cancelled → re-enable Start but KEEP the log/error visible
         if self.stack.currentIndex() == INPUT:
             self.input.start.setEnabled(True)
+        # single unlock point for EVERY render exit path (done/failed/cancelled) —
+        # per-handler unlocks would risk a soft-locked app on a missed path
+        self._set_render_locked(False)
 
     def _cancel(self) -> None:
         # cooperative: flag it and keep the UI in a "cancelling" state; the actual

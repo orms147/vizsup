@@ -226,6 +226,7 @@ class PipelineWorker(QObject):
             ass_size = int(round(ui_size * 3)) if ui_size else 60  # UI px → .ass units (1080 canvas)
             out = assemble.assemble(
                 job, segments,
+                burn_cues=o.get("burn_cues"),  # N-13 snapshot: subs match what TTS spoke
                 audio_mode=o.get("audio_mode", "replace"),
                 orig_volume=o.get("orig_volume", 1.0),
                 dub_volume=o.get("dub_volume", 1.0),
