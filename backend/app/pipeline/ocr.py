@@ -195,7 +195,11 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
 
     frames = sorted(frames_dir.glob("*.png"))
     # 1) OCR + clean each frame to a single text line (normalizing both RapidOCR APIs)
-    per_frame = [(k / fps, _clean_frame(_to_lines(ocr(str(fp))), min_conf)) for k, fp in enumerate(frames)]
+    from app.heavy import heavy_task
+
+    with heavy_task("OCR"):
+        per_frame = [(k / fps, _clean_frame(_to_lines(ocr(str(fp))), min_conf))
+                     for k, fp in enumerate(frames)]
 
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     cues: list[Cue] = []

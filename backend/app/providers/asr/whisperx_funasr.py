@@ -26,6 +26,18 @@ class WhisperXFunASR(ASRProvider):
     def available(self) -> bool:
         return _installed("funasr")
 
+    def unload(self) -> None:
+        self._model = None
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 - torch absent / CPU-only
+            pass
+
     def _load(self):
         from funasr import AutoModel
 

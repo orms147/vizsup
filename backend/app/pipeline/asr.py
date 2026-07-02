@@ -33,6 +33,12 @@ def transcribe(job: Job, *, provider: str | None = None, language: str = "zh") -
         raise RuntimeError(f"ASR provider '{provider}' is not available (missing dependency).")
     if not job.source_audio.exists():
         _extract_audio(job)
-    cues = asr.transcribe(job.source_audio, language=language)
+    from app.heavy import heavy_task
+
+    with heavy_task(f"ASR ({provider})"):
+        try:
+            cues = asr.transcribe(job.source_audio, language=language)
+        finally:
+            asr.unload()   # free VRAM before the next heavy stage (8 GB rule)
     write_srt(cues, job.cn_srt)
     return job

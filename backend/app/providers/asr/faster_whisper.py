@@ -26,6 +26,18 @@ class FasterWhisperASR(ASRProvider):
     def available(self) -> bool:
         return _installed("faster_whisper")
 
+    def unload(self) -> None:
+        self._model, self._key = None, None
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 - torch absent / CPU-only
+            pass
+
     def _load(self):
         from faster_whisper import WhisperModel
 

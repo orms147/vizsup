@@ -58,7 +58,7 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
     "auto" mode should catch that and fall back to ASR.
     """
     from app.pipeline.assemble import probe_duration
-    from app.pipeline.ocr import _CROP, _build_ocr, _cjk_count, _clean_frame, _to_lines
+    from app.pipeline.ocr import _CROP, _build_ocr
 
     ocr = _build_ocr()
 
@@ -71,7 +71,18 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
     det_dir.mkdir(exist_ok=True)
     vf = _CROP.get(crop, _CROP["bottom-third"])
 
+    from app.heavy import heavy_task
+
     flags: list[bool] = []
+    with heavy_task("dò hardsub"):
+        _detect_loop(job, ocr, duration, samples, vf, det_dir, min_conf, flags)
+    job.has_hardsubs = _decide(flags)
+    return job.has_hardsubs
+
+
+def _detect_loop(job, ocr, duration, samples, vf, det_dir, min_conf, flags) -> None:
+    from app.pipeline.ocr import _cjk_count, _clean_frame, _to_lines
+
     for i, t in enumerate(_sample_times(duration, samples)):
         fp = det_dir / f"{i:03d}.png"
         fp.unlink(missing_ok=True)
@@ -85,6 +96,3 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
             continue
         text = _clean_frame(_to_lines(ocr(str(fp))), min_conf)
         flags.append(_cjk_count(text) >= _MIN_CJK)
-
-    job.has_hardsubs = _decide(flags)
-    return job.has_hardsubs

@@ -40,6 +40,10 @@ class Provider(ABC):
             "unavailable_note": self.unavailable_note,
         }
 
+    def unload(self) -> None:
+        """Release any cached heavy model (VRAM). No-op default; local model
+        providers override so sequential stages fit on the 8 GB card."""
+
     # Optional capabilities (overridden by providers that support them).
     def list_models(self) -> list[str]:
         """Return selectable model ids for this provider (empty if N/A)."""
