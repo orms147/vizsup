@@ -6,6 +6,7 @@ frontend can render dropdowns and grey out engines whose key/dependency is missi
 from __future__ import annotations
 
 from app.providers.asr.faster_whisper import FasterWhisperASR
+from app.providers.asr.funasr_aligned import FunASRAligned
 from app.providers.asr.whisperx_funasr import WhisperXFunASR
 from app.providers.translation.claude import ClaudeOpus, ClaudeTranslator
 from app.providers.translation.deepl import DeepLTranslator
@@ -49,6 +50,7 @@ TTS_PROVIDERS = {
 ASR_PROVIDERS = {
     p.name: p
     for p in (
+        FunASRAligned(),
         WhisperXFunASR(),
         FasterWhisperASR(),
     )
