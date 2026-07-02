@@ -214,7 +214,9 @@ class PipelineWorker(QObject):
 
             self.stage_started.emit("tts")
             self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
-            segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"), rate=o.get("rate"))
+            segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
+                                      rate=o.get("rate"), log=self.log.emit,
+                                      cancel=lambda: self._cancel)  # per-cue cancel (N-10)
             self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
 
             self._check()

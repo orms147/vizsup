@@ -124,7 +124,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         return 2
 
     print(f"[render] synthesizing Vietnamese voice (tts={args.tts}) ...")
-    segments = tts.synthesize(job, provider=args.tts, voice=args.voice)
+    segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print)
     print(f"[render] {len(segments)} segments; assembling with FFmpeg ...")
     out = assemble.assemble(
         job,
