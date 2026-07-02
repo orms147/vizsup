@@ -25,6 +25,7 @@ class Provider(ABC):
     display_name: str = ""   # human label for the UI
     cost_note: str = ""      # short cost/quality hint for the UI
     local: bool = False      # runs offline / on this machine
+    unavailable_note: str = ""  # why available() is False (UI suffix; "" → "cần API key")
 
     def available(self) -> bool:  # noqa: D401 - simple predicate
         return True
@@ -36,6 +37,7 @@ class Provider(ABC):
             "cost_note": self.cost_note,
             "local": self.local,
             "available": self.available(),
+            "unavailable_note": self.unavailable_note,
         }
 
     # Optional capabilities (overridden by providers that support them).
@@ -49,7 +51,22 @@ class Provider(ABC):
 
 
 class TranslationProvider(Provider):
-    """Translate a list of strings, preserving order and count (1:1 with cues)."""
+    """Translate a list of strings, preserving order and count (1:1 with cues).
+
+    Capability flags are DECLARED, not discovered: the base refine/proofread
+    methods are safe no-ops, so callers can't tell support from silence — the
+    flags let the UI grey out engines that would quietly do nothing (a no-op
+    refine pass used to log "✓ Đã rà soát N dòng" without touching a line).
+    Subclasses that override refine_texts/proofread_texts must set these True
+    (locked by tests/test_capabilities.py).
+    """
+
+    can_refine: bool = False     # overrides refine_texts with a real editor pass
+    can_proofread: bool = False  # overrides proofread_texts with a real OCR fix pass
+
+    def info(self) -> dict:
+        return {**super().info(), "can_refine": self.can_refine,
+                "can_proofread": self.can_proofread}
 
     @abstractmethod
     def translate_texts(

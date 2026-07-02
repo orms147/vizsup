@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
     def _approve(self) -> None:
         try:
             self.editor.save_now()
-            tts_name = self.opts.get("tts") or "edge"
+            tts_name = self.opts.get("tts") or settings.vizsup_default_tts
             try:
                 voices = get_tts(tts_name).voices()
             except Exception:  # noqa: BLE001
@@ -262,7 +262,7 @@ class MainWindow(QMainWindow):
         if self._busy():
             return
         merged = {
-            "tts": self.opts.get("tts") or "edge",
+            "tts": self.opts.get("tts") or settings.vizsup_default_tts,
             "style": self.editor.get_style(),
             "font": self.editor.get_font(),
             "size": self.editor.get_size_px(),

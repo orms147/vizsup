@@ -67,6 +67,11 @@ class PipelineWorker(QObject):
                     f"Bộ dịch '{name}' ({role}) chưa sẵn sàng — thiếu API key. "
                     f"Vào ⚙ Cài đặt thêm key, hoặc đổi bộ dịch ở bước 1."
                 )
+        # a saved ui_state may still carry a refiner whose refine pass is a no-op
+        # (the combo greys them now, but old state predates that)
+        if refine and not getattr(get_translator(refine), "can_refine", True):
+            o["refine"] = None
+            self.log.emit(f"⚠ Bộ '{refine}' không hỗ trợ tinh chỉnh — bỏ qua bước tinh chỉnh.")
         if draft == "passthrough":
             self.log.emit(
                 "⚠ Bộ dịch đang là 'passthrough' — phụ đề sẽ GIỮ NGUYÊN tiếng Trung "

@@ -136,7 +136,9 @@ class InputView(QWidget):
         grid.setVerticalSpacing(10)
         self.asr = ProviderCombo(providers["asr"])
         self.draft = ProviderCombo(providers["translation"])
-        self.refine = ProviderCombo(providers["translation"], allow_none=True)
+        # refine list greys engines whose refine pass would be a silent no-op
+        self.refine = ProviderCombo(providers["translation"], allow_none=True,
+                                    require="can_refine")
         self.tts = ProviderCombo(providers["tts"])
         self._asr_caption = QLabel("Nhận dạng giọng nói (ASR)")
         self._asr_caption.setStyleSheet(f"color:{C['muted']};font-size:12px;")

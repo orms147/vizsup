@@ -20,6 +20,7 @@ class ClaudeTranslator(TranslationProvider):
     display_name = "Claude Sonnet 4.6"
     cost_note = "best Vietnamese register · great refine pass"
     model = "claude-sonnet-4-6"
+    can_refine = True   # refine_texts below; proofread_texts NOT overridden → stays False
 
     def available(self) -> bool:
         return bool(settings.anthropic_api_key) and _installed("anthropic")

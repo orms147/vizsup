@@ -23,7 +23,11 @@ def _extract_audio(job: Job) -> None:
     )
 
 
-def transcribe(job: Job, *, provider: str = "whisperx_funasr", language: str = "zh") -> Job:
+def transcribe(job: Job, *, provider: str | None = None, language: str = "zh") -> Job:
+    if provider is None:
+        from app.config import settings
+
+        provider = settings.vizsup_default_asr
     asr = get_asr(provider)
     if not asr.available():
         raise RuntimeError(f"ASR provider '{provider}' is not available (missing dependency).")

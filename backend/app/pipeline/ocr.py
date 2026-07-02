@@ -243,16 +243,31 @@ def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=N
         if log:
             log("⚠ Bỏ qua sửa lỗi OCR: bộ dịch chưa sẵn sàng (thiếu key) hoặc là passthrough.")
         return 0
+    if not getattr(prov, "can_proofread", False):
+        # the base proofread_texts is an identity no-op — running it here used to
+        # produce a false "✓ Đã rà soát N dòng" for Claude/Gemini/DeepL
+        if log:
+            log(f"⚠ Bỏ qua sửa lỗi OCR: bộ dịch '{provider}' không hỗ trợ rà soát.")
+        return 0
 
     cues = parse_srt(job.cn_srt)
     if not cues:
         return 0
     texts = [c.text for c in cues]
-    fixed: list[str] = []
+    done = 0
     for i in range(0, len(texts), _PROOF_BATCH):
-        fixed.extend(prov.proofread_texts(texts[i:i + _PROOF_BATCH], context=context))
-    for c, t in zip(cues, fixed):
-        if t and t.strip():
-            c.text = t.strip()
-    write_srt(cues, job.cn_srt)
-    return len(cues)
+        batch = texts[i:i + _PROOF_BATCH]
+        try:
+            out = prov.proofread_texts(batch, context=context)
+        except Exception as exc:  # noqa: BLE001 - optional polish must never kill the run
+            if log:
+                log(f"⚠ Sửa lỗi OCR dừng giữa chừng ({type(exc).__name__}: {exc}) — "
+                    f"giữ {done} dòng đã rà soát, phần còn lại giữ nguyên bản OCR.")
+            break
+        for c, t in zip(cues[i:i + _PROOF_BATCH], out):
+            if t and t.strip():
+                c.text = t.strip()
+        done += len(batch)
+    if done:
+        write_srt(cues, job.cn_srt)
+    return done

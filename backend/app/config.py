@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     anthropic_api_key: str = ""
     zhipu_api_key: str = ""
+    zhipu_model: str = ""  # override the GLM model id if Zhipu rolls it (default glm-5.2)
     gemini_api_key: str = ""
     dashscope_api_key: str = ""
     deepl_api_key: str = ""
@@ -37,7 +38,6 @@ class Settings(BaseSettings):
     azure_speech_key: str = ""
     azure_speech_region: str = ""
     google_application_credentials: str = ""
-    elevenlabs_api_key: str = ""
 
     # download
     ytdlp_cookies_file: str = ""

@@ -7,17 +7,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.config import settings
-from app.providers.base import TTSProvider, _installed
+from app.config import settings  # noqa: F401 - used again when the stub flips to real
+from app.providers.base import TTSProvider, _installed  # noqa: F401
 
 
 class FptTTS(TTSProvider):
     name = "fpt"
     display_name = "FPT.AI (vi)"
     cost_note = "paid · native Vietnamese voices"
+    unavailable_note = "sắp có"
 
     def available(self) -> bool:
-        return bool(settings.fpt_api_key) and _installed("httpx")
+        # STUB: synthesize() raises NotImplementedError — flip when implemented:
+        # return bool(settings.fpt_api_key) and _installed("httpx")
+        return False
 
     def synthesize(self, text, out_path, *, voice=None, rate=None) -> Path:
         raise NotImplementedError("FPT.AI TTS not implemented yet (P5).")

@@ -17,6 +17,7 @@ class GeminiTranslator(TranslationProvider):
     display_name = "Gemini 2.5 Flash"
     cost_note = "cheap · good Vietnamese fluency"
     model = "gemini-2.5-flash"
+    can_refine = True   # refine_texts below; proofread_texts NOT overridden → stays False
 
     def available(self) -> bool:
         return bool(settings.gemini_api_key) and _installed("google.genai")

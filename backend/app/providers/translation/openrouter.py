@@ -7,7 +7,10 @@ from __future__ import annotations
 from app.config import settings
 from app.providers.translation._common import OpenAICompatTranslator
 
-DEFAULT_MODEL = "deepseek/deepseek-chat-v3"  # sensible fallback if none picked yet
+# Fallback when no model is picked in Settings. Web-verified 2026-07-02:
+# openrouter.ai/deepseek/deepseek-v4-flash (the old deepseek/deepseek-chat-v3
+# slug rides the legacy deepseek-chat API that deprecates 2026-07-24).
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 
 class OpenRouter(OpenAICompatTranslator):

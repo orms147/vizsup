@@ -120,6 +120,8 @@ def parse_numbered(reply: str, n: int, fallback: list[str]) -> list[str]:
 class OpenAICompatTranslator(TranslationProvider):
     """Base for OpenAI-compatible chat endpoints (OpenRouter, DeepSeek, Qwen, ...)."""
 
+    can_refine = True      # real editor pass (refine_texts below)
+    can_proofread = True   # real OCR-fix pass (proofread_texts below)
     base_url: str = ""
     model: str = ""
     api_key: str = ""
