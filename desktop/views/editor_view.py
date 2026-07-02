@@ -55,6 +55,7 @@ class _Task(QObject):
 class EditorView(QWidget):
     dirtyChanged = Signal(bool)
     previewStyleRequested = Signal()   # "Xem thử kiểu" — main burns a WYSIWYG frame
+    glossaryRequested = Signal()       # open the glossary dialog (main owns the job)
 
     def __init__(self) -> None:
         super().__init__()
@@ -170,6 +171,11 @@ class EditorView(QWidget):
             b.setObjectName("ghost")
             b.clicked.connect(slot)
             bar.addWidget(b)
+        gl = QPushButton("📖 Thuật ngữ")
+        gl.setObjectName("ghost")
+        gl.setToolTip("Sửa bảng thuật ngữ Trung → Việt (tự nạp khi dịch)")
+        gl.clicked.connect(self.glossaryRequested)
+        bar.addWidget(gl)
         return bar
 
     def _dock(self) -> QWidget:

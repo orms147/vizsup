@@ -253,6 +253,20 @@ def load_glossary(job: Job) -> dict[str, str]:
     return merged
 
 
+def save_glossary(path: Path, entries: dict[str, str]) -> None:
+    """Persist a zh→vi glossary (sorted keys, atomic temp+rename); an empty dict
+    removes the file. Counterpart of load_glossary — the GUI dialog uses these
+    so nobody hand-edits JSON."""
+    path = Path(path)
+    if not entries:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(dict(sorted(entries.items())), ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
 def translate(
     job: Job,
     *,

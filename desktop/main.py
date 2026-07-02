@@ -77,6 +77,8 @@ class MainWindow(QMainWindow):
         self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
         self.editor.previewStyleRequested.connect(self._preview_style)
+        self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
+        self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -363,6 +365,13 @@ class MainWindow(QMainWindow):
 
     def _on_dirty(self, dirty: bool) -> None:
         self.saved_lbl.setText("● Đang lưu…" if dirty else "✓ Đã lưu nháp")
+
+    def _open_glossary(self, *, job: bool) -> None:
+        from desktop.glossary_dialog import GlossaryDialog
+
+        dlg = GlossaryDialog(self, job=self.job if job else None)
+        if dlg.exec():
+            self.status.setText("● Đã lưu bảng thuật ngữ")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self)

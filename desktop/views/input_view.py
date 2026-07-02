@@ -41,6 +41,7 @@ class InputView(QWidget):
     cancelRequested = Signal()
     resumeRequested = Signal(str)  # job_id of a recent project to reopen
     deleteRequested = Signal(str)  # job_id of a recent project to delete
+    glossaryRequested = Signal()   # open the glossary dialog (global scope)
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
@@ -130,7 +131,15 @@ class InputView(QWidget):
 
         # engines
         col.addSpacing(4)
-        col.addWidget(_section("Công cụ xử lý"))
+        erow = QHBoxLayout()
+        erow.addWidget(_section("Công cụ xử lý"))
+        erow.addStretch(1)
+        gl_btn = QPushButton("📖 Thuật ngữ")
+        gl_btn.setObjectName("ghost")
+        gl_btn.setToolTip("Bảng thuật ngữ Trung → Việt dùng chung — tự nạp vào bước dịch")
+        gl_btn.clicked.connect(self.glossaryRequested)
+        erow.addWidget(gl_btn)
+        col.addLayout(erow)
         grid = QGridLayout()
         grid.setHorizontalSpacing(13)
         grid.setVerticalSpacing(10)
