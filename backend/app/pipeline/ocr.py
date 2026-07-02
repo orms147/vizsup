@@ -125,10 +125,10 @@ def _build_ocr():
     surfaces its real error rather than masking it with the legacy engine.
 
     ONNX Runtime already falls back to CPU on its own when CUDA is unavailable, so the
-    GPU→CPU retry below only guards against `rapidocr` *rejecting* the CUDA/PP-OCRv5
-    param keys — OCR still works (on CPU) even then. Caveat: a rejected GPU key
-    degrades to CPU silently, so after installing rapidocr v3 + onnxruntime-gpu,
-    confirm the GPU actually engaged (nvidia-smi / frame timing).
+    retry ladder below only guards against `rapidocr` *rejecting* the CUDA/PP-OCRv5
+    param keys — OCR still works (on newer default models / CPU) even then. Caveat: a
+    rejected GPU key degrades to CPU silently, so after installing rapidocr v3 +
+    onnxruntime-gpu, confirm the GPU actually engaged (nvidia-smi / frame timing).
     """
     if _installed("rapidocr"):
         from rapidocr import RapidOCR
@@ -140,16 +140,17 @@ def _build_ocr():
             v5 = {"Det.ocr_version": OCRVersion.PPOCRV5, "Rec.ocr_version": OCRVersion.PPOCRV5}
         except Exception:  # noqa: BLE001 - older/newer layout: fall back to defaults
             v5 = {}
-        # Try CUDA first, then CPU. ORT silently uses CPU when CUDA is absent; this
-        # retry only fires if rapidocr *rejects* the CUDA keys — then we rebuild
-        # without them (PP-OCRv5 is preserved on the CPU attempt either way).
-        for gpu in (True, False):
-            params = dict(v5)
-            if gpu:
-                params["EngineConfig.onnxruntime.use_cuda"] = True
-                params["EngineConfig.onnxruntime.cuda_ep_cfg.device_id"] = 0
+        gpu = {"EngineConfig.onnxruntime.use_cuda": True,
+               "EngineConfig.onnxruntime.cuda_ep_cfg.device_id": 0}
+        # Degradation ladder — GPU outranks the v5 pin. Newer rapidocr builds default
+        # to PP-OCRv6+ and *reject* the v5 enum for some model types; when the pin and
+        # the CUDA keys rode in one params dict, that rejection silently cost the GPU
+        # too (observed on rapidocr 3.x: v5 refused → fell through to CPU defaults).
+        for params in (v5 | gpu, gpu, v5):
+            if not params:
+                continue
             try:
-                return RapidOCR(params=params) if params else RapidOCR()
+                return RapidOCR(params=params)
             except Exception:  # noqa: BLE001 - drop to the next (less capable) config
                 continue
         return RapidOCR()  # last resort: all defaults
