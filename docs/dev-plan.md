@@ -114,6 +114,20 @@ N-21 first — N-7 and N-8 depend on it. Every quality task carries a measurable
 violation; OCR proofread cost drops ≥50% at equal CER; overlong-line flags drop ≥50% before the
 gate; music-preserving dub exists; every claim backed by a committed eval script, not vibes.
 
+> **✅ M7 LIGHT (2026-07-02, per "không cần quá chi tiết").** Landed: **N-21** full (heavy_task
+> RLock + unload(); ASR/OCR/detect wrapped; ASR unloads after each run); **N-22** (aresample 48k
+> per segment, loudnorm on the dub bus, probed speech rubberband options — no A/B listen yet);
+> **N-14** (per-cue confidence → `ocr_report.json`, suspect classifier, suspect-only proofread
+> with all-lines escape hatch; deferred: pure `group_frames()` + `ocr_eval.py`); **N-6**
+> (`fit_estimate.py` + pre-gate auto-shorten of lines that can't fit at 1.30×; deferred: prompt
+> budgets — would touch every provider signature); **N-16** (cover_mode off/box/**blur**, GUI combo
+> + `--cover`; blur uses the bottom-third band, detected-rect persistence deferred); **N-7 = E-2**
+> (`align.fuse_transcript_timing` pure+tested, `funasr_aligned` provider: FunASR text → unload →
+> faster-whisper word timestamps; whisperx phase-2 + timing eval deferred; needs `[asr-accurate]`
+> installed to be selectable). **Not done: N-15** (term extraction) and **N-8** (Demucs — needs the
+> `[audio]` extra + on-device audio validation). Suite 124 → 152; e2e CLI smoke re-verified incl.
+> suspect flagging + blur render.
+
 ---
 
 ## Milestone 8 — Workflow & UX
@@ -126,6 +140,13 @@ gate; music-preserving dub exists; every claim backed by a committed eval script
 
 **DoD (M8):** paste 5 URLs before lunch, edit 5 gated jobs after; glossary maintained without a
 text editor; a Douyin cookie failure no longer ends the session.
+
+> **✅ M8 LIGHT (2026-07-02).** **N-23** full (save_glossary atomic + 2-scope dialog, buttons on
+> Screen 1 + editor toolbar, offscreen-tested to load_glossary). **N-19** CLI half: `vizsup run`
+> takes many URLs, each parks at its own gate, one failure doesn't kill the batch — the GUI queue
+> (worker chaining + `store.list_jobs` widening) is deferred. **N-24** Bilibili half: BBDown
+> fallback behind `BBDOWN_PATH` (`--work-dir` verified 2026-07-02), both failures reported
+> together, doctor check added; TikTokDownloader stays unwired (CLI churns — verify when needed).
 
 ---
 
