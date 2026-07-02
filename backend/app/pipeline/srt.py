@@ -22,18 +22,21 @@ def _to_seconds(h: str, m: str, s: str, ms: str) -> float:
 
 
 def _fmt_srt_time(t: float) -> str:
-    t = max(0.0, t)
-    h, rem = divmod(int(t), 3600)
+    # Integer divmod chain over total milliseconds. The old form rounded the
+    # fraction separately, so 1.9995 became "00:00:01,1000" (4-digit ms) which
+    # parses back as 1.1s — a silent cue shrink on every file round-trip.
+    total_ms = max(0, round(t * 1000))
+    s, ms = divmod(total_ms, 1000)
+    h, rem = divmod(s, 3600)
     m, s = divmod(rem, 60)
-    ms = int(round((t - int(t)) * 1000))
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def _fmt_ass_time(t: float) -> str:
-    t = max(0.0, t)
-    h, rem = divmod(int(t), 3600)
+    total_cs = max(0, round(t * 100))  # same carry bug existed here at cs == 100
+    s, cs = divmod(total_cs, 100)
+    h, rem = divmod(s, 3600)
     m, s = divmod(rem, 60)
-    cs = int(round((t - int(t)) * 100))
     return f"{h:d}:{m:02d}:{s:02d}.{cs:02d}"
 
 

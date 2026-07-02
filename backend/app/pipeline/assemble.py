@@ -153,7 +153,9 @@ def _plan_segments(segments: list[tuple[Cue, Path]]):
             else:                                          # push next later (carry grows)
                 flagged.append((cue, seg_dur, max(span, 0.0)))
         placements.append({"inp": inp, "start": start, "tempo": tempo, "eff": eff,
-                           "trim": trim > 0.01})
+                           "trim": trim > 0.01,
+                           "trim_s": round(trim, 3),                # for fit_report.json
+                           "carry_s": round(start - cue.start, 3)})  # how far this line slipped
         prev_end = end
     return placements, sped, flagged
 
@@ -184,6 +186,19 @@ def assemble(
         cmd += ["-i", str(Path(seg).relative_to(wd).as_posix())]
 
     placements, sped, flagged = _plan_segments(segments)
+
+    # Machine-readable fit report next to the output: what got sped up, trimmed,
+    # or slipped — the metric N-6 (length-aware drafting) optimizes against.
+    report = {
+        "sped": sped,
+        "flagged": [{"index": c.index, "start": round(c.start, 3),
+                     "need_s": round(sd, 2), "have_s": round(sp, 2)}
+                    for c, sd, sp in flagged],
+        "total_trim_s": round(sum(p["trim_s"] for p in placements), 3),
+        "max_carry_s": round(max((p["carry_s"] for p in placements), default=0.0), 3),
+    }
+    (wd / "fit_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     from app.pipeline.tts import load_overrides
     ov = load_overrides(job)

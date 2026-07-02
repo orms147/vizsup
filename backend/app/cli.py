@@ -114,6 +114,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         audio_mode="mix" if args.keep_audio else "replace",
         cover_hardsubs=args.cover_hardsubs,
         font=args.font,
+        log=print,  # surface the "câu QUÁ DÀI" fit warnings headless too
     )
     print(f"[render] done -> {out}")
     return 0
