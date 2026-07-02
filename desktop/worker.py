@@ -110,6 +110,23 @@ class PipelineWorker(QObject):
             self.stage_started.emit("subtitle")
             src = o.get("subtitle_source", "asr")
             store.debug(f"subtitle stage begin src={src}")
+            if src == "auto":
+                # E-1: sampled-frame OCR decides OCR vs ASR; any failure (no OCR
+                # deps, unreadable video) falls back to ASR instead of aborting.
+                from app.pipeline import hardsub_detect
+
+                self.progress.emit(0.3, "Đang dò phụ đề cháy sẵn trên video…")
+                self.log.emit("Dò phụ đề cháy sẵn (OCR nhanh trên khung hình mẫu)…")
+                try:
+                    has = hardsub_detect.detect_hardsubs(
+                        job, crop=o.get("ocr_region", "bottom-third"))
+                    src = "ocr" if has else "asr"
+                    self.log.emit("✓ Có phụ đề cháy sẵn → đọc chữ bằng OCR" if has
+                                  else "✓ Không thấy phụ đề cháy sẵn → nhận dạng giọng nói (ASR)")
+                except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
+                    src = "asr"
+                    self.log.emit(f"⚠ Không dò được phụ đề cháy sẵn ({exc}) → dùng ASR.")
+                store.debug(f"auto hardsub-detect → src={src}")
             if src == "srt" and o.get("srt"):
                 self.progress.emit(0.4, "Dùng phụ đề tiếng Trung có sẵn…")
                 write_srt(parse_srt(Path(o["srt"])), job.cn_srt)
@@ -147,7 +164,11 @@ class PipelineWorker(QObject):
             self.progress.emit(0.75, "Đang dịch CN→VI…")
             self.log.emit(f"Dịch: {o.get('translator', 'passthrough')}"
                           + (f" → {o['refine']}" if o.get("refine") else ""))
-            translate.translate(job, draft=o.get("translator", "passthrough"), refine=o.get("refine"))
+            gl = translate.load_glossary(job)
+            if gl:
+                self.log.emit(f"… dùng bảng thuật ngữ ({len(gl)} mục: storage/glossary.json + của dự án)")
+            translate.translate(job, draft=o.get("translator", "passthrough"),
+                                refine=o.get("refine"), glossary=gl or None)
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             store.debug("translate ok → emit gate_reached")
 

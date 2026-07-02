@@ -93,11 +93,12 @@ class InputView(QWidget):
         col.addSpacing(4)
         col.addWidget(_section("Nguồn phụ đề tiếng Trung"))
         self.src_group = QButtonGroup(self)
+        self.rb_auto = QRadioButton("  Tự động phát hiện (khuyên dùng) — dò chữ cháy trên video rồi tự chọn OCR/ASR")
         self.rb_asr = QRadioButton("  Tự nhận dạng giọng nói (ASR) — video chỉ có âm thanh, không có chữ")
         self.rb_ocr = QRadioButton("  Đọc chữ cháy trên video (OCR) — video đã có sẵn phụ đề tiếng Trung")
         self.rb_srt = QRadioButton("  Dùng file .srt tiếng Trung có sẵn")
-        self.rb_asr.setChecked(True)
-        for rb in (self.rb_asr, self.rb_ocr, self.rb_srt):
+        self.rb_auto.setChecked(True)
+        for rb in (self.rb_auto, self.rb_asr, self.rb_ocr, self.rb_srt):
             self.src_group.addButton(rb)
             col.addWidget(rb)
         self.srt_lbl = QLabel("")
@@ -216,9 +217,15 @@ class InputView(QWidget):
 
     def _apply_saved_choices(self) -> None:
         st = store.load_ui_state()
-        if st.get("subtitle_source") == "ocr":
-            self.rb_ocr.setChecked(True)  # don't auto-restore 'srt' (would pop a file dialog)
+        src = st.get("subtitle_source")
+        if src == "ocr":  # don't auto-restore 'srt' (would pop a file dialog)
+            self.rb_ocr.setChecked(True)
+        elif src == "asr":
+            self.rb_asr.setChecked(True)  # anything else keeps the 'auto' default
         self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
+        ix = self.ocr_region.findData(st.get("ocr_region"))
+        if ix >= 0:
+            self.ocr_region.setCurrentIndex(ix)
         self.asr.select(st.get("asr"))
         self.draft.select(st.get("translator"))
         self.refine.select(st.get("refine"))
@@ -267,13 +274,14 @@ class InputView(QWidget):
             self._refresh_start()
 
     def _on_source_changed(self, *_args) -> None:
-        # ASR engine only matters when the ASR source is chosen
-        self.asr.setEnabled(self.rb_asr.isChecked())
-        self._asr_caption.setEnabled(self.rb_asr.isChecked())
-        # OCR region + proofread only matter for the OCR source
-        self.ocr_region.setEnabled(self.rb_ocr.isChecked())
-        self._ocr_region_lbl.setEnabled(self.rb_ocr.isChecked())
-        self.ocr_proofread.setEnabled(self.rb_ocr.isChecked())
+        # auto may end up on either path → keep both option groups live for it
+        asr_on = self.rb_asr.isChecked() or self.rb_auto.isChecked()
+        ocr_on = self.rb_ocr.isChecked() or self.rb_auto.isChecked()
+        self.asr.setEnabled(asr_on)
+        self._asr_caption.setEnabled(asr_on)
+        self.ocr_region.setEnabled(ocr_on)
+        self._ocr_region_lbl.setEnabled(ocr_on)
+        self.ocr_proofread.setEnabled(ocr_on)
 
     def _on_srt_radio(self, on: bool) -> None:
         if on:
@@ -298,7 +306,9 @@ class InputView(QWidget):
             return "srt"
         if self.rb_ocr.isChecked():
             return "ocr"
-        return "asr"
+        if self.rb_asr.isChecked():
+            return "asr"
+        return "auto"
 
     def _emit_start(self) -> None:
         opts: dict = {

@@ -19,7 +19,8 @@ def _storage() -> Path:
 
 
 # --- UI choices ------------------------------------------------------------
-_UI_KEYS = ("subtitle_source", "asr", "translator", "refine", "tts")
+_UI_KEYS = ("subtitle_source", "asr", "translator", "refine", "tts",
+            "ocr_region", "ocr_proofread")
 
 
 def load_ui_state() -> dict:

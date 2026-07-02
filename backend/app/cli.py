@@ -10,6 +10,8 @@ honours the human-edit gate.
 
     vizsup providers   -> list available translation/TTS/ASR engines (JSON).
 
+    vizsup doctor      -> environment self-check (ffmpeg, OCR/ASR deps, fonts, keys).
+
 Defaults to the offline stack (passthrough translator + edge-tts) so it runs
 with no API keys for a quick smoke test.
 """
@@ -57,9 +59,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"[run] downloaded: {job.metadata.get('title')!r} ({job.metadata.get('platform')})")
     _save_meta(job)
 
-    if args.srt:
+    src = "srt" if args.srt else args.source
+    if src == "auto":
+        # E-1: sampled-frame OCR routes OCR vs ASR; missing OCR deps → ASR.
+        from app.pipeline import hardsub_detect
+
+        print("[run] detecting burned-in subtitles ...")
+        try:
+            src = "ocr" if hardsub_detect.detect_hardsubs(job, crop=args.ocr_region) else "asr"
+            print(f"[run] hardsubs {'found -> OCR' if src == 'ocr' else 'not found -> ASR'}")
+        except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
+            print(f"[run] detection unavailable ({exc}) -> ASR")
+            src = "asr"
+
+    if src == "srt":
         write_srt(parse_srt(Path(args.srt)), job.cn_srt)
         print(f"[run] using provided Chinese subtitles -> {job.cn_srt}")
+    elif src == "ocr":
+        from app.pipeline import ocr
+
+        print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
+        ocr.extract_hardsubs(job, crop=args.ocr_region)
     else:
         print(f"[run] transcribing (ASR: {args.asr}) ...")
         asr.transcribe(job, provider=args.asr)
@@ -91,7 +111,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     out = assemble.assemble(
         job,
         segments,
-        replace_audio=not args.keep_audio,
+        audio_mode="mix" if args.keep_audio else "replace",
         cover_hardsubs=args.cover_hardsubs,
         font=args.font,
     )
@@ -106,6 +126,12 @@ def cmd_providers(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(_args: argparse.Namespace) -> int:
+    from app.doctor import main as doctor_main
+
+    return doctor_main()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vizsup", description="CN->VI video subtitle + dubbing tool")
     sub = p.add_subparsers(dest="command", required=True)
@@ -114,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("url", help="Douyin/Bilibili URL (or any yt-dlp URL)")
     r.add_argument("--file", help="use a local video file instead of downloading")
     r.add_argument("--srt", help="use this Chinese .srt instead of running ASR")
+    r.add_argument("--source", choices=["auto", "asr", "ocr"], default="asr",
+                   help="Chinese-subtitle source: auto-detect hardsubs, force ASR, or force OCR "
+                        "(default: asr; --srt overrides)")
+    r.add_argument("--ocr-region", default="bottom-third",
+                   choices=["bottom-third", "bottom-quarter", "bottom-half", "middle-third", "top-third", "full"],
+                   help="crop region for OCR/detection (default: bottom-third)")
     r.add_argument("--translator", default="passthrough", help="draft translator (default: passthrough)")
     r.add_argument("--refine", default=None, help="optional second-pass refiner (e.g. claude)")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
@@ -131,6 +163,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("providers", help="list available providers (JSON)")
     pr.set_defaults(func=cmd_providers)
+
+    dr = sub.add_parser("doctor", help="environment self-check (deps, GPU, fonts, keys)")
+    dr.set_defaults(func=cmd_doctor)
     return p
 
 
