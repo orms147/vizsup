@@ -126,9 +126,14 @@ def _check_ocr() -> list[Check]:
             out.append(("warn", "OCR trên GPU", f"onnxruntime lỗi khi nạp: {exc}"))
     # documented footgun: full opencv bundles Qt and crashes next to PySide6
     if _dist_installed("opencv-python") and _dist_installed("PySide6"):
-        out.append(("warn", "opencv-python",
+        out.append(("fail", "opencv-python",
                     "bản FULL đứng cạnh PySide6 sẽ CRASH GUI — chạy: pip uninstall -y opencv-python "
                     "&& pip install opencv-python-headless"))
+    # the other shared-dir landmine: both ORT builds fight over one package dir
+    if _dist_installed("onnxruntime") and _dist_installed("onnxruntime-gpu"):
+        out.append(("fail", "onnxruntime ×2",
+                    "cả bản CPU lẫn GPU cùng cài — chúng ghi đè file của nhau. Chạy: "
+                    "pip uninstall -y onnxruntime && pip install --force-reinstall onnxruntime-gpu"))
     return out
 
 
@@ -227,18 +232,23 @@ def _check_storage() -> list[Check]:
             out.append(("fail", "Thư mục storage", f"không ghi được {d}: {exc}"))
     else:  # don't create it — doctor must stay read-only
         out.append(("info", "Thư mục storage", f"chưa có — sẽ tạo tại {d.resolve()} khi chạy"))
-    # .env is CWD-relative (pydantic-settings env_file=".env"), so running from the
-    # wrong directory silently loses every key — report exactly which file is in effect.
-    cwd_env = Path(".env")
-    repo_env = Path(__file__).resolve().parents[2] / ".env"
-    if cwd_env.exists():
-        out.append(("ok", "File .env", str(cwd_env.resolve())))
-    elif repo_env.exists():
-        out.append(("warn", "File .env",
-                    f"không có ở thư mục hiện tại nhưng thấy {repo_env} — "
-                    f"chạy app/doctor từ thư mục đó thì key mới được nạp"))
-    else:
-        out.append(("info", "File .env", "không thấy — key/cookie đọc từ biến môi trường"))
+    # .env is anchored to the repo root (config._ROOT) since N-20 — launch dir no
+    # longer matters; report the resolved file that is actually in effect.
+    from app.config import _ROOT
+
+    env = _ROOT / ".env"
+    out.append(("ok" if env.exists() else "info", "File .env",
+                str(env) if env.exists()
+                else f"không thấy {env} — key/cookie đọc từ biến môi trường"))
+    # jobs created before the anchoring may still sit in backend/storage
+    legacy = _ROOT / "backend" / "storage"
+    try:
+        if legacy.resolve() != d.resolve() and legacy.is_dir() and any(legacy.iterdir()):
+            out.append(("warn", "storage cũ",
+                        f"{legacy} còn dự án từ trước — chuyển nội dung sang "
+                        f"{d.resolve()} để chúng hiện trong 'Dự án gần đây'"))
+    except OSError:
+        pass
     gl = d / "glossary.json"
     if gl.exists():
         out.append(("ok", "Bảng thuật ngữ", f"{gl} (tự nạp khi dịch)"))

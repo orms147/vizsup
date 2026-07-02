@@ -2,6 +2,12 @@
 
 Only providers whose key is set are reported as `available()` by the registry,
 so the UI can show exactly the engines the user can actually run.
+
+The .env file and the default storage dir are anchored to the REPO ROOT, not the
+current working directory: a CWD-relative ".env" silently loses every key when
+the app/CLI is launched from backend/ instead of the root (this bit — the job
+storage on this machine had already split between <root>/storage and
+backend/storage). Env vars still override everything.
 """
 from __future__ import annotations
 
@@ -9,9 +15,12 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_ROOT = Path(__file__).resolve().parents[2]   # backend/app/config.py → repo root
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_ROOT / ".env"),
+                                      env_file_encoding="utf-8", extra="ignore")
 
     # translation provider keys
     deepseek_api_key: str = ""
@@ -36,7 +45,7 @@ class Settings(BaseSettings):
 
     # paths / defaults
     ffmpeg_path: str = ""  # explicit ffmpeg(.exe) or its bin dir; empty → resolve from PATH
-    vizsup_storage_dir: Path = Path("./storage")
+    vizsup_storage_dir: Path = _ROOT / "storage"
     vizsup_default_translator: str = "deepseek"
     vizsup_default_tts: str = "edge"
     vizsup_default_asr: str = "faster_whisper"
