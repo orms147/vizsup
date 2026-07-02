@@ -59,66 +59,101 @@ def parse_time(text: str) -> float | None:
         return None
 
 
-def _overrides_path(job):
-    return job.work_dir / "overrides.json"
-
-
 def load_overrides(job) -> list[dict]:
-    """Per-cue dub overrides aligned with vi.srt order (gain_db, mute)."""
-    p = _overrides_path(job)
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except Exception:  # noqa: BLE001
-            return []
-    return []
+    """Per-cue dub overrides — delegates to the shared backend loader."""
+    from app.pipeline import sidecars
 
-
-def _style_overrides_path(job):
-    return job.work_dir / "style_overrides.json"
+    return sidecars.load_overrides(job)
 
 
 def load_style_overrides(job) -> dict:
-    """Per-cue subtitle-style overrides keyed by 1-based cue position (string)."""
-    p = _style_overrides_path(job)
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception:  # noqa: BLE001
-            return {}
-    return {}
+    """Per-cue style overrides (string keys) — delegates to the shared loader."""
+    from app.pipeline import sidecars
+
+    return sidecars.load_style_overrides(job)
+
+
+def _zh_ref_path(job):
+    return job.work_dir / "zh_ref.json"
+
+
+def _default_zh(job, n: int) -> list[str]:
+    """The naive reference pairing: row i ↔ cn.srt line i."""
+    zh = parse_srt(job.cn_srt) if job.cn_srt.exists() else []
+    return [zh[i].text if i < len(zh) else "" for i in range(n)]
 
 
 def load_pair(job) -> list[EditorCue]:
-    """Load vi.srt (editable) aligned with cn.srt (reference) + dub & style overrides."""
+    """Load vi.srt (editable) aligned with the Chinese reference + dub & style
+    overrides. The zh column prefers ``zh_ref.json`` (written by save_vi when
+    structural edits shifted rows off the naive cn.srt index pairing); a
+    missing/length-mismatched sidecar degrades to the index pairing — never
+    worse than the old behavior."""
     vi = parse_srt(job.vi_srt) if job.vi_srt.exists() else []
-    zh = parse_srt(job.cn_srt) if job.cn_srt.exists() else []
-    ov = load_overrides(job)
-    sov = load_style_overrides(job)
+    zh_texts = _default_zh(job, len(vi))
+    try:
+        data = json.loads(_zh_ref_path(job).read_text(encoding="utf-8"))
+        if isinstance(data, list) and len(data) == len(vi):
+            zh_texts = [str(x) for x in data]
+    except (OSError, ValueError):
+        pass
+    from app.pipeline import sidecars
+
+    ov = sidecars.load_overrides(job)
+    sov = sidecars.load_style_overrides(job)
     out: list[EditorCue] = []
     for i, c in enumerate(vi):
-        zh_text = zh[i].text if i < len(zh) else ""
         o = ov[i] if i < len(ov) else {}
-        out.append(EditorCue(start=c.start, end=c.end, vi=c.text, zh=zh_text,
+        out.append(EditorCue(start=c.start, end=c.end, vi=c.text, zh=zh_texts[i],
                              gain_db=float(o.get("gain_db", 0.0)), mute=bool(o.get("mute", False)),
                              style=sov.get(str(i + 1))))
     return out
 
 
 def save_vi(job, cues: list[EditorCue]) -> None:
+    from app.pipeline import sidecars
+
     rows = [Cue(index=i + 1, start=c.start, end=c.end, text=c.vi) for i, c in enumerate(cues)]
     write_srt(rows, job.vi_srt)
-    # dub overrides sidecar (aligned with vi.srt order; written only when any set)
-    ov = [{"gain_db": round(c.gain_db, 2), "mute": c.mute} for c in cues]
-    if any(o["gain_db"] or o["mute"] for o in ov):
-        _overrides_path(job).write_text(json.dumps(ov, ensure_ascii=False), encoding="utf-8")
-    elif _overrides_path(job).exists():
-        _overrides_path(job).unlink()
-    # per-line style sidecar, keyed by 1-based position
-    sov = {str(i + 1): c.style for i, c in enumerate(cues) if c.style}
-    if sov:
-        _style_overrides_path(job).write_text(json.dumps(sov, ensure_ascii=False), encoding="utf-8")
-    elif _style_overrides_path(job).exists():
-        _style_overrides_path(job).unlink()
+    sidecars.save_overrides(job, [{"gain_db": round(c.gain_db, 2), "mute": c.mute} for c in cues])
+    sidecars.save_style_overrides(job, {str(i + 1): c.style for i, c in enumerate(cues) if c.style})
+    # zh reference sidecar: rows are positional, so split/merge/delete shift later
+    # rows off the naive cn.srt pairing — persist the editor's zh column whenever
+    # it differs (and drop the file when the pairing is redundant again)
+    zh_list = [c.zh for c in cues]
+    p = _zh_ref_path(job)
+    if zh_list != _default_zh(job, len(cues)):
+        p.write_text(json.dumps(zh_list, ensure_ascii=False), encoding="utf-8")
+    elif p.exists():
+        p.unlink()
+
+
+# --- pure structural edits (policy lives HERE, headless-testable; the editor
+# widget methods are thin wrappers) ------------------------------------------
+
+def split_cue(c: EditorCue) -> tuple[EditorCue, EditorCue]:
+    """Split at the time midpoint, words halved; both halves inherit the per-line
+    dub + style settings (P0-2 / C-3 policy); the zh reference stays on the
+    first half."""
+    mid = (c.start + c.end) / 2
+    words = c.vi.split()
+    half = len(words) // 2
+    a = EditorCue(start=c.start, end=mid, vi=" ".join(words[:half]), zh=c.zh,
+                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+    b = EditorCue(start=mid, end=c.end, vi=" ".join(words[half:]), zh="",
+                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+    return a, b
+
+
+def merge_cues(a: EditorCue, b: EditorCue) -> EditorCue:
+    """Merge b into a: texts join (zh gains a space only between two non-empty
+    parts), mute ORs (never silently un-mute), the larger |gain| wins, and the
+    FIRST cue's style is kept (C-3 policy)."""
+    zh = f"{a.zh} {b.zh}".strip() if (a.zh and b.zh) else (a.zh + b.zh).strip()
+    return EditorCue(
+        start=a.start, end=b.end,
+        vi=(a.vi + " " + b.vi).strip(), zh=zh,
+        gain_db=a.gain_db if abs(a.gain_db) >= abs(b.gain_db) else b.gain_db,
+        mute=a.mute or b.mute,
+        style=a.style,
+    )

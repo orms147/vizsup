@@ -31,15 +31,11 @@ _RETRY_DELAYS = (1.0, 4.0)   # 3 attempts: try, wait 1s, try, wait 4s, final try
 
 
 def load_overrides(job: Job) -> list[dict]:
-    """Per-cue dub overrides (gain_db, mute) aligned with vi.srt order."""
-    p = job.work_dir / "overrides.json"
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except Exception:  # noqa: BLE001
-            return []
-    return []
+    """Per-cue dub overrides (gain_db, mute) — delegates to pipeline.sidecars
+    (the single loader implementation; kept here for existing callers)."""
+    from app.pipeline import sidecars
+
+    return sidecars.load_overrides(job)
 
 
 def _seg_hash(provider: str, voice: str | None, rate: str | None, text: str) -> str:

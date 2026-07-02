@@ -612,27 +612,14 @@ class EditorView(QWidget):
         i = self._cur()
         if 0 <= i < len(self.cues):
             self._snapshot()
-            c = self.cues[i]
-            orig_end = c.end                 # capture BEFORE mutating, so the second half is exact
-            mid = (c.start + c.end) / 2
-            words = c.vi.split()
-            half = len(words) // 2
-            left, right = " ".join(words[:half]), " ".join(words[half:])
-            c.end, c.vi = mid, left
-            # both halves inherit the per-line dub + style settings (P0-2 / C-3 policy)
-            self.cues.insert(i + 1, EditorCue(start=mid, end=orig_end, vi=right, zh="",
-                                              gain_db=c.gain_db, mute=c.mute, style=c.style))
+            # policy lives in cuemodel.split_cue (pure, headless-tested)
+            self.cues[i:i + 1] = list(cuemodel.split_cue(self.cues[i]))
             self._reload()
 
     def _merge(self) -> None:
         i = self._cur()
         if 0 <= i < len(self.cues) - 1:
             self._snapshot()
-            a, b = self.cues[i], self.cues[i + 1]
-            a.end = b.end
-            a.vi = (a.vi + " " + b.vi).strip()
-            a.zh = (a.zh + b.zh).strip()
-            a.mute = a.mute or b.mute                                  # don't silently un-mute
-            a.gain_db = a.gain_db if abs(a.gain_db) >= abs(b.gain_db) else b.gain_db
-            self.cues.pop(i + 1)
+            # policy lives in cuemodel.merge_cues (pure, headless-tested)
+            self.cues[i:i + 2] = [cuemodel.merge_cues(self.cues[i], self.cues[i + 1])]
             self._reload()

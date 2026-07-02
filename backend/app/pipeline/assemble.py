@@ -32,15 +32,11 @@ from app.pipeline.srt import parse_srt, write_ass
 
 
 def _load_cue_styles(job: Job) -> dict[int, dict] | None:
-    """Read style_overrides.json (1-based string keys) → {int: style} for write_ass."""
-    p = job.work_dir / "style_overrides.json"
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return {int(k): v for k, v in data.items()} or None
-        except Exception:  # noqa: BLE001
-            return None
-    return None
+    """Per-cue styles for write_ass — delegates to pipeline.sidecars (the single
+    loader implementation; kept here for existing callers)."""
+    from app.pipeline import sidecars
+
+    return sidecars.load_cue_styles(job)
 
 # Dub-fit constants (KrillinAI/VideoLingo consensus).
 SPEED_ACCEPT = 1.15   # below this, speed-up is inaudible → no warning
