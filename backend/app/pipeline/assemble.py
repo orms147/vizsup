@@ -45,6 +45,7 @@ MAX_CARRY = 1.5       # don't let the dub drift more than this behind the pictur
 TRIM_BUDGET = 0.4     # tail we'll fade-trim to avoid pushing the next line
 
 _RUBBERBAND: bool | None = None
+_RB_OPTS: str | None = None
 
 
 def _has_rubberband() -> bool:
@@ -59,11 +60,28 @@ def _has_rubberband() -> bool:
     return _RUBBERBAND
 
 
+def _rubberband_opts() -> str:
+    """Speech-tuned rubberband options, kept only when this ffmpeg build's filter
+    actually documents them (probed once via `-h filter=rubberband`)."""
+    global _RB_OPTS
+    if _RB_OPTS is None:
+        try:
+            out = subprocess.run([ffmpeg_bin(), "-hide_banner", "-h", "filter=rubberband"],
+                                 capture_output=True, text=True).stdout
+        except Exception:  # noqa: BLE001
+            out = ""
+        opts = [f"{k}={v}" for k, v in
+                (("transients", "crisp"), ("pitchq", "quality"), ("formant", "preserved"))
+                if k in out]
+        _RB_OPTS = (":" + ":".join(opts)) if opts else ""
+    return _RB_OPTS
+
+
 def _tempo_filter(tempo: float) -> str:
     """Pitch-preserving speed-up. rubberband sounds better on speech; fall back to
     atempo (fine for our ≤1.3x range — single stage, well within atempo's 0.5–2x)."""
     if _has_rubberband():
-        return f"rubberband=tempo={tempo:.4f}:pitch=1"
+        return f"rubberband=tempo={tempo:.4f}:pitch=1{_rubberband_opts()}"
     return f"atempo={tempo:.4f}"
 
 
@@ -244,7 +262,9 @@ def _build_render(
     labels: list[str] = []
     for p in placements:
         i = p["inp"]
-        af: list[str] = []
+        # resample every segment up-front (edge-tts mp3 is 24 kHz): letting amix
+        # implicitly resample N inputs is slower and a quality risk
+        af: list[str] = ["aresample=48000"]
         if p["tempo"] > 1.001:
             af.append(_tempo_filter(p["tempo"]))
         gain = _gain_db(segments[i - 1][0])
@@ -275,6 +295,9 @@ def _build_render(
 
     if labels:
         dub = _mix_chunked(labels, parts)
+        # consistent dub level across voices/clips; before mixing with the original
+        parts.append(f"{dub}loudnorm=I=-16:TP=-1.5:LRA=11[dubn]")
+        dub = "[dubn]"
         if abs(dub_volume - 1.0) > 1e-3:
             parts.append(f"{dub}volume={dub_volume:.3f}[dubvol]")
             dub = "[dubvol]"
@@ -302,7 +325,7 @@ def _build_render(
         "-filter_complex_script", "filter_complex.txt",
         "-map", "[v]", "-map", audio_map,
         "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "192k",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "output.mp4",
     ]
     return cmd
