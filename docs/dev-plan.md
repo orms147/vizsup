@@ -160,13 +160,42 @@ proofread is opt-in, budget-gated, and corrects low-confidence lines. Each verif
 > confidence-thresholding (currently proofreads all lines, not just low-confidence) and the vision
 > variant. **Still open in E-1/E-2:** auto hardsub-detect and FunASR+WhisperX.
 
+> **E-1 DONE (2026-07-02).** `detect_hardsubs` = full RapidOCR recognition (not detection-only —
+> recognized CJK is far more precise than a text box) on ~16 frames sampled across the middle 80%,
+> bottom-third crop; decision = ≥3 hits AND ≥25% of extracted samples (`_decide`/`_sample_times`
+> are pure + pytest-covered). Wired as **"Tự động phát hiện" (new Screen-1 default)** and CLI
+> `vizsup run --source auto|asr|ocr` + `--ocr-region`; any detect failure (no OCR deps, bad video)
+> logs and falls back to ASR instead of aborting. Verified on synthetic ffmpeg clips: drawtext
+> hardsub clip → True/OCR, clean clip → False/ASR (~9 s incl. engine build). **Also fixed while
+> verifying:** the M3 open item "does CUDA actually engage" — it did NOT: rapidocr ≥3.4 rejects the
+> PP-OCRv5 pin (defaults are v6) and the old ladder lost the CUDA keys with it → `_build_ocr` now
+> tries v5+GPU → GPU → v5 → defaults, so GPU survives a rejected pin. Env repair on this box:
+> `opencv-python-headless` was force-reinstalled (the opencv-python↔headless shared-`cv2/` conflict
+> had deleted the module). **Still open in M4:** E-2 (FunASR is in; WhisperX word-timing layer isn't).
+
+---
+
+## Utilities (2026-07-02)
+
+- **`vizsup doctor` / `python -m app.doctor`** (`backend/app/doctor.py`) — read-only environment
+  self-check: ffmpeg/ffprobe/rubberband, yt-dlp + Douyin cookies, OCR stack (incl. the
+  rapidocr-without-cv2 breakage and the opencv-python-vs-PySide6 crash), ASR stack + GPU,
+  edge-tts, VN fonts, provider keys, storage writability, and **which `.env` is actually in
+  effect** (pydantic loads it CWD-relative — running from the wrong dir silently loses keys).
+- **Glossary auto-load** — `translate.load_glossary(job)` merges `<storage>/glossary.json` +
+  `<work_dir>/glossary.json` (job wins) and `translate.translate()` applies it when no explicit
+  glossary is passed; worker logs entry count. Backlog's "glossary UI" is now only the UI part.
+- **Fixes:** CLI `vizsup render` crashed on a removed `assemble` kwarg (`replace_audio` →
+  `audio_mode`); Screen-1 `ocr_region`/`ocr_proofread` now actually persist across launches
+  (they were read back but never saved — missing from `store._UI_KEYS`).
+
 ---
 
 ## Backlog (research/design needed — not scheduled)
 
-Per-line timing nudge (±ms) + lock; hardsub inpainting (STTN/LaMa); glossary UI; batch
-queue with pause-at-gate; voice cloning (legal/ethical gate). Pull into a milestone only when a
-concrete spec exists.
+Per-line timing nudge (±ms) + lock; hardsub inpainting (STTN/LaMa); glossary UI (file-based
+glossary already auto-loads); batch queue with pause-at-gate; voice cloning (legal/ethical gate).
+Pull into a milestone only when a concrete spec exists.
 
 ---
 

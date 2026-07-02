@@ -9,7 +9,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 `input → download → hardsub-detect → (OCR | ASR) → translate(2-pass) → ⛔HUMAN EDIT GATE → TTS → fit+mix → render`
 
 - **download** — `yt-dlp` (cookies, domain-routed). Fallback: BBDown (Bilibili), TikTokDownloader (Douyin).
-- **hardsub-detect** — PaddleOCR PP-OCRv5 *detection-only* on a bottom-third crop; stable recurring box ⇒ hardsubs.
+- **hardsub-detect** — RapidOCR over ~16 sampled bottom-third crops; enough frames with recognized Chinese text ⇒ hardsubs → OCR path, else ASR ("Tự động" in the GUI, `--source auto` in the CLI; manual override always available).
 - **OCR** (hardsubs present) — VideOCR / PP-OCRv5 → CN SRT → optional LLM proofread.
 - **ASR** (no hardsubs) — WhisperX timing + FunASR Paraformer-Large transcript.
 - **translate** — two-pass, provider-pluggable: CN-native draft → frontier refine. Strip timecodes locally; batch ~50 lines with context + glossary + video meta.
@@ -56,6 +56,7 @@ uvicorn app.main:app --reload  # API server (once implemented)
 npm install && npm run dev
 
 # checks
+python -m app.doctor           # environment self-check: ffmpeg/OCR/ASR/GPU/fonts/keys (or: vizsup doctor)
 python -c "from app.providers.registry import list_providers; print(list_providers())"
 ffmpeg -filters | findstr rubberband
 ```
