@@ -61,6 +61,16 @@ Cheap, high-value closures. N-9 lands first so every later task is CI-gated.
 can no longer be silently destroyed (backup + guard + skip); the API renders again; provider list
 never offers an engine that can't run; storage/.env stop depending on launch dir.
 
+> **✅ M5 DONE (2026-07-02, commits `297228d`…`d7174bb`).** All 8 tasks landed with 89 headless
+> tests green + ruff clean. Notes vs spec: N-3's mtime heuristic was replaced with
+> exists+`--force`+always-backup (translate itself leaves vi.srt newer than cn.srt, so the mtime
+> rule would block every legitimate re-run); N-12 web-verified `glm-5.2` as still-correct (no id
+> change — TODO removed, `ZHIPU_MODEL` override + chat-ping test_connection added) and bumped
+> OpenRouter's default to `deepseek/deepseek-v4-flash`; stub TTS now grey out as "sắp có";
+> N-20 additionally promoted the two shared-package-dir landmines (opencv-full+PySide6,
+> onnxruntime×2) to doctor hard-failures. Worker/CLI also gained artifact-based stage skipping
+> (resume-friendly re-runs). Suite: 19 → 89 tests.
+
 ---
 
 ## Milestone 6 — Long-run reliability (paid-work durability, renders that can't be wasted)
