@@ -398,6 +398,7 @@ class EditorView(QWidget):
 
     # --- load / save ---------------------------------------------------------
     def load(self, job) -> None:
+        self.flush()   # job switch: save the OLD job's pending edit before replacing it
         self.job = job
         self.cues = cuemodel.load_pair(job)
         self.video.load(job.source_video)
@@ -564,6 +565,13 @@ class EditorView(QWidget):
     def save_now(self) -> None:
         self._save_timer.stop()
         self._save()
+
+    def flush(self) -> None:
+        """Persist a pending debounced autosave immediately. The 600 ms window
+        means the newest edit lives only in memory — without this, quitting or
+        switching jobs inside that window silently drops it. No-op when clean."""
+        if self._save_timer.isActive():
+            self.save_now()
 
     def _mark_dirty(self) -> None:
         self.dirtyChanged.emit(True)

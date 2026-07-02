@@ -162,6 +162,9 @@ class MainWindow(QMainWindow):
             self.input.show_error(f"Lỗi mở trình sửa: {type(exc).__name__}: {exc}")
 
     def _resume(self, job_id: str) -> None:
+        if self._busy():  # don't hijack self.job/self.opts out from under a running worker
+            self.status.setText("● Đang bận — đợi tác vụ hiện tại xong rồi mở dự án khác.")
+            return
         loaded = store.load_job(job_id)
         if not loaded:
             return
@@ -172,6 +175,15 @@ class MainWindow(QMainWindow):
     def _delete_job(self, job_id: str) -> None:
         from PySide6.QtWidgets import QMessageBox
 
+        if self._busy():
+            self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
+            return
+        if self.job is not None and job_id == self.job.id:
+            # deleting the open job would make the next autosave write into a
+            # removed directory and crash the save timer
+            QMessageBox.information(self, "Xóa dự án",
+                                    "Dự án này đang mở — quay lại màn hình đầu trước khi xóa.")
+            return
         if QMessageBox.question(self, "Xóa dự án", f"Xóa toàn bộ tệp của dự án này?\n{job_id}") \
                 == QMessageBox.StandardButton.Yes:
             store.delete_job(job_id)
@@ -301,6 +313,13 @@ class MainWindow(QMainWindow):
             self.input.append_log("⏳ Đang hủy…")
 
     def closeEvent(self, e) -> None:
+        # flush a pending debounced edit BEFORE teardown — but never while a render
+        # worker might be reading vi.srt mid-run
+        try:
+            if not self._busy():
+                self.editor.flush()
+        except Exception:  # noqa: BLE001 - closing must never get stuck on a save
+            pass
         # never let Python tear down a still-running QThread (hard crash) — cancel + join
         try:
             if self._thread and self._thread.isRunning():
