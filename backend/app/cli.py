@@ -103,7 +103,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _skip("vi.srt", "translate (edits preserved)")
     else:
         print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
-        translate.translate(job, draft=args.translator, refine=args.refine, force=force)
+        translate.translate(job, draft=args.translator, refine=args.refine, force=force, log=print)
 
     print("\n" + "=" * 64)
     print("EDIT GATE — review/fix the Vietnamese subtitles, then render:")

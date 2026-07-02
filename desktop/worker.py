@@ -186,7 +186,8 @@ class PipelineWorker(QObject):
                 if gl:
                     self.log.emit(f"… dùng bảng thuật ngữ ({len(gl)} mục: storage/glossary.json + của dự án)")
                 translate.translate(job, draft=o.get("translator", "passthrough"),
-                                    refine=o.get("refine"), glossary=gl or None)
+                                    refine=o.get("refine"), glossary=gl or None,
+                                    log=self.log.emit)
                 self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             store.debug("translate ok → emit gate_reached")
 

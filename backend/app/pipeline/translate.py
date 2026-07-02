@@ -5,13 +5,22 @@ Pass 2 (refine, optional): a frontier model improves Vietnamese register/fluency
 
 Timecodes are stripped here and re-attached after — models only ever see text.
 The result is written to ``job.vi_srt``, which the human edit gate then edits.
+
+Resilience (N-4): every provider batch call gets 3 attempts with backoff; the
+draft pass checkpoints each finished batch (``translate.checkpoint.json`` +
+incremental ``vi.draft.srt``) so a hard failure at batch N keeps batches 1..N-1
+on disk and the next run resumes instead of re-buying them; a refine batch that
+still fails after retries keeps that batch's DRAFT lines — polish failure never
+discards paid draft work.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import time
+from collections.abc import Callable
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -21,6 +30,7 @@ from app.providers.registry import get_translator
 
 # Batch size keeps each request bounded while giving the model surrounding context.
 BATCH = 50
+_RETRY_DELAYS = (2.0, 8.0)   # 3 attempts: try, wait 2s, try, wait 8s, final try
 
 
 def _norm(s: str) -> str:
@@ -56,6 +66,35 @@ def _batched(seq: list, n: int):
         yield seq[i : i + n]
 
 
+def _retry(fn, *, sleep: Callable[[float], None]):
+    """3 attempts with backoff. Retries only EXCEPTIONS (429/timeouts) — parse
+    misses already degrade safely inside parse_numbered and must not double-spend."""
+    for delay in (*_RETRY_DELAYS, None):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001
+            if delay is None:
+                raise
+            sleep(delay)
+
+
+def _ckpt_key(provider: str, cn: list[str]) -> str:
+    # covers the POST-dedupe text list (a stale checkpoint after cn.srt changed
+    # would misalign lines) and the provider (never mix two engines' drafts)
+    return hashlib.sha1((provider + "\n" + "\n".join(cn)).encode()).hexdigest()
+
+
+def _load_checkpoint(path: Path, key: str) -> list[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("key") == key and isinstance(data.get("done"), list):
+            done = [str(x) for x in data["done"]]
+            return done[: len(done) - len(done) % BATCH]   # only whole batches count
+    except (OSError, ValueError):
+        pass
+    return []
+
+
 def translate_cues(
     cues: list[Cue],
     *,
@@ -63,8 +102,14 @@ def translate_cues(
     refine: str | None = None,
     context: dict | None = None,
     glossary: dict[str, str] | None = None,
+    work_dir: Path | None = None,
+    log: Callable[[str], None] | None = None,
+    _sleep: Callable[[float], None] = time.sleep,
 ) -> list[Cue]:
     cn = [c.text for c in cues]
+    ckpt = (work_dir / "translate.checkpoint.json") if work_dir else None
+    draft_srt = (work_dir / "vi.draft.srt") if work_dir else None
+    n_batches = (len(cn) + BATCH - 1) // BATCH
 
     def _require(provider_name: str):
         provider = get_translator(provider_name)
@@ -74,11 +119,31 @@ def translate_cues(
             )
         return provider
 
+    def _persist_progress(key: str, out: list[str]) -> None:
+        if ckpt is not None:
+            ckpt.write_text(json.dumps({"key": key, "done": out}, ensure_ascii=False),
+                            encoding="utf-8")
+        if draft_srt is not None:   # timecodes re-attached for the completed prefix
+            write_srt([Cue(index=c.index, start=c.start, end=c.end, text=t)
+                       for c, t in zip(cues, out)], draft_srt)
+
     def draft_pass(provider_name: str, src: list[str]) -> list[str]:
         provider = _require(provider_name)
-        out: list[str] = []
-        for batch in _batched(src, BATCH):
-            out.extend(provider.translate_texts(batch, context=context, glossary=glossary))
+        key = _ckpt_key(provider_name, src)
+        out: list[str] = _load_checkpoint(ckpt, key) if ckpt else []
+        if out and log:
+            log(f"↷ Tiếp tục từ điểm dừng trước: {len(out)}/{len(src)} dòng nháp đã có")
+        for i in range(0, len(src), BATCH):
+            batch = src[i:i + BATCH]
+            if i + len(batch) <= len(out):
+                continue   # covered by the checkpoint
+            result = _retry(
+                lambda b=batch: provider.translate_texts(b, context=context, glossary=glossary),
+                sleep=_sleep)
+            out.extend(result)
+            _persist_progress(key, out)   # a hard failure later keeps this batch
+            if log and n_batches > 1:
+                log(f"… dịch lô {i // BATCH + 1}/{n_batches}")
         return out
 
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
@@ -86,8 +151,18 @@ def translate_cues(
         # aligned since cn/vi are 1:1); parse falls back to the draft, never the source.
         provider = _require(provider_name)
         out: list[str] = []
-        for cn_b, vi_b in zip(_batched(cn_src, BATCH), _batched(vi_draft, BATCH)):
-            out.extend(provider.refine_texts(cn_b, vi_b, context=context, glossary=glossary))
+        for bi, (cn_b, vi_b) in enumerate(zip(_batched(cn_src, BATCH),
+                                              _batched(vi_draft, BATCH)), 1):
+            try:
+                out.extend(_retry(
+                    lambda c=cn_b, v=vi_b: provider.refine_texts(
+                        c, v, context=context, glossary=glossary),
+                    sleep=_sleep))
+            except Exception as exc:  # noqa: BLE001 - polish failure keeps the draft
+                out.extend(vi_b)
+                if log:
+                    log(f"⚠ Tinh chỉnh thất bại ở lô {bi} ({type(exc).__name__}) — "
+                        f"dùng bản nháp cho lô này.")
         return out
 
     def _check_count(out: list[str], stage: str, provider_name: str) -> None:
@@ -152,6 +227,7 @@ def translate(
     refine: str | None = None,
     glossary: dict[str, str] | None = None,
     force: bool = False,
+    log: Callable[[str], None] | None = None,
 ) -> Job:
     """Read ``job.cn_srt``, translate, write ``job.vi_srt``.
 
@@ -181,6 +257,10 @@ def translate(
     }
     if glossary is None:
         glossary = load_glossary(job) or None
-    vi = translate_cues(cues, draft=draft, refine=refine, context=context, glossary=glossary)
+    vi = translate_cues(cues, draft=draft, refine=refine, context=context,
+                        glossary=glossary, work_dir=job.work_dir, log=log)
     write_srt(vi, job.vi_srt)
+    # the paid work is now safely in vi.srt — the recovery artifacts are redundant
+    (job.work_dir / "translate.checkpoint.json").unlink(missing_ok=True)
+    (job.work_dir / "vi.draft.srt").unlink(missing_ok=True)
     return job
