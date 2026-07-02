@@ -8,8 +8,10 @@ The result is written to ``job.vi_srt``, which the human edit gate then edits.
 """
 from __future__ import annotations
 
+import json
 import re
 from difflib import SequenceMatcher
+from pathlib import Path
 
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
@@ -110,6 +112,25 @@ def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7)
     return out or text
 
 
+def load_glossary(job: Job) -> dict[str, str]:
+    """User-maintained zh→vi term table, merged from two optional files:
+    ``<storage>/glossary.json`` (all jobs) then ``<work_dir>/glossary.json``
+    (this video — its entries win). Missing/invalid files are simply skipped,
+    so the pipeline never fails because of a hand-edited glossary."""
+    from app.config import settings
+
+    merged: dict[str, str] = {}
+    for p in (Path(settings.vizsup_storage_dir) / "glossary.json",
+              job.work_dir / "glossary.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            merged.update({str(k): str(v) for k, v in data.items() if str(k).strip()})
+    return merged
+
+
 def translate(
     job: Job,
     *,
@@ -117,12 +138,18 @@ def translate(
     refine: str | None = None,
     glossary: dict[str, str] | None = None,
 ) -> Job:
-    """Read ``job.cn_srt``, translate, write ``job.vi_srt``."""
+    """Read ``job.cn_srt``, translate, write ``job.vi_srt``.
+
+    ``glossary=None`` auto-loads the user's glossary files (see load_glossary);
+    pass an explicit dict (or {}) to override.
+    """
     cues = dedupe_adjacent(parse_srt(job.cn_srt))   # one translation per real subtitle
     context = {
         "title": job.metadata.get("title"),
         "platform": job.metadata.get("platform"),
     }
+    if glossary is None:
+        glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context, glossary=glossary)
     write_srt(vi, job.vi_srt)
     return job
