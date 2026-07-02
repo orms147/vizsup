@@ -7,8 +7,10 @@ impossible without cumulative drift):
   cue's own duration — this reclaims the silent gaps between cues as dub time.
 - A segment never starts before the previous segment's audio ends (no overlap).
 - If a segment still overruns: speed it up (rubberband, capped ~1.30x), then
-  trim a short tail with a fade, then push the next segment later but with a
-  bounded carry that resets at any real gap (≥0.7s) so sync self-heals.
+  trim a short tail with a fade (small overruns), or push the next segment later
+  — the push is bounded: once a line has slipped >= MAX_CARRY behind its cue,
+  overruns are trimmed instead of pushed, and any gap the audio doesn't fill
+  re-anchors the timeline (start = max(cue.start, prev_end)), so drift self-heals.
 - Lines that even max-speed can't fit are reported so the user can shorten them.
 
 Audio mixing (B3): replace original / mix at a set volume / sidechain-duck the
@@ -43,7 +45,6 @@ def _load_cue_styles(job: Job) -> dict[int, dict] | None:
 # Dub-fit constants (KrillinAI/VideoLingo consensus).
 SPEED_ACCEPT = 1.15   # below this, speed-up is inaudible → no warning
 SPEED_MAX = 1.30      # hard cap; beyond this speech turns "auctioneer"
-GAP_RESET = 0.7       # a gap this big resets accumulated timing carry
 MAX_CARRY = 1.5       # don't let the dub drift more than this behind the picture
 TRIM_BUDGET = 0.4     # tail we'll fade-trim to avoid pushing the next line
 

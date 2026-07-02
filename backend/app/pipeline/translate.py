@@ -88,9 +88,21 @@ def translate_cues(
             out.extend(provider.refine_texts(cn_b, vi_b, context=context, glossary=glossary))
         return out
 
+    def _check_count(out: list[str], stage: str, provider_name: str) -> None:
+        # A short reply must be a loud error, not a silent truncation: the final
+        # zip() would drop trailing cues. parse_numbered pads chat providers, but
+        # DeepL-style APIs return their list verbatim.
+        if len(out) != len(cn):
+            raise RuntimeError(
+                f"Bộ dịch '{provider_name}' ({stage}) trả về {len(out)} dòng cho "
+                f"{len(cn)} câu — dừng lại để không ghi vi.srt lệch hàng."
+            )
+
     vi = draft_pass(draft, cn)
+    _check_count(vi, "bản nháp", draft)
     if refine:
         vi = refine_pass(refine, cn, vi)
+        _check_count(vi, "tinh chỉnh", refine)
 
     return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, vi)]
 
