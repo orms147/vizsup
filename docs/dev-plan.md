@@ -87,6 +87,11 @@ never offers an engine that can't run; storage/.env stop depending on launch dir
 changed lines; a render can be cancelled and can't race the editor; 30–60-min videos render;
 the Chinese reference column survives structural edits + reopen.
 
+> **✅ M6 DONE (2026-07-02, commits `3c971ac`…).** All 5 tasks landed; suite 89 → 124 headless
+> tests, ruff clean. N-18 additionally verified with a real-ffmpeg smoke (replace/mix/duck all
+> render through `-filter_complex_script`). Bonus in N-17: merge now joins two non-empty zh parts
+> with a space (was direct concatenation).
+
 ---
 
 ## Milestone 7 — Engine depth (output quality; includes E-2)
