@@ -1,5 +1,10 @@
 # vizsup — Ordered Development Plan (v2 · 2026-07-02)
 
+> **⤴ This plan is COMPLETE through M8-light and is now a historical record.** The forward-looking
+> plan lives in **[docs/plan/](plan/README.md)** — an implementation handbook (API-optimization
+> workstream + reorganized remaining tasks) written to be executed by a fresh Claude Opus 4.8
+> session. Start at `docs/plan/README.md`.
+
 Single sequential workflow for one maintainer. Each task lists WHAT, the files it touches, effort
 (S/M/L), dependencies, the key risk, and how to VERIFY it — **headless-first** (pytest construct/
 render checks; GUI gestures get one manual smoke). Task ids `N-*` are stable; milestones group them
@@ -155,10 +160,11 @@ text editor; a Douyin cookie failure no longer ends the session.
 Per-line timing nudge (±ms) + lock; undo for drags/style/gain + redo stack; hardsub **inpainting**
 (STTN/LaMa — N-16's blur is the pragmatic middle step); **vision-LLM OCR proofread** (suspect lines
 + frame crops; revisit after N-14 — opt-in upload per CLAUDE.md); karaoke word-highlight captions;
-web-frontend feature parity (N-11 only fixes the crash; auto/OCR route + duck/volume knobs via API
-are still desktop-only); Settings dialog expansion (cookies, storage dir, ffmpeg path, whisper
-model); real waveform + follow-playback timeline; find/replace in the editor; packaging (PyInstaller
-one-folder + ffmpeg download step); VieNeu-TTS provider; FireRedASR.
+web-frontend feature parity (N-11 fixed the crash and exposed duck/volume knobs in RenderOptions;
+the remaining API gap — auto/OCR route + cover_mode — is docs/plan/C-workflow-ux.md UX-6);
+Settings dialog expansion (cookies, storage dir, ffmpeg path, whisper model); real waveform +
+follow-playback timeline; find/replace in the editor; packaging (PyInstaller one-folder + ffmpeg
+download step); VieNeu-TTS provider; FireRedASR.
 
 ---
 

@@ -10,10 +10,10 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 
 - **download** — `yt-dlp` (cookies, domain-routed). Fallback: BBDown (Bilibili), TikTokDownloader (Douyin).
 - **hardsub-detect** — RapidOCR over ~16 sampled bottom-third crops; enough frames with recognized Chinese text ⇒ hardsubs → OCR path, else ASR ("Tự động" in the GUI, `--source auto` in the CLI; manual override always available).
-- **OCR** (hardsubs present) — VideOCR / PP-OCRv5 → CN SRT → optional LLM proofread.
-- **ASR** (no hardsubs) — WhisperX timing + FunASR Paraformer-Large transcript.
+- **OCR** (hardsubs present) — RapidOCR (ONNX PP-OCRv5+) frame sampling → CN SRT with per-cue confidence (`ocr_report.json`) → optional LLM proofread (suspect lines only).
+- **ASR** (no hardsubs) — default faster-whisper; `funasr_aligned` provider fuses a FunASR Paraformer transcript with word-level timing (install `.[asr-accurate]`).
 - **translate** — two-pass, provider-pluggable: CN-native draft → frontier refine. Strip timecodes locally; batch ~50 lines with context + glossary + video meta.
-- **HUMAN EDIT GATE** — React timeline+table editor. **Nothing downstream runs until the user approves.**
+- **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.**
 - **TTS** — provider-pluggable; default edge-tts vi-VN.
 - **fit+mix** — place each VI segment at its absolute start, atempo to fit, pad silence; duck/replace original audio.
 - **render** — FFmpeg burns styled `.ass`; also export editable `.srt`/`.ass`.
@@ -36,24 +36,22 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 backend/app/          pipeline + providers + FastAPI (Python) — UI-agnostic core
   pipeline/           one module per stage
   providers/          base.py, registry.py, translation/, tts/, asr/
-desktop/              PySide6 (Qt) GUI — PRIMARY (calls app.* directly, no HTTP) [to build]
-frontend/             React + Vite + Tailwind — OPTIONAL web UI (uses FastAPI; for remote use)
+desktop/              PySide6 (Qt) GUI — PRIMARY, built (calls app.* directly, no HTTP)
 storage/              per-job working dirs (gitignored)
 samples/              test clips
-docs/                 research, architecture, providers, ui-design-prompt
+docs/                 research, architecture, providers, dev-plan; docs/plan/ = active handbook
 .claude/              skills, agents, settings
 ```
+(No `frontend/` exists — a React web UI is parked in `docs/plan/D-backlog.md`.)
 
 ## Commands
 
 ```bash
-# backend (from backend/)
-uv pip install -e .            # or: pip install -e .
-python -m app.cli URL          # headless smoke path: download → edge-tts → ffmpeg burn
-uvicorn app.main:app --reload  # API server (once implemented)
-
-# frontend (from frontend/)
-npm install && npm run dev
+# backend (venv: backend/.venv)
+uv pip install -e .            # or: pip install -e .  (from backend/)
+python -m app.cli URL          # headless: download → subs → translate → gate; then `vizsup render`
+uvicorn app.main:app --reload  # FastAPI server (SRT/ASR path; OCR route desktop/CLI-only)
+python -m pytest -q            # from repo root (pytest.ini) — full headless suite
 
 # checks
 python -m app.doctor           # environment self-check: ffmpeg/OCR/ASR/GPU/fonts/keys (or: vizsup doctor)
