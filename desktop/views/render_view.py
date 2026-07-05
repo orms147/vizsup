@@ -74,8 +74,12 @@ class RenderView(QWidget):
         self.rb_replace = QRadioButton("  Thay giọng gốc")
         self.rb_mix = QRadioButton("  Trộn cùng giọng gốc")
         self.rb_duck = QRadioButton("  Giảm nền tự động (duck)")
+        self.rb_keep_music = QRadioButton("  Thay lời + giữ nhạc (Demucs)")
+        self.rb_keep_music.setToolTip(
+            "Tách lời khỏi nhạc nền bằng Demucs, thay lời bằng bản lồng tiếng nhưng GIỮ nhạc/"
+            "hiệu ứng. Cần cài Demucs (.[audio]); nếu chưa tách được sẽ tự chuyển sang trộn.")
         self.rb_replace.setChecked(True)
-        for rb in (self.rb_replace, self.rb_mix, self.rb_duck):
+        for rb in (self.rb_replace, self.rb_mix, self.rb_duck, self.rb_keep_music):
             self.audio_group.addButton(rb)
             ll.addWidget(rb)
         self.rb_replace.toggled.connect(self._sync_audio_enabled)
@@ -172,6 +176,8 @@ class RenderView(QWidget):
             return "mix"
         if self.rb_duck.isChecked():
             return "duck"
+        if self.rb_keep_music.isChecked():
+            return "keep_music"
         return "replace"
 
     # --- public API ----------------------------------------------------------

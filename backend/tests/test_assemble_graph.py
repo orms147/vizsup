@@ -105,6 +105,24 @@ def test_cover_blur_graph(big_job):
     assert "[vbg]ass=subs.ass[v]" in script          # subs burned on top of the blur
 
 
+def test_keep_music_adds_bg_input_and_mix(big_job):
+    job, segments = big_job
+    (job.work_dir / "bg.wav").write_bytes(b"instrumental")   # Demucs stem present
+    cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
+    assert cmd.count("bg.wav") == 1                          # extra input added
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[4:a]aresample=48000,volume=0.800[bg]" in script  # 3 segs → bg is input 4
+    assert "amix=inputs=2" in script and "[outa]" in script
+
+
+def test_keep_music_without_bg_falls_back_to_mix(big_job):
+    job, segments = big_job                                  # no bg.wav written
+    cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
+    assert "bg.wav" not in cmd                               # no phantom input
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[0:a]volume=0.800[bg]" in script                # mix path uses the original audio
+
+
 def test_cover_off_keeps_plain_ass_chain(big_job):
     job, segments = big_job
     assemble._build_render(job, segments[:3], audio_mode="replace",

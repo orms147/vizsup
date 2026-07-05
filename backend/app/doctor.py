@@ -176,6 +176,14 @@ def _check_tts() -> Check:
     return ("fail", "TTS (edge-tts)", 'chưa cài — pip install -e "." (backend/)')
 
 
+def _check_demucs() -> Check:
+    """Optional: the 'keep music' dub mode (ENG-2) needs Demucs (.[audio] extra)."""
+    if _installed("demucs"):
+        return ("ok", "Tách nhạc (Demucs)", f"chế độ giữ nhạc nền · v{_module_version('demucs')}")
+    return ("info", "Tách nhạc (Demucs)",
+            'tùy chọn, chỉ cần cho chế độ "giữ nhạc": pip install -e ".[audio]"')
+
+
 def _font_dirs() -> list[Path]:
     import os
 
@@ -273,6 +281,7 @@ def run_checks() -> list[Check]:
     checks += _check_ocr()
     checks += _check_asr()
     checks.append(_check_tts())
+    checks.append(_check_demucs())
     checks.append(_check_fonts())
     checks += _check_providers()
     checks += _check_storage()

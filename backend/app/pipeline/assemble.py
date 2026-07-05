@@ -254,9 +254,18 @@ def _build_render(
     so tests can assert on the produced command/graph without running ffmpeg."""
     wd = job.work_dir
 
+    # ENG-2: "keep music" needs the Demucs instrumental (bg.wav) as the background;
+    # without it (separation skipped/failed) fall back to plain mix.
+    if audio_mode == "keep_music" and not (wd / "bg.wav").exists():
+        if log:
+            log("⚠ Chưa tách được nhạc nền (bg.wav) — chuyển sang chế độ trộn (mix).")
+        audio_mode = "mix"
+
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
     for _, seg in segments:
         cmd += ["-i", str(Path(seg).relative_to(wd).as_posix())]
+    if audio_mode == "keep_music":
+        cmd += ["-i", "bg.wav"]   # last input → the instrumental background
 
     placements, sped, flagged = _plan_segments(segments)
 
@@ -324,7 +333,14 @@ def _build_render(
             parts.append(f"{dub}volume={dub_volume:.3f}[dubvol]")
             dub = "[dubvol]"
 
-        if audio_mode == "mix":
+        if audio_mode == "keep_music":
+            # background = the Demucs instrumental (last input), dub on top; orig_volume
+            # rides the instrumental. Speech is gone with the vocals stem, so no ducking.
+            bg_idx = len(segments) + 1
+            parts.append(f"[{bg_idx}:a]aresample=48000,volume={orig_volume:.3f}[bg]")
+            parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
+            audio_map = "[outa]"
+        elif audio_mode == "mix":
             parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
             parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
             audio_map = "[outa]"

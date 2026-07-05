@@ -227,6 +227,16 @@ class PipelineWorker(QObject):
             if not job.vi_srt.exists():
                 raise FileNotFoundError("Chưa có vi.srt — hãy chạy tới bước duyệt trước.")
 
+            # ENG-2: when keeping the music, separate the instrumental BEFORE TTS
+            # (both heavy → sequential, 8 GB rule). Failure degrades to mix in assemble.
+            if o.get("audio_mode") == "keep_music":
+                from app.pipeline import separate
+                self.progress.emit(0.1, "Đang tách nhạc nền (Demucs)…")
+                try:
+                    separate.separate_background(job, log=self.log.emit)
+                except Exception as exc:  # noqa: BLE001 - degrade, don't abort the render
+                    self.log.emit(f"⚠ Không tách được nhạc nền ({exc}) — sẽ trộn với âm gốc.")
+
             self.stage_started.emit("tts")
             self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
             segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),

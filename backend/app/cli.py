@@ -151,13 +151,24 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(f"no vi.srt in {work_dir}; run the 'run' step first.", file=sys.stderr)
         return 2
 
+    audio_mode = (args.audio_mode.replace("-", "_") if args.audio_mode
+                  else ("mix" if args.keep_audio else "replace"))
+    if audio_mode == "keep_music":
+        from app.pipeline import separate
+
+        print("[render] separating background music (Demucs) ...")
+        try:
+            separate.separate_background(job, log=print)   # before TTS (both heavy)
+        except Exception as exc:  # noqa: BLE001 - degrade to mix in assemble
+            print(f"[render] keep-music unavailable ({exc}) -> will mix instead")
+
     print(f"[render] synthesizing Vietnamese voice (tts={args.tts}) ...")
     segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print)
     print(f"[render] {len(segments)} segments; assembling with FFmpeg ...")
     out = assemble.assemble(
         job,
         segments,
-        audio_mode="mix" if args.keep_audio else "replace",
+        audio_mode=audio_mode,
         cover_hardsubs=args.cover_hardsubs,
         cover_mode=args.cover,
         font=args.font,
@@ -212,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--tts", default=settings.vizsup_default_tts, help="TTS provider (default: edge)")
     rn.add_argument("--voice", default=None, help="voice id (e.g. vi-VN-NamMinhNeural)")
     rn.add_argument("--keep-audio", action="store_true", help="mix the dub over the original audio")
+    rn.add_argument("--audio-mode", choices=["replace", "mix", "duck", "keep-music"], default=None,
+                    help="audio: replace|mix|duck|keep-music (Demucs keeps the music). Overrides --keep-audio")
     rn.add_argument("--cover-hardsubs", action="store_true", help="legacy alias for --cover box")
     rn.add_argument("--cover", choices=["off", "box", "blur"], default=None,
                     help="hide leftover CN hardsubs: opaque box or a blurred bottom band")
