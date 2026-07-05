@@ -9,11 +9,11 @@ INPUT (Douyin/Bilibili URL or local file)
 DOWNLOAD ───────────► source.mp4 + metadata.json
   │   yt-dlp (cookies, domain-routed); fallback BBDown/TikTokDownloader
   ▼
-HARDSUB DETECT  ── PP-OCRv5 detection-only on bottom-third crop
+HARDSUB DETECT  ── RapidOCR (ONNX PP-OCRv5+) detection on ~16 bottom-third crops
   │
-  ├── hardsubs present ─► OCR (VideOCR/PP-OCRv5, SSIM dedup) ─► cn.srt ─► (LLM proofread)
+  ├── hardsubs present ─► OCR (RapidOCR frame sampling · per-cue confidence → ocr_report.json) ─► cn.srt ─► (LLM proofread, suspect lines only — opt-in)
   │
-  └── no hardsubs ──────► ASR (WhisperX timing + FunASR transcript) ─► cn.srt
+  └── no hardsubs ──────► ASR (faster-whisper default; funasr_aligned = FunASR Paraformer + word timing) ─► cn.srt
   │
   ▼
 TRANSLATE (two-pass, pluggable) ── strip timecodes · batch ~50 · context+glossary
@@ -22,7 +22,7 @@ TRANSLATE (two-pass, pluggable) ── strip timecodes · batch ~50 · context+g
 vi.srt
   │
   ▼
-⛔ HUMAN EDIT GATE  ── React timeline+table editor
+⛔ HUMAN EDIT GATE  ── PySide6 timeline+table editor (desktop/)
   │   review/fix text, register, line breaks, timing. NOTHING below runs until approved.
   ▼
 TTS (pluggable, default edge-tts vi-VN) ─► tts/seg_0001.mp3 ...
@@ -53,7 +53,7 @@ Each arrow is a **resumable stage**; all state lives in the job's `work_dir`
 | CLI (headless smoke path + gate) | [backend/app/cli.py](../backend/app/cli.py) |
 | FastAPI app | [backend/app/main.py](../backend/app/main.py) |
 | Job worker (P3) | [backend/app/jobs.py](../backend/app/jobs.py) |
-| Frontend (editor) | [frontend/](../frontend/) |
+| Desktop editor (primary UI — edit gate) | [desktop/](../desktop/) — PySide6, calls `app.*` directly |
 
 ## Backend shape (target, P3)
 
@@ -68,9 +68,10 @@ Each arrow is a **resumable stage**; all state lives in the job's `work_dir`
 - **Working now (P1)**: download (yt-dlp), translate orchestrator (passthrough + LLM providers), TTS orchestrator (edge-tts), FFmpeg assemble, SRT/ASS utils, CLI (`run`/`render`/`providers`), provider registry.
 - **Working now (P3)**: async job worker (stages in a thread executor, progress pub/sub, cancel between stages); FastAPI endpoints — `/api/providers`, `POST /api/jobs`, `GET /api/jobs/{id}`, cancel, `GET/PUT /api/jobs/{id}/subtitles` (the edit gate), `POST /api/jobs/{id}/render`, artifact download, and `WS /ws/jobs/{id}` for live progress. Verified end-to-end over a live uvicorn server (job runs to the edit gate; subtitles load/save).
 - **Working now (P4 — PySide6 desktop, the primary UI)**: `desktop/` — 3 screens (Input · Subtitle Editor · Render) + Settings dialog, ported from the "Dark Editor Design", calling `app.*` directly via a `QThread` `PipelineWorker` (progress + cancel). Subtitle editor = video (`QMediaPlayer`) + editable table + custom-painted timeline (ruler/waveform/cue blocks/playhead, drag + zoom), autosaving `vi.srt`. Verified: constructs + paints headlessly with the real backend. Run: `python -m desktop.main`.
-- **Working now (P2 — ASR, no-hardsub path)**: `faster_whisper` provider (default; `pip install -e ".[asr]"`) — verified transcribe path (model load → segments → cues). `whisperx_funasr` = FunASR Paraformer accuracy option (`.[asr-accurate]`). So "paste link → auto Vietnamese subtitles" works (download → ASR → translate → edit gate), given ffmpeg + a translation key.
-- **Stubbed (with TODOs)**: hardsub detect (P5/M2), OCR (P5/M2), WhisperX word-level alignment refinement, TTS providers FPT/Azure/Google, VieNeu-TTS local provider (parked), the React web editor (optional).
+- **Working now (P2 — ASR, no-hardsub path)**: `faster_whisper` provider (default; `pip install -e ".[asr]"`) — verified transcribe path (model load → segments → cues). `funasr_aligned` = FunASR Paraformer transcript fused with word-level timing (`.[asr-accurate]`); the legacy id `whisperx_funasr` is FunASR-only. So "paste link → auto Vietnamese subtitles" works (download → ASR → translate → edit gate), given ffmpeg + a translation key.
+- **Working now (P5/M2 — hardsub path)**: `hardsub_detect` (RapidOCR detection over sampled bottom-third crops → auto OCR-vs-ASR routing) and `ocr` (RapidOCR frame sampling → cn.srt with per-cue confidence in `ocr_report.json`, optional suspect-only LLM proofread). Auto-detect (`--source auto`) and OCR route are wired in the CLI and desktop worker.
+- **Stubbed / parked**: WhisperX word-level alignment refinement (funasr_aligned falls back to faster-whisper timing today); TTS providers FPT/Azure/Google; VieNeu-TTS local provider (parked). No React web editor exists (parked in docs/plan/D-backlog.md).
 
-> ffmpeg must be on PATH (audio extract + render). Translation needs one provider API key for real Vietnamese (passthrough is offline test-only). For hardcoded-Chinese-sub videos with little speech, OCR (M2) is still pending — supply a `.srt` for those today.
+> ffmpeg/ffprobe resolve at runtime via `app.ffmpegutil` (not required on PATH). Translation needs one provider API key for real Vietnamese (passthrough is offline test-only). Hardcoded-Chinese-sub videos now go through OCR automatically; you can still supply a `.srt` to skip OCR/ASR.
 
 See the build roadmap in the plan and per-stage notes in [research.md](research.md).

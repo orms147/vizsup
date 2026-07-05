@@ -2,9 +2,10 @@
 The accuracy option (CER ~1.7% on Mandarin, well below Whisper). CPU-viable;
 faster on GPU. Needs `funasr` + torch (install: pip install -e ".[asr-accurate]").
 
-Note: WhisperX word-level forced alignment (the project's ideal timing layer) is
-a future refinement — v1 uses FunASR's own VAD+punc sentence timestamps, which
-are good enough ahead of the human edit gate.
+Note: the id is `whisperx_funasr` for config compatibility, but this provider is
+FunASR-ONLY (sentence timestamps from its VAD+punc), good enough ahead of the human
+edit gate. For word-level timing, use the fused `funasr_aligned` provider, which
+snaps this transcript onto faster-whisper word timestamps.
 """
 from __future__ import annotations
 
