@@ -144,6 +144,7 @@ class PipelineWorker(QObject):
             elif src == "srt" and o.get("srt"):
                 self.progress.emit(0.4, "Dùng phụ đề tiếng Trung có sẵn…")
                 write_srt(parse_srt(Path(o["srt"])), job.cn_srt)
+                translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
                 self.log.emit("✓ Nạp .srt tiếng Trung")
             elif src == "ocr":
                 from app.pipeline import ocr
@@ -170,6 +171,7 @@ class PipelineWorker(QObject):
                 self.progress.emit(0.4, "Nhận dạng giọng nói (ASR)…")
                 self.log.emit(f"ASR: {o.get('asr', 'faster_whisper')}")
                 asr.transcribe(job, provider=o.get("asr", "faster_whisper"))
+                translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
                 self.log.emit("✓ Nhận dạng xong")
 
             store.debug("subtitle stage ok")

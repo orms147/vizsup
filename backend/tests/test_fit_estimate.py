@@ -33,8 +33,9 @@ class _Rewriter:
     def translate_texts(self, texts, **kw):
         return ["một " * 20] * len(texts)            # draft way too long for its slot
 
-    def rewrite(self, text, instruction):
-        return "ngắn gọn rồi"
+    def rewrite(self, body, instruction, **kw):      # API-5: batched, numbered reply
+        n = len([ln for ln in body.splitlines() if ln.strip()])
+        return "\n".join(f"{i}| ngắn gọn rồi" for i in range(1, n + 1))
 
 
 class _NoRewrite:

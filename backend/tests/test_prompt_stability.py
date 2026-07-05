@@ -32,19 +32,27 @@ def test_context_order_independent():
 
 
 def test_private_keys_never_render():
+    # An arbitrary private (_-prefixed) key must not change the prompt at all —
+    # keys are reserved plumbing, not meta text. (Keys that DO drive behaviour,
+    # like _ocr_source, still never leak their key string; see test below.)
     base = build_user_prompt(TEXTS, context={"title": "T"})
-    with_priv = build_user_prompt(
-        TEXTS, context={"title": "T", "_ocr_source": True, "_budgets": [5, 9]})
-    assert base == with_priv
-    assert "_ocr_source" not in with_priv and "_budgets" not in with_priv
+    neutral = build_user_prompt(TEXTS, context={"title": "T", "_note": "x", "_internal": 1})
+    assert base == neutral
+    assert "_note" not in neutral and "_internal" not in neutral
 
     rbase = build_refine_prompt(CN, VI, context={"title": "T"})
-    rpriv = build_refine_prompt(CN, VI, context={"title": "T", "_ocr_source": True})
-    assert rbase == rpriv
+    rneutral = build_refine_prompt(CN, VI, context={"title": "T", "_note": "x"})
+    assert rbase == rneutral
 
     pbase = build_proofread_prompt(TEXTS, context={"title": "T"})
-    ppriv = build_proofread_prompt(TEXTS, context={"title": "T", "_ocr_source": True})
-    assert pbase == ppriv
+    pneutral = build_proofread_prompt(TEXTS, context={"title": "T", "_note": "x"})
+    assert pbase == pneutral
+
+
+def test_consumed_private_keys_do_not_leak_their_key_string():
+    # _ocr_source drives the OCR hint (API-7) but its KEY must never appear as text.
+    p = build_user_prompt(TEXTS, context={"title": "T", "_ocr_source": True, "_budgets": [5]})
+    assert "_ocr_source" not in p and "_budgets" not in p
 
 
 def test_repeated_calls_identical():

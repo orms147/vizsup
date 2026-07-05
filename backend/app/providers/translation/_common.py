@@ -48,6 +48,12 @@ PROOFREAD_SYSTEM_PROMPT = (
     "- If a line is already correct, output it unchanged. No commentary, no extra text."
 )
 
+OCR_HINT = (
+    "Note: the Chinese lines were read off video frames by OCR and may contain "
+    "misrecognized characters (wrong/similar-looking hanzi, stray symbols) — "
+    "translate the intended meaning, not the garbled surface form."
+)
+
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
 
 # One HTTP client per (api_key, base_url) is cached on the instance (registry
@@ -110,6 +116,8 @@ def build_refine_prompt(
     if glossary:
         gl = "; ".join(f"{k} -> {v}" for k, v in sorted(glossary.items()))
         parts.append(f"Glossary (zh -> vi): {gl}")
+    if context and context.get("_ocr_source"):
+        parts.append(OCR_HINT)
     parts.append("Polish each Vietnamese draft against its Chinese source. "
                  "Reply with only the improved Vietnamese as `n| <vietnamese>`:\n")
     body = [f"[{i}] 中文: {zh}\n[{i}] nháp: {vi}"
@@ -133,6 +141,8 @@ def build_user_prompt(
     if glossary:
         gl = "; ".join(f"{k} -> {v}" for k, v in sorted(glossary.items()))
         parts.append(f"Glossary (zh -> vi): {gl}")
+    if context and context.get("_ocr_source"):
+        parts.append(OCR_HINT)
     parts.append("Translate every numbered line to Vietnamese:\n")
     parts.append("\n".join(f"{i}| {t}" for i, t in enumerate(texts, 1)))
     return "\n".join(parts)

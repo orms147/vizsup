@@ -124,8 +124,9 @@ class InputView(QWidget):
         # the Chinese lines. Text only — no frames uploaded. Off by default (costs API).
         self.ocr_proofread = QCheckBox("  Dùng AI sửa lỗi OCR (dùng bộ dịch bản nháp · chỉ gửi chữ · tốn API)")
         self.ocr_proofread.setToolTip(
-            "Sau khi OCR, gửi các dòng chữ Trung cho bộ dịch bản nháp để sửa lỗi nhận dạng "
-            "(không gửi hình ảnh). Mặc định tắt vì có tốn API."
+            "Không bắt buộc: bước dịch đã tự chịu lỗi OCR ngay trong prompt. Tùy chọn này "
+            "gửi thêm một lượt sửa lỗi nhận dạng riêng cho các dòng chữ Trung (không gửi hình "
+            "ảnh). Mặc định tắt vì tốn thêm API — chỉ bật khi còn lỗi rõ ở bước sửa phụ đề."
         )
         col.addWidget(self.ocr_proofread)
 

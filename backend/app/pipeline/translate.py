@@ -27,6 +27,7 @@ from pathlib import Path
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
 from app.providers.registry import get_translator
+from app.providers.translation._common import _completion_cap, parse_numbered
 
 # Batch size keeps each request bounded while giving the model surrounding context.
 BATCH = 50
@@ -224,31 +225,56 @@ def translate_cues(
     return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, vi)]
 
 
+SHORTEN_BATCH_INSTRUCTION = (
+    "Bạn là biên tập phụ đề lồng tiếng. Mỗi dòng có dạng `n| (rút còn ~X%) <câu>`. "
+    "Hãy RÚT GỌN mỗi câu về khoảng X% độ dài, GIỮ NGUYÊN ý nghĩa và giọng nói tự nhiên "
+    "để lồng tiếng. Trả về ĐÚNG số dòng, mỗi dòng dạng `n| <câu đã rút gọn>`, KHÔNG "
+    "kèm giải thích, KHÔNG lặp lại phần `(rút còn ~X%)`, không dùng dấu ngoặc kép."
+)
+
+
 def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
                  *, log: Callable[[str], None] | None = None) -> list[str]:
-    """N-6 light: one shorten_line rewrite for every line that can't be spoken
-    inside its slot even at the 1.30× cap — BEFORE the gate, so the user reviews
-    already-fitting lines. Skips silently when the provider can't rewrite; a
-    rewrite that fails or doesn't get shorter keeps the original."""
+    """N-6 light + API-5: shorten every line that can't be spoken inside its slot
+    even at the 1.30× cap — in ONE batched rewrite() call per BATCH-sized chunk,
+    BEFORE the gate (so the user reviews already-fitting lines). Skips silently when
+    the provider can't rewrite; a rewrite that fails or doesn't shorten a line keeps
+    the original. shorten_line (per-line, GUI editor) stays untouched."""
     from app.pipeline.fit_estimate import MAX_TEMPO, fits, slot_seconds, speech_seconds
 
     prov = get_translator(provider_name)
     if not hasattr(prov, "rewrite") or not prov.available():
         return vi
     out = list(vi)
-    shortened = 0
+    # Pass 1: which lines overflow, and to roughly what % (bucketed → constant-ish
+    # instruction stays cacheable; the exact ratio doesn't need per-line precision).
+    todo: list[tuple[int, int]] = []
     for i in range(len(cues)):
         slot = slot_seconds(cues, i)
         if slot <= 0 or fits(out[i], slot):
             continue
-        ratio = max(0.5, min(0.9, (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i]))))
+        ratio = (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i]))
+        pct = max(50, min(90, round(ratio * 10) * 10))
+        todo.append((i, pct))
+    if not todo:
+        return vi
+    # Pass 2: one rewrite() round-trip per chunk instead of one per overlong line.
+    shortened = 0
+    for chunk in _batched(todo, BATCH):
+        body = "\n".join(f"{k}| (rút còn ~{pct}%) {out[i]}"
+                         for k, (i, pct) in enumerate(chunk, 1))
         try:
-            short = shorten_line(out[i], provider=provider_name, ratio=ratio)
-        except Exception:  # noqa: BLE001 - optional polish; keep the draft line
+            reply = prov.rewrite(body, SHORTEN_BATCH_INSTRUCTION,
+                                 max_tokens=_completion_cap(len(chunk)))
+        except Exception:  # noqa: BLE001 - optional polish; keep the draft lines
             continue
-        if short and speech_seconds(short) < speech_seconds(out[i]):
-            out[i] = short
-            shortened += 1
+        current = [out[i] for i, _ in chunk]
+        for (i, _), cand in zip(chunk, parse_numbered(reply, len(chunk), current)):
+            cand = cand.strip().strip('"').strip()
+            # acceptance gate: only take a candidate that is genuinely shorter
+            if cand and speech_seconds(cand) < speech_seconds(out[i]):
+                out[i] = cand
+                shortened += 1
     if shortened and log:
         log(f"✂ Tự rút gọn {shortened} câu quá dài so với khe thời gian (trước cổng duyệt)")
     return out
@@ -269,6 +295,14 @@ def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7)
     )
     out = prov.rewrite(text, instruction).strip().strip('"').strip()
     return out or text
+
+
+def clear_ocr_provenance(job: Job) -> None:
+    """Remove a leftover ``ocr_report.json`` when cn.srt is (re)generated from a
+    NON-OCR source (provided SRT / ASR). Otherwise a re-run of the same job dir
+    would still see the old report and wrongly add the OCR-tolerance hint (API-7)
+    to translate prompts. Called by the worker's and CLI's srt/asr branches."""
+    (job.work_dir / "ocr_report.json").unlink(missing_ok=True)
 
 
 def load_glossary(job: Job) -> dict[str, str]:
@@ -339,6 +373,13 @@ def translate(
         "title": job.metadata.get("title"),
         "platform": job.metadata.get("platform"),
     }
+    # API-7: when the CN text came from OCR, tell the translator to tolerate OCR
+    # noise IN THE PROMPT (private _ocr_source key — never rendered as meta text).
+    # This makes the separate proofread pass optional instead of the default.
+    if (job.work_dir / "ocr_report.json").exists():
+        context["_ocr_source"] = True
+        if log:
+            log("ℹ Nguồn OCR — dịch chịu lỗi OCR ngay trong prompt (+~25 token/lô)")
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,

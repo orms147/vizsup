@@ -104,6 +104,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
 
         if src == "srt":
             write_srt(parse_srt(Path(args.srt)), job.cn_srt)
+            translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
             print(f"[run] using provided Chinese subtitles -> {job.cn_srt}")
         elif src == "ocr":
             from app.pipeline import ocr
@@ -113,6 +114,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
         else:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr)
+            translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
 
     # 3) translate — never silently overwrite the gate's edited vi.srt
     if job.vi_srt.exists() and not force:
