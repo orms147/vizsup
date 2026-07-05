@@ -175,6 +175,17 @@ class PipelineWorker(QObject):
                 self.log.emit("✓ Nhận dạng xong")
 
             store.debug("subtitle stage ok")
+            # 2.5) optional pre-pass: suggest a glossary of recurring names/brands so
+            # they translate consistently (writes glossary.suggested.json; user wins)
+            if o.get("extract_terms"):
+                self._check()
+                from app.pipeline import terms
+                self.progress.emit(0.72, "Trích xuất thuật ngữ…")
+                terms.suggest_glossary(
+                    job, o.get("translator", "passthrough"),
+                    context={"title": job.metadata.get("title"),
+                             "platform": job.metadata.get("platform")},
+                    log=self.log.emit)
             # 3) translate
             self._check()
             self.stage_started.emit("translate")

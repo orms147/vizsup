@@ -116,6 +116,16 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             asr.transcribe(job, provider=args.asr)
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
 
+    # 2.5) optional: auto-suggest a glossary before translating
+    if getattr(args, "extract_terms", False) and job.cn_srt.exists():
+        from app.pipeline import terms
+
+        n = terms.suggest_glossary(job, args.translator,
+                                   context={"title": job.metadata.get("title"),
+                                            "platform": job.metadata.get("platform")},
+                                   log=print)
+        print(f"[run] extracted {n} suggested term(s)")
+
     # 3) translate — never silently overwrite the gate's edited vi.srt
     if job.vi_srt.exists() and not force:
         _skip("vi.srt", "translate (edits preserved)")
@@ -191,6 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="crop region for OCR/detection (default: bottom-third)")
     r.add_argument("--translator", default="passthrough", help="draft translator (default: passthrough)")
     r.add_argument("--refine", default=None, help="optional second-pass refiner (e.g. claude)")
+    r.add_argument("--extract-terms", action="store_true",
+                   help="auto-suggest a glossary of recurring names/brands before translating")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
     r.add_argument("--workdir", help="explicit working directory")
     r.set_defaults(func=cmd_run)

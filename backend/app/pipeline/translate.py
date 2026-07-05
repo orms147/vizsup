@@ -443,7 +443,9 @@ def load_glossary(job: Job) -> dict[str, str]:
     from app.config import settings
 
     merged: dict[str, str] = {}
-    for p in (Path(settings.vizsup_storage_dir) / "glossary.json",
+    # precedence low→high (dict.update): auto-suggested (ENG-1) < global < this job
+    for p in (job.work_dir / "glossary.suggested.json",
+              Path(settings.vizsup_storage_dir) / "glossary.json",
               job.work_dir / "glossary.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
@@ -516,6 +518,12 @@ def translate(
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,
                         glossary=glossary, work_dir=job.work_dir, log=log, cancel=cancel)
     write_srt(vi, job.vi_srt)
+    # ENG-1: flag lines where a glossary term's VI target is missing (advisory — the
+    # user fixes them at the gate; never rewrites the translation).
+    from app.pipeline import terms
+    n_bad = terms.write_glossary_report(job, cues, vi, glossary)
+    if n_bad and log:
+        log(f"⚠ {n_bad} dòng lệch thuật ngữ — kiểm tra ở bước sửa phụ đề")
     # the paid work is now safely in vi.srt — the recovery artifacts are redundant
     (job.work_dir / "translate.checkpoint.json").unlink(missing_ok=True)
     (job.work_dir / "translate.refine.checkpoint.json").unlink(missing_ok=True)

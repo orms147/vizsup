@@ -130,6 +130,16 @@ class InputView(QWidget):
         )
         col.addWidget(self.ocr_proofread)
 
+        # opt-in: before translating, let the draft translator suggest a glossary of
+        # recurring names/brands so they stay consistent. Your own glossary always wins.
+        self.extract_terms = QCheckBox("  Tự trích xuất thuật ngữ (giữ tên riêng nhất quán · tốn ít API)")
+        self.extract_terms.setToolTip(
+            "Trước khi dịch, nhờ bộ dịch bản nháp liệt kê các tên riêng/thương hiệu lặp lại "
+            "và gợi ý cách dịch, để giữ nhất quán cả video. Đây chỉ là GỢI Ý ở mức thấp nhất — "
+            "bảng thuật ngữ của bạn (chung/dự án) luôn được ưu tiên. Mặc định tắt vì tốn thêm API."
+        )
+        col.addWidget(self.extract_terms)
+
         # engines
         col.addSpacing(4)
         erow = QHBoxLayout()
@@ -235,6 +245,7 @@ class InputView(QWidget):
         elif src == "asr":
             self.rb_asr.setChecked(True)  # anything else keeps the 'auto' default
         self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
+        self.extract_terms.setChecked(bool(st.get("extract_terms")))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -331,6 +342,7 @@ class InputView(QWidget):
             "tts": self.tts.current_name(),
             "ocr_region": self.ocr_region.currentData(),
             "ocr_proofread": self.ocr_proofread.isChecked(),
+            "extract_terms": self.extract_terms.isChecked(),
         }
         if self._file:
             opts["file"] = self._file
