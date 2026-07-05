@@ -97,6 +97,13 @@ def synthesize(
     cues = parse_srt(job.vi_srt)
     ov = load_overrides(job)
     manifest = _load_manifest(job)
+
+    # API-10: batch-capable providers (edge-tts) synthesize the whole job on ONE
+    # event loop with bounded concurrency; others keep the per-cue path below.
+    if getattr(tts, "supports_batch", False):
+        return _synthesize_batch(job, tts, cues, ov, manifest, provider=provider,
+                                 voice=voice, rate=rate, log=log, cancel=cancel)
+
     segments: list[tuple[Cue, Path]] = []
     kept = made = 0
     for i, c in enumerate(cues):
@@ -126,6 +133,75 @@ def synthesize(
             made += 1
         segments.append((c, seg))
     _save_manifest(job, manifest)           # persists mute-drops even when made == 0
+    if log and kept:
+        log(f"↷ Giữ lại {kept} câu đã tạo trước đó, tạo mới {made} câu")
+    return segments
+
+
+def _synthesize_batch(
+    job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, *,
+    provider: str, voice: str | None, rate: str | None,
+    log: Callable[[str], None] | None, cancel: Callable[[], bool] | None,
+) -> list[tuple[Cue, Path]]:
+    """API-10 batch path. Phase A: a sequential scan makes the SAME per-cue decision
+    as the fallback (muted/empty → drop cache; cache hit → keep; else → to-do), with
+    no network. Phase B: one bounded-concurrency batch on the provider's single event
+    loop. Manifest writes + logging happen in on_done, which the provider invokes on
+    the loop thread — serialized, so an out-of-order completion can't corrupt the
+    index-keyed manifest and a mid-run crash keeps every finished segment."""
+    # Phase A — scan.
+    todo: list[tuple[str, str, Path]] = []
+    want_of: dict[str, str] = {}
+    seg_of: dict[str, Path] = {}
+    kept = 0
+    for i, c in enumerate(cues):
+        key = str(c.index)
+        if (ov[i].get("mute") if i < len(ov) else False) or not c.text.strip():
+            manifest.pop(key, None)          # muted/empty line → no dub, no stale cache
+            continue
+        seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
+        want = _seg_hash(provider, voice, rate, c.text)
+        seg_of[key] = seg
+        want_of[key] = want
+        if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
+            kept += 1
+        else:
+            todo.append((key, c.text, seg))
+
+    # Phase B — one batch. on_done runs on the loop thread (serialized).
+    made = 0
+    fatal: Exception | None = None
+
+    def _done(key: str, exc: Exception | None) -> None:
+        nonlocal made, fatal
+        if exc is None:
+            manifest[key] = want_of[key]
+            _save_manifest(job, manifest)    # write-after-each: a crash keeps progress
+            made += 1
+        elif _unvoiceable(exc):
+            manifest.pop(key, None)
+            if log:
+                log(f"⚠ Câu {key}: giọng đọc không phát âm được văn bản này "
+                    f"— bỏ lồng tiếng câu này (phụ đề vẫn hiện).")
+        elif isinstance(exc, InterruptedError):
+            pass                             # cancelled — not fatal, no manifest write
+        elif fatal is None:
+            fatal = exc                      # first real failure → raise after the drain
+
+    if todo:
+        tts.synthesize_many(todo, voice=voice, rate=rate, retry_delays=_RETRY_DELAYS,
+                            on_done=_done, cancel=cancel)
+    _save_manifest(job, manifest)            # persists mute-drops even when nothing made
+    if fatal is not None:
+        raise fatal
+    # Dubbed segments in cue order (assemble re-sorts by start, but keep it
+    # deterministic). A cue is dubbed iff its manifest entry matches — kept or made;
+    # cancelled/unvoiceable/muted cues have no matching entry and are excluded.
+    segments: list[tuple[Cue, Path]] = []
+    for c in cues:
+        want = want_of.get(str(c.index))
+        if want is not None and manifest.get(str(c.index)) == want:
+            segments.append((c, seg_of[str(c.index)]))
     if log and kept:
         log(f"↷ Giữ lại {kept} câu đã tạo trước đó, tạo mới {made} câu")
     return segments

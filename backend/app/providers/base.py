@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -120,6 +121,8 @@ class TranslationProvider(Provider):
 class TTSProvider(Provider):
     """Synthesize one line of speech to ``out_path``. Return the written path."""
 
+    supports_batch: bool = False   # implements synthesize_many (concurrent, one loop)
+
     @abstractmethod
     def synthesize(
         self,
@@ -130,6 +133,25 @@ class TTSProvider(Provider):
         rate: str | None = None,
     ) -> Path:
         ...
+
+    def synthesize_many(
+        self,
+        items: list[tuple[str, str, Path]],   # (key, text, out_path)
+        *,
+        voice: str | None = None,
+        rate: str | None = None,
+        concurrency: int = 3,
+        retry_delays: tuple[float, ...] = (1.0, 4.0),
+        on_done: Callable[[str, Exception | None], None] | None = None,
+        cancel: Callable[[], bool] | None = None,
+    ) -> list[tuple[str, Exception | None]]:
+        """Synthesize many segments concurrently on ONE event loop (bounded by
+        ``concurrency``), reusing a single connection pool. ``on_done(key, exc)`` is
+        invoked on the loop thread as each item finishes — ``exc is None`` on success,
+        a provider error on a real failure, or InterruptedError when ``cancel()``
+        stopped the item before any network work. Returns ``[(key, exc), …]``. Only
+        providers with ``supports_batch = True`` override this."""
+        raise NotImplementedError
 
     def voices(self) -> list[str]:
         return []
