@@ -109,6 +109,32 @@ def test_muted_cue_popped_and_cached_kept(job, monkeypatch):
     assert "2" not in json.loads(_mpath(job).read_text(encoding="utf-8"))
 
 
+def test_keep_alive_connector_survives_session_close():
+    """Regression for the API-10 shared-connector bug: edge_tts opens one
+    ClientSession(connector_owner=True) per save(), which closes a PLAIN shared
+    connector after the first segment. _keep_alive_connector must survive that and
+    only close on an explicit shutdown() (network-free — no request is made)."""
+    import asyncio
+
+    aiohttp = pytest.importorskip("aiohttp")
+    from app.providers.tts.edge import _keep_alive_connector
+
+    async def _probe():
+        plain = aiohttp.TCPConnector()
+        async with aiohttp.ClientSession(connector=plain):
+            pass
+        assert plain.closed is True                      # a plain pool is torn down
+
+        keep = _keep_alive_connector(3)
+        async with aiohttp.ClientSession(connector=keep):
+            pass
+        assert keep.closed is False                      # ours survives for the next cue
+        await keep.shutdown()
+        assert keep.closed is True                       # closed for real at the end
+
+    asyncio.run(_probe())
+
+
 def test_unvoiceable_line_skipped_in_batch(job, monkeypatch):
     class NoAudioReceived(RuntimeError):
         pass

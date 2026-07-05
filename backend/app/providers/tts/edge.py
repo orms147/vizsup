@@ -20,6 +20,25 @@ def _no_audio(exc: Exception) -> bool:
     return type(exc).__name__ == "NoAudioReceived"
 
 
+def _keep_alive_connector(limit: int):
+    """A TCPConnector whose close() is a NO-OP. edge_tts opens a fresh
+    ClientSession(connector_owner=True) for EVERY save(), so a plain shared
+    connector would be torn down the moment the first segment's session exits —
+    every later cue then fails with "Session is closed" and the batch stage crashes
+    after one segment. Neutralizing close() lets the pool (and its TLS keep-alive)
+    survive the whole job; call shutdown() once at the end to close it for real."""
+    import aiohttp
+
+    class _KeepAliveConnector(aiohttp.TCPConnector):
+        async def close(self) -> None:      # ignore edge_tts's per-save session teardown
+            return
+
+        async def shutdown(self) -> None:
+            await super().close()
+
+    return _KeepAliveConnector(limit=limit)
+
+
 def _guard_no_running_loop(where: str) -> None:
     try:
         loop = asyncio.get_running_loop()
@@ -67,7 +86,6 @@ class EdgeTTS(TTSProvider):
         NoAudioReceived) we stop admitting new items so a dead endpoint fails fast."""
         import asyncio as _asyncio
 
-        import aiohttp
         import edge_tts
 
         voice = voice or DEFAULT_VOICE
@@ -76,7 +94,7 @@ class EdgeTTS(TTSProvider):
         results: list[tuple[str, Exception | None]] = []
 
         async def _run() -> None:
-            connector = aiohttp.TCPConnector(limit=concurrency)
+            connector = _keep_alive_connector(concurrency)
             try:
                 sem = _asyncio.Semaphore(concurrency)
                 stop = _asyncio.Event()   # set after the first fatal → stop admitting
@@ -109,7 +127,7 @@ class EdgeTTS(TTSProvider):
                     if on_done:
                         on_done(key, exc)                # loop-thread → serialized
             finally:
-                await connector.close()
+                await connector.shutdown()               # close the shared pool for real
 
         asyncio.run(_run())
         return results
