@@ -131,6 +131,68 @@ def test_stale_checkpoint_ignored_when_source_changed(monkeypatch, tmp_path):
     assert good.calls[0][0] == "cn1-SỬA"            # full re-run from batch 1
 
 
+# --- API-2: retry-ladder intelligence ------------------------------------------
+
+def _api_error(msg, *, status=None, retry_after=None):
+    from types import SimpleNamespace
+    exc = RuntimeError(msg)
+    if status is not None:
+        exc.status_code = status                # openai/anthropic APIStatusError shape
+    if retry_after is not None:
+        exc.response = SimpleNamespace(headers={"retry-after": str(retry_after)})
+    return exc
+
+
+def test_retry_fails_fast_on_non_retryable():
+    """A 401/bad-key must raise on the FIRST failure — no paid duplicate calls."""
+    calls, sleeps = [], []
+
+    def fn():
+        calls.append(1)
+        raise _api_error("bad key", status=401)
+
+    with pytest.raises(RuntimeError, match="bad key"):
+        translate._retry(fn, sleep=sleeps.append)
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_retry_honors_retry_after_clamped():
+    """429 with Retry-After waits that long; backoff floor still applies (max of both)."""
+    calls, sleeps = [], []
+
+    def fn():
+        calls.append(1)
+        if len(calls) <= 2:
+            raise _api_error("rate", status=429, retry_after=7)
+        return "ok"
+
+    assert translate._retry(fn, sleep=sleeps.append) == "ok"
+    assert sleeps == [7.0, 8.0]                 # max(2,7)=7 then max(8,7)=8
+
+
+def test_retry_after_is_clamped_to_30s():
+    sleeps = []
+
+    def fn():
+        raise _api_error("rate", status=429, retry_after=9999)
+
+    with pytest.raises(RuntimeError):
+        translate._retry(fn, sleep=sleeps.append)
+    assert sleeps == [30.0, 30.0]               # hostile value clamped, not obeyed
+
+
+def test_retry_plain_exception_keeps_legacy_behavior():
+    calls, sleeps = [], []
+
+    def fn():
+        calls.append(1)
+        raise RuntimeError("boom")              # no status_code → transient
+
+    with pytest.raises(RuntimeError, match="boom"):
+        translate._retry(fn, sleep=sleeps.append)
+    assert len(calls) == 3 and sleeps == [2.0, 8.0]
+
+
 def test_translate_success_deletes_recovery_artifacts(monkeypatch, tmp_path):
     _wire(monkeypatch, prov=Good())
     job = Job(id="t", work_dir=tmp_path / "job")

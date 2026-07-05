@@ -31,6 +31,8 @@ from app.providers.registry import get_translator
 # Batch size keeps each request bounded while giving the model surrounding context.
 BATCH = 50
 _RETRY_DELAYS = (2.0, 8.0)   # 3 attempts: try, wait 2s, try, wait 8s, final try
+# Client errors that retrying only re-pays for (bad key, bad request, not-found).
+_NON_RETRYABLE = {400, 401, 403, 404, 422}
 
 
 def _norm(s: str) -> str:
@@ -66,16 +68,33 @@ def _batched(seq: list, n: int):
         yield seq[i : i + n]
 
 
+def _status(exc: Exception) -> int | None:
+    # openai/anthropic APIStatusError both expose .status_code; duck-typing keeps
+    # this module free of SDK imports.
+    return getattr(exc, "status_code", None)
+
+
+def _retry_after(exc: Exception) -> float | None:
+    # Honor a 429/503 Retry-After header, clamped to 30 s so a hostile/huge value
+    # can't freeze the run. Any missing/malformed header → None (fall back to backoff).
+    try:
+        return min(30.0, float(exc.response.headers["retry-after"]))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
 def _retry(fn, *, sleep: Callable[[float], None]):
-    """3 attempts with backoff. Retries only EXCEPTIONS (429/timeouts) — parse
-    misses already degrade safely inside parse_numbered and must not double-spend."""
+    """3 attempts with backoff. Retries only transient EXCEPTIONS — a non-retryable
+    client error (bad key/request, 401/400/…) raises on the FIRST failure instead of
+    burning 3 paid duplicate calls; a 429 carrying Retry-After waits that long (≤30 s).
+    Parse misses already degrade safely inside parse_numbered and must not double-spend."""
     for delay in (*_RETRY_DELAYS, None):
         try:
             return fn()
-        except Exception:  # noqa: BLE001
-            if delay is None:
+        except Exception as exc:  # noqa: BLE001
+            if delay is None or _status(exc) in _NON_RETRYABLE:
                 raise
-            sleep(delay)
+            sleep(max(delay, _retry_after(exc) or 0.0))
 
 
 def _ckpt_key(provider: str, cn: list[str]) -> str:

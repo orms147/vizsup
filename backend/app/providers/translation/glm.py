@@ -33,7 +33,9 @@ class GLM(OpenAICompatTranslator):
             return True, f"OK · {len(self.list_models())} model khả dụng"
         except Exception:  # noqa: BLE001 - /models unsupported → ping the chat API
             try:
-                self._client().chat.completions.create(
+                # 15 s cap so a dead endpoint fails "Test kết nối" fast, not at
+                # the client's 120 s read timeout.
+                self._client().with_options(timeout=15.0).chat.completions.create(
                     model=self.model, max_tokens=1,
                     messages=[{"role": "user", "content": "hi"}],
                 )

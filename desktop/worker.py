@@ -160,7 +160,8 @@ class PipelineWorker(QObject):
                     self.log.emit(f"Sửa lỗi OCR bằng AI ({prov})…")
                     n = ocr.proofread_srt(
                         job, provider=prov,
-                        context={"title": job.metadata.get("title")},
+                        context={"title": job.metadata.get("title"),
+                                 "platform": job.metadata.get("platform")},
                         log=self.log.emit,
                     )
                     if n:
