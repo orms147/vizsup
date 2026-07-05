@@ -10,11 +10,16 @@ them at the gate. Suggestions and warnings are advisory — never silently autho
 from __future__ import annotations
 
 import json
+import re
 
 from app.models import Job
 from app.providers.registry import get_translator
 
 _TERM_BATCH = 200   # CN lines per extraction request (terms need broad context)
+# strip a leading bullet and a list-numbering prefix ("1. " / "2) ") ONLY — a bare
+# leading digit is part of the term (brands like 360, 4399, 3M), so we require the
+# numbering to be digits + . or ) + whitespace, never a plain digit run.
+_TERM_PREFIX = re.compile(r"^\s*[-*•]?\s*(?:\d+[.)]\s+)?")
 
 EXTRACT_INSTRUCTION = (
     "You build a translation glossary from Chinese video subtitles. From the lines "
@@ -36,7 +41,7 @@ def parse_terms(reply: str) -> dict[str, str]:
         if "=>" not in line:
             continue
         zh, _, vi = line.partition("=>")
-        zh = zh.strip().lstrip("-*•0123456789.| ").strip()
+        zh = _TERM_PREFIX.sub("", zh.strip()).strip()
         vi = vi.strip().strip('"').strip()
         if zh and vi and len(zh) <= 40:
             out.setdefault(zh, vi)   # first rendering wins (stable across chunks)

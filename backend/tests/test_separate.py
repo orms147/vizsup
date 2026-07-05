@@ -54,12 +54,14 @@ def test_separation_success_mocked(tmp_path, monkeypatch):
             d = job.work_dir / "stems" / "htdemucs" / "source"
             d.mkdir(parents=True, exist_ok=True)
             (d / "no_vocals.wav").write_bytes(b"instrumental")
-        else:                                               # ffmpeg normalizes → bg.wav
-            (job.work_dir / "bg.wav").write_bytes(b"bg")
+        else:                                               # ffmpeg → the tmp path (atomic)
+            from pathlib import Path
+            Path(cmd[-1]).write_bytes(b"bg")
 
     monkeypatch.setattr(separate.subprocess, "run", fake_run)
     out = separate.separate_background(job)
     assert out == job.work_dir / "bg.wav" and out.exists()
+    assert not (job.work_dir / "bg.wav.tmp").exists()       # atomic rename left no temp
 
 
 def test_missing_stem_raises(tmp_path, monkeypatch):

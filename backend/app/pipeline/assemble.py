@@ -254,12 +254,17 @@ def _build_render(
     so tests can assert on the produced command/graph without running ffmpeg."""
     wd = job.work_dir
 
-    # ENG-2: "keep music" needs the Demucs instrumental (bg.wav) as the background;
-    # without it (separation skipped/failed) fall back to plain mix.
-    if audio_mode == "keep_music" and not (wd / "bg.wav").exists():
-        if log:
-            log("⚠ Chưa tách được nhạc nền (bg.wav) — chuyển sang chế độ trộn (mix).")
-        audio_mode = "mix"
+    # ENG-2: "keep music" needs a FRESH Demucs instrumental (bg.wav newer than the
+    # source). Missing, or stale from a prior/re-downloaded source → fall back to mix
+    # (so a failed/degraded separation can't silently mix a truncated/mismatched stem).
+    if audio_mode == "keep_music":
+        bg = wd / "bg.wav"
+        src = job.source_video
+        fresh = bg.exists() and (not src.exists() or bg.stat().st_mtime >= src.stat().st_mtime)
+        if not fresh:
+            if log:
+                log("⚠ Chưa tách được nhạc nền (bg.wav) — chuyển sang chế độ trộn (mix).")
+            audio_mode = "mix"
 
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
     for _, seg in segments:

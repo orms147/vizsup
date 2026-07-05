@@ -115,7 +115,10 @@ def _lines_with_boxes(result) -> list[tuple[str, float, object]]:
         txts = list(result.txts or ())
         scores = list(getattr(result, "scores", None) or [])
         scores += [1.0] * (len(txts) - len(scores))
-        boxes = list(getattr(result, "boxes", None) or [])
+        # .boxes is a numpy ndarray — `ndarray or []` raises ValueError (ambiguous
+        # truth value), so test for None explicitly rather than truthiness.
+        _b = getattr(result, "boxes", None)
+        boxes = list(_b) if _b is not None else []
         boxes += [None] * (len(txts) - len(boxes))
         out: list[tuple[str, float, object]] = []
         for t, s, b in zip(txts, scores, boxes):

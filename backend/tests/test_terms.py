@@ -33,6 +33,20 @@ def test_parse_terms_empty_and_malformed():
     assert terms.parse_terms("=> only target") == {}   # empty source dropped
 
 
+def test_parse_terms_keeps_digit_prefixed_brands():
+    # list-numbering ("1. ", "2) ") + bullets are stripped, but a bare leading digit
+    # is part of the brand and must survive (360 / 4399 / 3M).
+    reply = ("360 => 360\n"
+             "4399 => 4399\n"
+             "3M => 3M\n"
+             "1. 小明 => Tiểu Minh\n"
+             "2) 北京 => Bắc Kinh\n"
+             "- 华为 => Huawei")
+    assert terms.parse_terms(reply) == {
+        "360": "360", "4399": "4399", "3M": "3M",
+        "小明": "Tiểu Minh", "北京": "Bắc Kinh", "华为": "Huawei"}
+
+
 # --- extract_terms (reuses the draft translator's rewrite) ------------------
 
 class _FakeExtractor:

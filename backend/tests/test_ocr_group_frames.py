@@ -5,7 +5,43 @@ index that ocr_report.json exposes.
 """
 from __future__ import annotations
 
-from app.pipeline.ocr import group_frames
+from app.pipeline.ocr import _lines_with_boxes, group_frames
+
+
+class _FakeArray:
+    """Mimics a numpy ndarray: bool() raises (ambiguous truth), but it's iterable."""
+
+    def __init__(self, items):
+        self._items = items
+
+    def __bool__(self):
+        raise ValueError("The truth value of an array with more than one element is ambiguous")
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+
+class _FakeOutput:
+    def __init__(self, txts, scores, boxes):
+        self.txts, self.scores, self.boxes = txts, scores, boxes
+
+
+def test_lines_with_boxes_survives_ndarray_boxes():
+    # RapidOCROutput.boxes is a numpy ndarray — `boxes or []` would raise ValueError.
+    out = _FakeOutput(("你好", "世界"), (0.9, 0.8),
+                      _FakeArray([[[0, 0], [1, 0], [1, 1], [0, 1]],
+                                  [[2, 2], [3, 2], [3, 3], [2, 3]]]))
+    rows = _lines_with_boxes(out)                       # must NOT raise
+    assert [t for t, _, _ in rows] == ["你好", "世界"]
+    assert rows[0][2] == [[0, 0], [1, 0], [1, 1], [0, 1]]
+
+
+def test_lines_with_boxes_blank_frame():
+    assert _lines_with_boxes(_FakeOutput((), (), _FakeArray([]))) == []
+    assert _lines_with_boxes(None) == []
 
 
 def _f(*rows):

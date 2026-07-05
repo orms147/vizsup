@@ -8,6 +8,7 @@ re-render is free. All post-gate; the human edit gate is untouched.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,11 +49,15 @@ def separate_background(job: Job, *, model: str = "htdemucs", log=None) -> Path:
     no_vocals = next(iter(stems.glob(f"{model}/*/no_vocals.wav")), None)
     if no_vocals is None:
         raise RuntimeError("Demucs không tạo được stem nhạc nền (no_vocals.wav).")
-    # normalize to 48 kHz stereo so the assemble mix path can use it directly
+    # normalize to 48 kHz stereo so the assemble mix path can use it directly. Write to
+    # a temp then atomically replace, so an interrupted encode can't leave a truncated
+    # bg.wav that a later render would mistake for a valid (mtime-fresh) instrumental.
+    tmp = bg.with_name("bg.wav.tmp")
     subprocess.run(
-        [ffmpeg_bin(), "-y", "-i", str(no_vocals), "-ar", "48000", "-ac", "2", str(bg)],
+        [ffmpeg_bin(), "-y", "-i", str(no_vocals), "-ar", "48000", "-ac", "2", str(tmp)],
         check=True, capture_output=True,
     )
+    os.replace(tmp, bg)
     if log:
         log("✓ Đã tách nhạc nền (bg.wav)")
     return bg

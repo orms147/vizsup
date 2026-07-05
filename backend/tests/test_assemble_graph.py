@@ -123,6 +123,20 @@ def test_keep_music_without_bg_falls_back_to_mix(big_job):
     assert "[0:a]volume=0.800[bg]" in script                # mix path uses the original audio
 
 
+def test_keep_music_stale_bg_falls_back_to_mix(big_job):
+    import os
+    job, segments = big_job
+    job.source_video.write_bytes(b"re-downloaded video")
+    bg = job.work_dir / "bg.wav"
+    bg.write_bytes(b"old instrumental")
+    src_mtime = job.source_video.stat().st_mtime
+    os.utime(bg, (src_mtime - 30, src_mtime - 30))          # bg OLDER than the source
+    cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
+    assert "bg.wav" not in cmd                               # stale stem not used
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[0:a]volume=0.800[bg]" in script                # fell back to mix
+
+
 def test_cover_off_keeps_plain_ass_chain(big_job):
     job, segments = big_job
     assemble._build_render(job, segments[:3], audio_mode="replace",
