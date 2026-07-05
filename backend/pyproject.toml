@@ -31,6 +31,12 @@ asr-accurate = [
     "torch>=2.2",
     "torchaudio>=2.2",
 ]
+# Word-level timing for the fused ASR (ENG-3): whisperX forced alignment (zh wav2vec2
+# CTC). Optional — funasr_aligned falls back to faster-whisper word timestamps without
+# it. Pulls torch/transformers/pyannote; watch the torch pin vs asr-accurate.
+asr-align = [
+    "whisperx>=3.1",
+]
 # Hardcoded-subtitle OCR (burned-in Chinese subs → SRT). RapidOCR = ONNX PP-OCRv5
 # models, no PaddlePaddle — far easier to install on Windows. Runs on CPU by default;
 # for the 4070 add CUDA:  pip uninstall -y onnxruntime && pip install onnxruntime-gpu
