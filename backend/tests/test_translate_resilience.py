@@ -193,13 +193,65 @@ def test_retry_plain_exception_keeps_legacy_behavior():
     assert len(calls) == 3 and sleeps == [2.0, 8.0]
 
 
+# --- API-6: refine-pass checkpointing (protect the most expensive tokens) -------
+
+class CountingRefiner(Good):
+    def __init__(self):
+        super().__init__()
+        self.refine_calls: list[list[str]] = []
+
+    def refine_texts(self, cn, vi, **kw):
+        self.refine_calls.append(list(cn))
+        return [f"{v}+polished" for v in vi]
+
+
+_DRAFT4 = ["vi:cn1", "vi:cn2", "vi:cn3", "vi:cn4"]   # Good() draft of _cues(4)
+_CN4 = ["cn1", "cn2", "cn3", "cn4"]
+
+
+def test_refine_checkpoint_skips_completed_batch(monkeypatch, tmp_path):
+    refiner = CountingRefiner()
+    _wire(monkeypatch, good=Good(), ref=refiner)
+    key = translate._ckpt_key("refine|ref", _CN4 + ["\x00"] + _DRAFT4)
+    (tmp_path / "translate.refine.checkpoint.json").write_text(
+        json.dumps({"key": key, "done": ["vi:cn1+polished", "vi:cn2+polished"]}),
+        encoding="utf-8")
+    out = translate.translate_cues(_cues(), draft="good", refine="ref",
+                                   work_dir=tmp_path, _sleep=lambda s: None)
+    assert [c.text for c in out] == [
+        "vi:cn1+polished", "vi:cn2+polished", "vi:cn3+polished", "vi:cn4+polished"]
+    assert refiner.refine_calls == [["cn3", "cn4"]]     # batch 1 NOT re-refined
+
+
+def test_refine_checkpoint_stale_key_reruns_all(monkeypatch, tmp_path):
+    refiner = CountingRefiner()
+    _wire(monkeypatch, good=Good(), ref=refiner)
+    (tmp_path / "translate.refine.checkpoint.json").write_text(
+        json.dumps({"key": "STALE", "done": ["x1", "x2"]}), encoding="utf-8")
+    out = translate.translate_cues(_cues(), draft="good", refine="ref",
+                                   work_dir=tmp_path, _sleep=lambda s: None)
+    assert [c.text for c in out] == [
+        "vi:cn1+polished", "vi:cn2+polished", "vi:cn3+polished", "vi:cn4+polished"]
+    assert refiner.refine_calls == [["cn1", "cn2"], ["cn3", "cn4"]]   # full re-run
+
+
+def test_refine_failure_still_checkpoints_the_degraded_batch(monkeypatch, tmp_path):
+    _wire(monkeypatch, good=Good(), dead=RefineDeadBatch2())
+    translate.translate_cues(_cues(), draft="good", refine="dead",
+                             work_dir=tmp_path, _sleep=lambda s: None)
+    ckpt = json.loads((tmp_path / "translate.refine.checkpoint.json").read_text(encoding="utf-8"))
+    # batch 1 refined, batch 2 kept as draft — both recorded so a resume re-buys neither
+    assert ckpt["done"] == ["vi:cn1+polished", "vi:cn2+polished", "vi:cn3", "vi:cn4"]
+
+
 def test_translate_success_deletes_recovery_artifacts(monkeypatch, tmp_path):
-    _wire(monkeypatch, prov=Good())
+    _wire(monkeypatch, prov=Good(), ref=CountingRefiner())
     job = Job(id="t", work_dir=tmp_path / "job")
     job.cn_srt.write_text(
         "1\n00:00:00,000 --> 00:00:01,000\n你好世界\n\n"
         "2\n00:00:01,000 --> 00:00:02,000\n完全不同的一句\n", encoding="utf-8")
-    translate.translate(job, draft="prov", glossary={})
+    translate.translate(job, draft="prov", refine="ref", glossary={})
     assert job.vi_srt.exists()
     assert not (job.work_dir / "translate.checkpoint.json").exists()
+    assert not (job.work_dir / "translate.refine.checkpoint.json").exists()
     assert not (job.work_dir / "vi.draft.srt").exists()

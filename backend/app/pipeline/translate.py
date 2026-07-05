@@ -128,6 +128,7 @@ def translate_cues(
 ) -> list[Cue]:
     cn = [c.text for c in cues]
     ckpt = (work_dir / "translate.checkpoint.json") if work_dir else None
+    ckpt_refine = (work_dir / "translate.refine.checkpoint.json") if work_dir else None
     draft_srt = (work_dir / "vi.draft.srt") if work_dir else None
     n_batches = (len(cn) + BATCH - 1) // BATCH
 
@@ -166,13 +167,29 @@ def translate_cues(
                 log(f"… dịch lô {i // BATCH + 1}/{n_batches}")
         return out
 
+    def _persist_refine(key: str, out: list[str]) -> None:
+        # Refine is ~95-98% of two-pass dollars; checkpoint each finished batch so a
+        # crash/kill re-buys one partial batch, not all completed ones. Do NOT touch
+        # vi.draft.srt — it must keep meaning *draft*, not half-refined.
+        if ckpt_refine is not None:
+            ckpt_refine.write_text(json.dumps({"key": key, "done": out}, ensure_ascii=False),
+                                   encoding="utf-8")
+
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
         # Feed the refiner BOTH the Chinese source and the VI draft (batches stay
         # aligned since cn/vi are 1:1); parse falls back to the draft, never the source.
+        # A batch that degrades to draft is checkpointed as final for this run.
         provider = _require(provider_name)
-        out: list[str] = []
-        for bi, (cn_b, vi_b) in enumerate(zip(_batched(cn_src, BATCH),
-                                              _batched(vi_draft, BATCH)), 1):
+        # Key covers BOTH source and draft (a re-run whose draft differs must
+        # invalidate) with an unambiguous separator that can't appear in cue text.
+        key = _ckpt_key("refine|" + provider_name, cn_src + ["\x00"] + vi_draft)
+        out: list[str] = _load_checkpoint(ckpt_refine, key) if ckpt_refine else []
+        if out and log:
+            log(f"↷ Tiếp tục tinh chỉnh từ điểm dừng: {len(out)}/{len(vi_draft)} dòng đã có")
+        for bi, i in enumerate(range(0, len(vi_draft), BATCH), 1):
+            cn_b, vi_b = cn_src[i:i + BATCH], vi_draft[i:i + BATCH]
+            if i + len(vi_b) <= len(out):
+                continue   # covered by the checkpoint
             try:
                 out.extend(_retry(
                     lambda c=cn_b, v=vi_b: provider.refine_texts(
@@ -183,6 +200,7 @@ def translate_cues(
                 if log:
                     log(f"⚠ Tinh chỉnh thất bại ở lô {bi} ({type(exc).__name__}) — "
                         f"dùng bản nháp cho lô này.")
+            _persist_refine(key, out)   # a hard failure later keeps this batch
         return out
 
     def _check_count(out: list[str], stage: str, provider_name: str) -> None:
@@ -328,5 +346,6 @@ def translate(
     write_srt(vi, job.vi_srt)
     # the paid work is now safely in vi.srt — the recovery artifacts are redundant
     (job.work_dir / "translate.checkpoint.json").unlink(missing_ok=True)
+    (job.work_dir / "translate.refine.checkpoint.json").unlink(missing_ok=True)
     (job.work_dir / "vi.draft.srt").unlink(missing_ok=True)
     return job
