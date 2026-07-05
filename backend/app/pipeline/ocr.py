@@ -199,6 +199,53 @@ def _best(texts: list[str]) -> str:
     return max(texts, key=lambda s: (_cjk_count(s), len(s))) if texts else ""
 
 
+def group_frames(per_frame: list[tuple[float, str, float]], *,
+                 sim: float, fps: float, min_dur: float) -> list[tuple[Cue, float, int]]:
+    """Group consecutive frames that show the same subtitle into timed cues, keeping
+    the cleanest read (most CJK) per group. ``per_frame`` is ``[(t, text, conf), …]``
+    in frame order (t = frame_index / fps). Returns ``[(cue, confidence, rep_index), …]``
+    filtered to cues at least ``min_dur`` long, where ``rep_index`` is the 0-based
+    frame index that produced the chosen read.
+
+    Pure, behavior-preserving extraction of the old inline state machine (the subtle
+    start-time handling on a group break is reproduced exactly); the only addition is
+    tracking which frame each chosen read came from, for ocr_report.rep_frame."""
+    cues: list[Cue] = []
+    confs: list[float] = []
+    reps: list[int] = []
+    group: list[str] = []
+    gconf: list[float] = []
+    gframe: list[int] = []
+    start = 0.0
+    rep = ""
+
+    def flush(end_t: float) -> None:
+        if group and rep:
+            j = group.index(rep)                     # the chosen read's position in the group
+            cues.append(Cue(index=len(cues) + 1, start=start, end=end_t, text=rep))
+            confs.append(gconf[j])                   # confidence of the chosen read
+            reps.append(gframe[j])
+
+    for k, (t, text, conf) in enumerate(per_frame):
+        if text and (not rep or _similar(text, rep, sim)):
+            if not group:
+                start = t
+            group.append(text)
+            gconf.append(conf)
+            gframe.append(k)
+            rep = _best(group)
+        else:  # empty frame or a different subtitle → close the current group
+            flush(t)
+            if text:
+                group, gconf, gframe, rep = [text], [conf], [k], text
+                start = t
+            else:
+                group, gconf, gframe, rep = [], [], [], ""
+
+    flush(len(per_frame) / fps if per_frame else 0.0)
+    return [(c, cf, rf) for c, cf, rf in zip(cues, confs, reps) if c.duration >= min_dur]
+
+
 def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5) -> Job:
     """OCR burned-in subtitles → job.cn_srt."""
@@ -224,39 +271,16 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      for k, fp in enumerate(frames)]
 
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
-    cues: list[Cue] = []
-    confs: list[float] = []
-    group: list[str] = []
-    gconf: list[float] = []
-    start = 0.0
-    rep = ""
-
-    def flush(end_t: float) -> None:
-        if group and rep:
-            cues.append(Cue(index=len(cues) + 1, start=start, end=end_t, text=rep))
-            confs.append(gconf[group.index(rep)])   # confidence of the chosen read
-
-    for t, text, conf in per_frame:
-        if text and (not rep or _similar(text, rep, sim)):
-            if not group:
-                start = t
-            group.append(text)
-            gconf.append(conf)
-            rep = _best(group)
-        else:  # empty frame or a different subtitle → close the current group
-            flush(t)
-            group, gconf, rep = ([text], [conf], text) if text else ([], [], "")
-            start = t if text else start
-
-    flush(len(frames) / fps if frames else 0.0)
-
-    kept = [(c, cf) for c, cf in zip(cues, confs) if c.duration >= min_dur]
+    kept = group_frames(per_frame, sim=sim, fps=fps, min_dur=min_dur)
     cues = []
     report: list[dict] = []
-    for i, (c, cf) in enumerate(kept, 1):
+    for i, (c, cf, rf) in enumerate(kept, 1):
         c.index = i
         cues.append(c)
-        report.append({"index": i, "conf": round(cf, 3), "suspect": _suspect(c.text, cf)})
+        report.append({
+            "index": i, "conf": round(cf, 3), "suspect": _suspect(c.text, cf),
+            "rep_frame": f"frames/{rf + 1:05d}.png",   # a frame showing this cue (curation/proofread)
+        })
     # per-cue confidence sidecar — proofread_srt(only_suspect=True) reads this so
     # the LLM only sees lines worth fixing (cost drops sharply on clean videos)
     (job.work_dir / "ocr_report.json").write_text(
