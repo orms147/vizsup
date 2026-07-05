@@ -83,6 +83,19 @@ def test_corrupt_segment_skipped_not_fatal(big_job, monkeypatch):
     assert "[7:a]" in script                        # neighbours unaffected
 
 
+def test_cover_blur_uses_detected_region_when_present(big_job):
+    job, segments = big_job
+    import json
+    (job.work_dir / "hardsub_region.json").write_text(
+        json.dumps({"x": 0.1, "y": 0.72, "w": 0.8, "h": 0.2}), encoding="utf-8")
+    assemble._build_render(job, segments[:3], audio_mode="replace",
+                           orig_volume=1.0, dub_volume=1.0, cover_mode="blur")
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "crop=iw*0.8000:ih*0.2000:iw*0.1000:ih*0.7200" in script   # detected band, not bottom-third
+    assert "overlay=main_w*0.1000:main_h*0.7200" in script
+    assert "overlay=0:main_h*2/3" not in script
+
+
 def test_cover_blur_graph(big_job):
     job, segments = big_job
     assemble._build_render(job, segments[:3], audio_mode="replace",

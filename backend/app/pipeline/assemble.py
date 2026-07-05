@@ -215,6 +215,27 @@ def _plan_segments(segments: list[tuple[Cue, Path]]):
     return placements, sped, flagged
 
 
+def _load_region(job: Job) -> dict | None:
+    """The detected hardsub band ({x,y,w,h} normalized) written by hardsub_detect,
+    or None (old job / SRT source / detection failed)."""
+    try:
+        r = json.loads((job.work_dir / "hardsub_region.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return r if isinstance(r, dict) and all(k in r for k in ("x", "y", "w", "h")) else None
+
+
+def _blur_band_filters(region: dict | None) -> tuple[str, str]:
+    """(crop_expr, overlay_pos) for the blur cover. Uses the persisted normalized
+    hardsub region when present (tighter → less of the frame blurred), else the
+    bottom-third fallback. Pure."""
+    if region and region.get("w", 0) > 0 and region.get("h", 0) > 0:
+        x, y, w, h = region["x"], region["y"], region["w"], region["h"]
+        return (f"crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f}",
+                f"overlay=main_w*{x:.4f}:main_h*{y:.4f}")
+    return "crop=iw:ih/3:0:ih*2/3", "overlay=0:main_h*2/3"
+
+
 def _build_render(
     job: Job,
     segments: list[tuple[Cue, Path]],
@@ -321,11 +342,13 @@ def _build_render(
         audio_map = "0:a?"
 
     if cover_mode == "blur":
-        # blur the bottom-third band (where CN hardsubs live) before burning the
-        # VI subs on top — softer than the opaque box, still hides the original
+        # blur the hardsub band (the detected region if we have one, else the
+        # bottom-third) before burning the VI subs on top — softer than the opaque
+        # box, still hides the original
+        crop_expr, overlay_pos = _blur_band_filters(_load_region(job))
         parts.append("[0:v]split[vsrc][vband]")
-        parts.append("[vband]crop=iw:ih/3:0:ih*2/3,boxblur=10:2[vblur]")
-        parts.append("[vsrc][vblur]overlay=0:main_h*2/3[vbg]")
+        parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
+        parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         parts.append("[vbg]ass=subs.ass[v]")
     else:
         parts.append("[0:v]ass=subs.ass[v]")

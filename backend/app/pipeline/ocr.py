@@ -105,6 +105,38 @@ def _to_lines(result) -> list[tuple[str, float]]:
     return out
 
 
+def _lines_with_boxes(result) -> list[tuple[str, float, object]]:
+    """Like _to_lines, but also returns each read's detection box (a 4-point polygon
+    in image pixels) — ``[(text, score, box), …]``. ``box`` is None when the API
+    doesn't expose one. Used by hardsub detection to locate the actual subtitle band."""
+    if result is None:
+        return []
+    if hasattr(result, "txts"):  # new RapidOCROutput
+        txts = list(result.txts or ())
+        scores = list(getattr(result, "scores", None) or [])
+        scores += [1.0] * (len(txts) - len(scores))
+        boxes = list(getattr(result, "boxes", None) or [])
+        boxes += [None] * (len(txts) - len(boxes))
+        out: list[tuple[str, float, object]] = []
+        for t, s, b in zip(txts, scores, boxes):
+            try:
+                out.append(((t or ""), float(s), b))
+            except (TypeError, ValueError):
+                out.append(((t or ""), 1.0, b))
+        return out
+    res_list = result[0] if isinstance(result, tuple) else result  # legacy [box, text, score]
+    out = []
+    for item in res_list or []:
+        box = item[0] if len(item) > 0 else None
+        text = item[1] if len(item) > 1 else ""
+        try:
+            score = float(item[2]) if len(item) > 2 else 1.0
+        except (TypeError, ValueError):
+            score = 1.0
+        out.append((text, score, box))
+    return out
+
+
 def _clean_frame_conf(lines: list[tuple[str, float]], min_conf: float) -> tuple[str, float]:
     """Join the OCR lines of one frame, dropping low-confidence reads and Latin
     symbol-soup while keeping Chinese, numbers/prices, and real inserted text
