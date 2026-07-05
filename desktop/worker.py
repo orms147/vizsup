@@ -190,13 +190,13 @@ class PipelineWorker(QObject):
                     self.log.emit(f"… dùng bảng thuật ngữ ({len(gl)} mục: storage/glossary.json + của dự án)")
                 translate.translate(job, draft=o.get("translator", "passthrough"),
                                     refine=o.get("refine"), glossary=gl or None,
-                                    log=self.log.emit)
+                                    log=self.log.emit, cancel=lambda: self._cancel)
                 self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             store.debug("translate ok → emit gate_reached")
 
             self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
             self.gate_reached.emit()
-        except _Cancelled:
+        except (_Cancelled, translate.TranslateCancelled):
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001 - surface to UI
             import traceback as _tb

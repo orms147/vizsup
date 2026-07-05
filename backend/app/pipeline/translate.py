@@ -21,6 +21,7 @@ import re
 import shutil
 import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -104,15 +105,118 @@ def _ckpt_key(provider: str, cn: list[str]) -> str:
     return hashlib.sha1((provider + "\n" + "\n".join(cn)).encode()).hexdigest()
 
 
-def _load_checkpoint(path: Path, key: str) -> list[str]:
+class TranslateCancelled(RuntimeError):
+    """Raised when translate_cues is cancelled mid-run. Every completed batch is
+    already persisted to the checkpoint, so a resume re-buys nothing."""
+
+
+def _load_checkpoint(path: Path, key: str, n_lines: int) -> dict[int, list[str]]:
+    """Return completed batches as ``{batch_index: [lines]}``. Accepts the v2 format
+    (``{"v":2,"batches":{"0":[…]}}``) AND the legacy v1 whole-batch prefix
+    (``{"done":[…]}`` — incl. API-6's refine file) by slicing that prefix into
+    batches. A stale key, or a batch whose length doesn't match its expected size,
+    is dropped."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("key") == key and isinstance(data.get("done"), list):
-            done = [str(x) for x in data["done"]]
-            return done[: len(done) - len(done) % BATCH]   # only whole batches count
     except (OSError, ValueError):
-        pass
-    return []
+        return {}
+    if not isinstance(data, dict) or data.get("key") != key:
+        return {}
+    n_batches = (n_lines + BATCH - 1) // BATCH
+
+    def _expected(bi: int) -> int:
+        return min(BATCH, n_lines - bi * BATCH)
+
+    out: dict[int, list[str]] = {}
+    if data.get("v") == 2 and isinstance(data.get("batches"), dict):
+        for k, v in data["batches"].items():
+            try:
+                bi = int(k)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= bi < n_batches and isinstance(v, list) and len(v) == _expected(bi):
+                out[bi] = [str(x) for x in v]
+        return out
+    done = data.get("done")                       # legacy v1 whole-batch prefix
+    if isinstance(done, list):
+        whole = len(done) - len(done) % BATCH
+        for bi in range(whole // BATCH):
+            out[bi] = [str(x) for x in done[bi * BATCH:(bi + 1) * BATCH]]
+    return out
+
+
+def _persist_batches(ckpt_path: Path | None, draft_srt_path: Path | None, key: str,
+                     batches: dict[int, list[str]], cues: list[Cue], n_batches: int) -> None:
+    """Atomically write the v2 checkpoint (tmp+replace, mirroring save_glossary).
+    When a draft-SRT path is given, also write it from the LONGEST CONTIGUOUS PREFIX
+    of completed batches, so the recovery SRT never has holes (a missing batch just
+    stops the prefix)."""
+    if ckpt_path is not None:
+        data = {"key": key, "v": 2,
+                "batches": {str(bi): batches[bi] for bi in sorted(batches)}}
+        tmp = ckpt_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(ckpt_path)
+    if draft_srt_path is not None:
+        prefix: list[str] = []
+        for bi in range(n_batches):
+            if bi not in batches:
+                break
+            prefix.extend(batches[bi])
+        write_srt([Cue(index=c.index, start=c.start, end=c.end, text=t)
+                   for c, t in zip(cues, prefix)], draft_srt_path)
+
+
+def _run_parallel(missing: list[int], width: int,
+                  task: Callable[[int], object], on_done: Callable[[int, object], None],
+                  *, cancel: Callable[[], bool] | None) -> None:
+    """Run batch indices ``missing`` through ``task`` up to ``width``-wide using a
+    SLIDING WINDOW: at most ``width`` futures are ever submitted, and the next batch
+    is submitted only after a cancel check — so a cancel stops further provider calls
+    immediately (the pool can't auto-start a queued batch behind our back).
+    ``on_done(bi, result)`` runs on THIS thread as each finishes (persist + log stay
+    serialized). The first task exception aborts admission and, after in-flight
+    batches drain (their results still persisted), is re-raised; a cancel drains then
+    raises TranslateCancelled. A hard failure or cancel never loses paid work."""
+    if cancel and cancel():
+        raise TranslateCancelled("Đã hủy khi đang dịch.")
+    ex = ThreadPoolExecutor(max_workers=max(1, width))
+    queue = list(missing)
+    qi = 0
+    inflight: dict = {}
+    error: Exception | None = None
+    cancelled = False
+    try:
+        while True:
+            # Admit new batches only while healthy; check cancel BEFORE each submit.
+            while (error is None and not cancelled
+                   and len(inflight) < width and qi < len(queue)):
+                if cancel and cancel():
+                    cancelled = True
+                    break
+                bi = queue[qi]
+                qi += 1
+                inflight[ex.submit(task, bi)] = bi
+            if not inflight:
+                break
+            done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                bi = inflight.pop(fut)
+                try:
+                    result = fut.result()
+                except Exception as exc:  # noqa: BLE001 - first failure aborts admission
+                    if error is None:
+                        error = exc
+                    continue
+                on_done(bi, result)       # persist every completed batch, even mid-drain
+            if error is None and not cancelled and cancel and cancel():
+                cancelled = True
+    finally:
+        ex.shutdown(wait=True, cancel_futures=True)
+    if error:
+        raise error
+    if cancelled:
+        raise TranslateCancelled("Đã hủy khi đang dịch.")
 
 
 def translate_cues(
@@ -125,6 +229,7 @@ def translate_cues(
     work_dir: Path | None = None,
     log: Callable[[str], None] | None = None,
     auto_shorten: bool = True,
+    cancel: Callable[[], bool] | None = None,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[Cue]:
     cn = [c.text for c in cues]
@@ -141,40 +246,38 @@ def translate_cues(
             )
         return provider
 
-    def _persist_progress(key: str, out: list[str]) -> None:
-        if ckpt is not None:
-            ckpt.write_text(json.dumps({"key": key, "done": out}, ensure_ascii=False),
-                            encoding="utf-8")
-        if draft_srt is not None:   # timecodes re-attached for the completed prefix
-            write_srt([Cue(index=c.index, start=c.start, end=c.end, text=t)
-                       for c, t in zip(cues, out)], draft_srt)
-
     def draft_pass(provider_name: str, src: list[str]) -> list[str]:
+        # N-4 + API-9: draft each batch, up to `width`-wide, checkpointing every
+        # finished batch (v2 per-batch format) so a crash/cancel keeps completed
+        # batches and the resume re-buys nothing.
         provider = _require(provider_name)
         key = _ckpt_key(provider_name, src)
-        out: list[str] = _load_checkpoint(ckpt, key) if ckpt else []
-        if out and log:
-            log(f"↷ Tiếp tục từ điểm dừng trước: {len(out)}/{len(src)} dòng nháp đã có")
-        for i in range(0, len(src), BATCH):
-            batch = src[i:i + BATCH]
-            if i + len(batch) <= len(out):
-                continue   # covered by the checkpoint
-            result = _retry(
-                lambda b=batch: provider.translate_texts(b, context=context, glossary=glossary),
-                sleep=_sleep)
-            out.extend(result)
-            _persist_progress(key, out)   # a hard failure later keeps this batch
-            if log and n_batches > 1:
-                log(f"… dịch lô {i // BATCH + 1}/{n_batches}")
-        return out
+        completed = _load_checkpoint(ckpt, key, len(src)) if ckpt else {}
+        if completed and log:
+            have = sum(len(v) for v in completed.values())
+            log(f"↷ Tiếp tục từ điểm dừng trước: {have}/{len(src)} dòng nháp đã có")
+        missing = [bi for bi in range(n_batches) if bi not in completed]
+        if missing:
+            width = min(4, getattr(provider, "parallel_batches", 1), len(missing))
 
-    def _persist_refine(key: str, out: list[str]) -> None:
-        # Refine is ~95-98% of two-pass dollars; checkpoint each finished batch so a
-        # crash/kill re-buys one partial batch, not all completed ones. Do NOT touch
-        # vi.draft.srt — it must keep meaning *draft*, not half-refined.
-        if ckpt_refine is not None:
-            ckpt_refine.write_text(json.dumps({"key": key, "done": out}, ensure_ascii=False),
-                                   encoding="utf-8")
+            def task(bi: int) -> list[str]:
+                batch = src[bi * BATCH:(bi + 1) * BATCH]
+                result = _retry(lambda: provider.translate_texts(
+                    batch, context=context, glossary=glossary), sleep=_sleep)
+                if len(result) != len(batch):   # per-batch count guard, inside the task
+                    raise RuntimeError(
+                        f"Bộ dịch '{provider_name}' trả về {len(result)} dòng cho lô "
+                        f"{bi + 1} ({len(batch)} câu) — dừng để không ghi lệch hàng.")
+                return result
+
+            def on_done(bi: int, result: object) -> None:
+                completed[bi] = result  # type: ignore[assignment]
+                _persist_batches(ckpt, draft_srt, key, completed, cues, n_batches)
+                if log and n_batches > 1:
+                    log(f"… dịch lô {len(completed)}/{n_batches}")
+
+            _run_parallel(missing, width, task, on_done, cancel=cancel)
+        return [line for bi in range(n_batches) for line in completed[bi]]
 
     def _draft_budgets(vi_draft: list[str]) -> list[int | None]:
         # API-8: per-line word budget for overlong draft lines, folded into the
@@ -193,32 +296,43 @@ def translate_cues(
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
         # Feed the refiner BOTH the Chinese source and the VI draft (batches stay
         # aligned since cn/vi are 1:1); parse falls back to the draft, never the source.
-        # A batch that degrades to draft is checkpointed as final for this run.
+        # A batch whose polish fails degrades to its draft (never fatal) and is
+        # checkpointed as final for this run. Refine never writes vi.draft.srt — that
+        # file must keep meaning *draft*, not half-refined. Refine is ~95-98% of a
+        # two-pass run's dollars, so every finished batch is persisted immediately.
         provider = _require(provider_name)
         # Key covers BOTH source and draft (a re-run whose draft differs must
         # invalidate) with an unambiguous separator that can't appear in cue text.
         key = _ckpt_key("refine|" + provider_name, cn_src + ["\x00"] + vi_draft)
-        out: list[str] = _load_checkpoint(ckpt_refine, key) if ckpt_refine else []
-        if out and log:
-            log(f"↷ Tiếp tục tinh chỉnh từ điểm dừng: {len(out)}/{len(vi_draft)} dòng đã có")
+        completed = _load_checkpoint(ckpt_refine, key, len(vi_draft)) if ckpt_refine else {}
+        if completed and log:
+            have = sum(len(v) for v in completed.values())
+            log(f"↷ Tiếp tục tinh chỉnh từ điểm dừng: {have}/{len(vi_draft)} dòng đã có")
         budgets = _draft_budgets(vi_draft)
-        for bi, i in enumerate(range(0, len(vi_draft), BATCH), 1):
-            cn_b, vi_b = cn_src[i:i + BATCH], vi_draft[i:i + BATCH]
-            if i + len(vi_b) <= len(out):
-                continue   # covered by the checkpoint
-            ctx_b = {**(context or {}), "_budgets": budgets[i:i + BATCH]}
-            try:
-                out.extend(_retry(
-                    lambda c=cn_b, v=vi_b, x=ctx_b: provider.refine_texts(
-                        c, v, context=x, glossary=glossary),
-                    sleep=_sleep))
-            except Exception as exc:  # noqa: BLE001 - polish failure keeps the draft
-                out.extend(vi_b)
-                if log:
-                    log(f"⚠ Tinh chỉnh thất bại ở lô {bi} ({type(exc).__name__}) — "
+        missing = [bi for bi in range(n_batches) if bi not in completed]
+        if missing:
+            width = min(4, getattr(provider, "parallel_batches", 1), len(missing))
+
+            def task(bi: int) -> tuple[list[str], Exception | None]:
+                cn_b = cn_src[bi * BATCH:(bi + 1) * BATCH]
+                vi_b = vi_draft[bi * BATCH:(bi + 1) * BATCH]
+                ctx_b = {**(context or {}), "_budgets": budgets[bi * BATCH:(bi + 1) * BATCH]}
+                try:
+                    return (_retry(lambda: provider.refine_texts(
+                        cn_b, vi_b, context=ctx_b, glossary=glossary), sleep=_sleep), None)
+                except Exception as exc:  # noqa: BLE001 - polish failure keeps the draft
+                    return (vi_b, exc)
+
+            def on_done(bi: int, result: object) -> None:
+                lines, exc = result  # type: ignore[misc]
+                completed[bi] = lines
+                if exc is not None and log:
+                    log(f"⚠ Tinh chỉnh thất bại ở lô {bi + 1} ({type(exc).__name__}) — "
                         f"dùng bản nháp cho lô này.")
-            _persist_refine(key, out)   # a hard failure later keeps this batch
-        return out
+                _persist_batches(ckpt_refine, None, key, completed, cues, n_batches)
+
+            _run_parallel(missing, width, task, on_done, cancel=cancel)
+        return [line for bi in range(n_batches) for line in completed[bi]]
 
     def _check_count(out: list[str], stage: str, provider_name: str) -> None:
         # A short reply must be a loud error, not a silent truncation: the final
@@ -362,6 +476,7 @@ def translate(
     glossary: dict[str, str] | None = None,
     force: bool = False,
     log: Callable[[str], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> Job:
     """Read ``job.cn_srt``, translate, write ``job.vi_srt``.
 
@@ -399,7 +514,7 @@ def translate(
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,
-                        glossary=glossary, work_dir=job.work_dir, log=log)
+                        glossary=glossary, work_dir=job.work_dir, log=log, cancel=cancel)
     write_srt(vi, job.vi_srt)
     # the paid work is now safely in vi.srt — the recovery artifacts are redundant
     (job.work_dir / "translate.checkpoint.json").unlink(missing_ok=True)

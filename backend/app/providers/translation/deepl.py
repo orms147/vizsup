@@ -16,6 +16,7 @@ class DeepLTranslator(TranslationProvider):
     name = "deepl"
     display_name = "DeepL (gist)"
     cost_note = "fast baseline · VI support limited"
+    parallel_batches = 4   # cached thread-safe httpx.Client → fan out (API-9)
     _http = None  # cached httpx.Client (auth is per-request, so no need to key on the api_key)
 
     def available(self) -> bool:

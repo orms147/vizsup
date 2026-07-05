@@ -175,6 +175,7 @@ class OpenAICompatTranslator(TranslationProvider):
 
     can_refine = True      # real editor pass (refine_texts below)
     can_proofread = True   # real OCR-fix pass (proofread_texts below)
+    parallel_batches = 4   # cached thread-safe client + own retry ladder → fan out (API-9)
     base_url: str = ""
     model: str = ""
     api_key: str = ""

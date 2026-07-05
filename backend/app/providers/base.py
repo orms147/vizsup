@@ -67,6 +67,8 @@ class TranslationProvider(Provider):
 
     can_refine: bool = False     # overrides refine_texts with a real editor pass
     can_proofread: bool = False  # overrides proofread_texts with a real OCR fix pass
+    parallel_batches: int = 1    # how many batches may run concurrently (API-9);
+    #                              1 = strictly sequential (default, safe for any engine)
 
     def info(self) -> dict:
         return {**super().info(), "can_refine": self.can_refine,

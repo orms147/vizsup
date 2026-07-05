@@ -102,7 +102,7 @@ def test_draft_hard_failure_checkpoints_then_resumes(monkeypatch, tmp_path):
                                  _sleep=sleeps.append)
     assert sleeps == [2.0, 8.0]                     # all 3 attempts spent on batch 2
     ckpt = json.loads((tmp_path / "translate.checkpoint.json").read_text(encoding="utf-8"))
-    assert ckpt["done"] == ["vi:cn1", "vi:cn2"]     # batch 1 preserved on disk
+    assert ckpt["v"] == 2 and ckpt["batches"]["0"] == ["vi:cn1", "vi:cn2"]   # batch 1 on disk
     draft = parse_srt(tmp_path / "vi.draft.srt")
     assert [c.text for c in draft] == ["vi:cn1", "vi:cn2"]
 
@@ -241,7 +241,8 @@ def test_refine_failure_still_checkpoints_the_degraded_batch(monkeypatch, tmp_pa
                              work_dir=tmp_path, _sleep=lambda s: None)
     ckpt = json.loads((tmp_path / "translate.refine.checkpoint.json").read_text(encoding="utf-8"))
     # batch 1 refined, batch 2 kept as draft — both recorded so a resume re-buys neither
-    assert ckpt["done"] == ["vi:cn1+polished", "vi:cn2+polished", "vi:cn3", "vi:cn4"]
+    assert ckpt["batches"]["0"] == ["vi:cn1+polished", "vi:cn2+polished"]
+    assert ckpt["batches"]["1"] == ["vi:cn3", "vi:cn4"]
 
 
 def test_translate_success_deletes_recovery_artifacts(monkeypatch, tmp_path):
