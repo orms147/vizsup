@@ -33,7 +33,9 @@ REFINE_SYSTEM_PROMPT = (
     "- Preserve the exact line numbering and count. Output ONLY lines of the form `n| <vietnamese>`.\n"
     "- Do not merge, split, reorder, add, or drop lines. No commentary, no extra text.\n"
     "- Keep proper nouns / brand names consistent; follow the glossary if given.\n"
-    "- If a draft line is already good, keep it."
+    "- If a draft line is already good, keep it.\n"
+    "- If a draft line is annotated with a word budget, also shorten it to fit while "
+    "keeping the meaning."
 )
 
 PROOFREAD_SYSTEM_PROMPT = (
@@ -120,8 +122,15 @@ def build_refine_prompt(
         parts.append(OCR_HINT)
     parts.append("Polish each Vietnamese draft against its Chinese source. "
                  "Reply with only the improved Vietnamese as `n| <vietnamese>`:\n")
-    body = [f"[{i}] 中文: {zh}\n[{i}] nháp: {vi}"
-            for i, (zh, vi) in enumerate(zip(cn_texts, vi_texts), 1)]
+    # API-8: an overlong draft line carries a word budget so the refiner shortens it
+    # WHILE polishing; fitting lines (budget None/absent) render exactly as before.
+    budgets = context.get("_budgets") if context else None
+    body = []
+    for i, (zh, vi) in enumerate(zip(cn_texts, vi_texts), 1):
+        b = budgets[i - 1] if budgets and i - 1 < len(budgets) else None
+        draft_line = (f"[{i}] nháp (quá dài — rút còn tối đa ~{b} từ): {vi}" if b
+                      else f"[{i}] nháp: {vi}")
+        body.append(f"[{i}] 中文: {zh}\n{draft_line}")
     parts.append("\n".join(body))
     return "\n".join(parts)
 

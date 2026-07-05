@@ -176,6 +176,20 @@ def translate_cues(
             ckpt_refine.write_text(json.dumps({"key": key, "done": out}, ensure_ascii=False),
                                    encoding="utf-8")
 
+    def _draft_budgets(vi_draft: list[str]) -> list[int | None]:
+        # API-8: per-line word budget for overlong draft lines, folded into the
+        # refine prompt so the refiner shortens WHILE polishing (kills the
+        # draft → refine-the-long-version → autoshorten triple-pay). Fitting lines
+        # get None so their prompt block stays byte-identical to before.
+        from app.pipeline.fit_estimate import MAX_TEMPO, SYL_PER_SEC, fits, slot_seconds
+
+        budgets: list[int | None] = []
+        for j in range(len(vi_draft)):
+            slot = slot_seconds(cues, j)
+            budgets.append(int(slot * MAX_TEMPO * SYL_PER_SEC)
+                           if slot > 0 and not fits(vi_draft[j], slot) else None)
+        return budgets
+
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
         # Feed the refiner BOTH the Chinese source and the VI draft (batches stay
         # aligned since cn/vi are 1:1); parse falls back to the draft, never the source.
@@ -187,14 +201,16 @@ def translate_cues(
         out: list[str] = _load_checkpoint(ckpt_refine, key) if ckpt_refine else []
         if out and log:
             log(f"↷ Tiếp tục tinh chỉnh từ điểm dừng: {len(out)}/{len(vi_draft)} dòng đã có")
+        budgets = _draft_budgets(vi_draft)
         for bi, i in enumerate(range(0, len(vi_draft), BATCH), 1):
             cn_b, vi_b = cn_src[i:i + BATCH], vi_draft[i:i + BATCH]
             if i + len(vi_b) <= len(out):
                 continue   # covered by the checkpoint
+            ctx_b = {**(context or {}), "_budgets": budgets[i:i + BATCH]}
             try:
                 out.extend(_retry(
-                    lambda c=cn_b, v=vi_b: provider.refine_texts(
-                        c, v, context=context, glossary=glossary),
+                    lambda c=cn_b, v=vi_b, x=ctx_b: provider.refine_texts(
+                        c, v, context=x, glossary=glossary),
                     sleep=_sleep))
             except Exception as exc:  # noqa: BLE001 - polish failure keeps the draft
                 out.extend(vi_b)
