@@ -3,8 +3,9 @@
 Workstreams A and B have shipped; this is the live to-do list. Statuses were verified against code
 2026-07-02 and re-verified 2026-09-11 (DOC-1 done, UX-6 parked — see each task).
 
-Recommended order: **UX-4** (find/replace, [S], biggest per-job win) → **UX-3** (undo gaps + redo)
-→ **UX-5** (settings fields) → UX-2 / UX-1 / UX-7 by user preference. UX-6 is parked.
+Shipped 2026-09-11: **UX-3**, **UX-4**, **UX-5** (see each task). **UX-6 is PARKED.**
+Remaining, in recommended order: **UX-2** (timing nudge + lock) → **UX-1** (GUI batch queue)
+→ **UX-7** (Douyin download fallback).
 
 ---
 
@@ -60,32 +61,38 @@ locked cues (extend `test_plan_segments.py`); offscreen editor test for the side
 
 ---
 
-## UX-3 [M] Undo completeness + redo (backlog — partial: undo exists, gaps verified)
+## ✅ UX-3 [M] Undo completeness + redo — SHIPPED `84ae480`
 
-`editor_view._snapshot/_undo_action` cover split/merge/add/delete + table edits, but SKIP timeline
-drags, per-line style changes, and gain/mute edits; there is no redo stack.
-1. Call `_snapshot()` at the start of drag-commit (`_on_cue_dragged` path / `dragCommitted`),
-   `_on_style_changed` (per-line branch), `_on_gain`, `_on_mute`.
-2. Add `_redo_stack` (cleared on new edit); Ctrl+Z / Ctrl+Y shortcuts.
-Verify: offscreen pytest — drag→undo restores times; gain→undo restores; undo→redo round-trips.
-
----
-
-## UX-4 [S] Find/replace in the editor (backlog — not started)
-
-Toolbar "🔍" → small bar: find text (vi column), replace, replace-all; wraps `table` selection.
-Pure find logic testable on the cues list. Verify: offscreen pytest (replace-all count, case
-sensitivity toggle).
+All four gaps closed, plus `_redo_stack` on Ctrl+Y / Ctrl+Shift+Z. Two things worth remembering:
+- `Timeline.cueChanged` fires from `mouseMoveEvent` (per pixel), so the snapshot hangs off a NEW
+  `Timeline.dragStarted` signal emitted in `mousePressEvent` — one undo step per gesture. Same
+  shape for the gain slider (`sliderPressed`, plus `not isSliderDown()` for keyboard/wheel steps).
+- The mute snapshot lives INSIDE `_on_mute`, not on a second `toggled` connection: `_on_mute` is
+  connected in `_cue_panel()`, which runs earlier, so a later connection captures the POST-edit
+  state. If you add another snapshot point, check the connection order the same way.
+Covered by `backend/tests/test_undo_redo.py` (13 tests).
 
 ---
 
-## UX-5 [S] Settings dialog expansion (backlog — not started)
+## ✅ UX-4 [S] Find/replace in the editor — SHIPPED `6bc1327`
 
-`desktop/settings_dialog.py` exposes only API keys. Add fields (all already exist in
-`backend/app/config.py` settings): `YTDLP_COOKIES_FROM_BROWSER` / `YTDLP_COOKIES_FILE`,
-`VIZSUP_STORAGE_DIR`, `FFMPEG_PATH`, `WHISPER_MODEL`, `BBDOWN_PATH`, `ZHIPU_MODEL`. Persist the
-same way keys are persisted today (the dialog writes .env at repo root). Verify: offscreen
-construct test — populated fields round-trip to .env.
+Ctrl+F / 🔍 toolbar button; Enter = find next (wraps); Esc closes. Search policy is pure, in
+`desktop/cuemodel.py` next to `split_cue`/`merge_cues`: `find_matches`, `find_next`,
+`replace_in_cue`, `replace_all`. Decisions: VI column only (zh is a read-only reference),
+case-insensitive by default replacing the matched span, needle escaped so `(giảm)` is literal,
+and a no-match replace-all never touches the undo/redo stacks.
+Covered by `backend/tests/test_find_replace.py` (23 tests).
+
+---
+
+## ✅ UX-5 [S] Settings dialog expansion — SHIPPED `66fdb60`
+
+All seven fields added as an `OPTIONS` table with file/dir browsers and editable combos. Note the
+deliberately DIFFERENT save semantics: API keys keep "blank = unchanged" (they render masked, so a
+stray clear must not destroy a key), while options write even when blank, because for them an empty
+value IS the instruction. `vizsup_storage_dir` is typed `Path` and is assigned as one.
+Covered by `backend/tests/test_settings_options.py` (9 tests). Its fixture blanks the real key
+attrs first — the dialog prefills from the live settings object, i.e. the developer's real .env.
 
 ---
 

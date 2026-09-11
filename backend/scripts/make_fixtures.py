@@ -41,10 +41,10 @@ REFS = SAMPLES / "refs"
 # (start, end, text) — burned in AND written to the reference SRT, so the OCR
 # reference is exact by construction rather than hand-labeled.
 HARDSUB_LINES = [
-    (0.0, 2.5, "你好世界 欢迎观看这个视频"),
+    (0.0, 2.5, "你好世界欢迎观看这个视频"),
     (2.5, 5.0, "今天我们来聊一聊人工智能"),
     (5.0, 7.5, "这项技术发展得非常快"),
-    (7.5, 10.0, "谢谢观看 记得点赞订阅"),
+    (7.5, 10.0, "谢谢观看记得点赞订阅"),
 ]
 
 # A CJK font that actually has these glyphs. drawtext silently draws tofu without one.
@@ -80,10 +80,21 @@ def _run(cmd: list[str]) -> None:
 
 
 def build_hardsub() -> Path:
-    """A clip with burned-in Chinese subtitles — the OCR / hardsub-detect fixture."""
+    """A clip with burned-in Chinese subtitles — the OCR / hardsub-detect fixture.
+
+    A full-width opaque plate covers the subtitle band, the way many Chinese
+    uploads actually caption. That is not cosmetic: without it the testsrc2
+    pattern fills the rest of the bottom-third crop and RapidOCR reads CJK
+    glyphs out of the noise, so the "exact by construction" reference would be
+    a lie. This fixture is therefore CLEAN — to measure proofread quality on
+    noisy OCR, point ocr_eval.py at a real clip with a hand-fixed reference.
+    """
     out = SAMPLES / "hardsub.mp4"
     font = _esc(_font())
-    draws = []
+    # The plate spans the full bottom THIRD — that is exactly the region ocr.py
+    # crops. A shorter band leaves testsrc2's frame counter inside the crop and
+    # OCR reads it as a line prefix ("1226 这项技术…").
+    draws = ["drawbox=x=0:y=2*ih/3:w=iw:h=ih/3:color=black@1.0:t=fill"]
     for start, end, text in HARDSUB_LINES:
         draws.append(
             f"drawtext=fontfile='{font}':text='{text}':fontsize=28:fontcolor=white:"
