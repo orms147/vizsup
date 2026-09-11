@@ -28,8 +28,15 @@ models/
 
 # job working data & outputs
 storage/
+# Source clips are copyrighted (Douyin/Bilibili) and large — never commit them.
+# The hand-labeled / generated REFERENCE SRTs are text-only and are committed, so
+# the eval scripts in backend/scripts/ are reproducible. Media is regenerated with
+# backend/scripts/make_fixtures.py.
 samples/*
 !samples/.gitkeep
+!samples/refs/
+samples/refs/*
+!samples/refs/*.srt
 
 # os / editor
 .DS_Store
