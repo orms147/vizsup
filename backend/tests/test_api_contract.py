@@ -112,6 +112,68 @@ def test_asr_default_resolves_from_settings(manager, monkeypatch):
     assert seen["provider"] == jobs.settings.vizsup_default_asr
 
 
+# --- cancel reaches INSIDE the stages ------------------------------------------
+# The API used to check `cancelled` only BETWEEN stages, so hitting cancel during a
+# 200-line translate (or a long TTS run) did nothing until the whole stage finished
+# — and kept spending provider credits the whole time. These pin the plumbing.
+# (The desktop worker has always passed cancel=; the API had not.)
+
+def test_translate_receives_a_live_cancel_callback(manager, monkeypatch):
+    seen = {}
+    inner = jobs.translate.translate            # the fixture's signature-checking fake
+
+    def spy(job, **kw):
+        seen["cancel"] = kw.get("cancel")
+        return inner(job, **kw)
+
+    monkeypatch.setattr(jobs.translate, "translate", spy)
+    state = manager.create("c1", url="u", options={})
+    asyncio.run(manager.run_until_gate("c1"))
+    assert state.stage == Stage.AWAIT_EDIT, state.error
+
+    cancel = seen["cancel"]
+    assert callable(cancel), "translate must be handed a cancel callback"
+    assert cancel() is False        # a live view of the flag, not a snapshot
+    state.cancelled = True
+    assert cancel() is True
+
+
+def test_tts_receives_a_live_cancel_callback(manager, monkeypatch):
+    seen = {}
+    inner = jobs.tts.synthesize
+
+    def spy(job, **kw):
+        seen["cancel"] = kw.get("cancel")
+        return inner(job, **kw)
+
+    monkeypatch.setattr(jobs.tts, "synthesize", spy)
+    state = manager.create("c2", url="u", options={})
+    asyncio.run(manager.run_until_gate("c2"))
+    asyncio.run(manager.render("c2"))
+
+    cancel = seen["cancel"]
+    assert callable(cancel)
+    assert cancel() is False
+    state.cancelled = True
+    assert cancel() is True
+
+
+def test_mid_batch_translate_cancel_reports_cancelled_not_failed(manager, monkeypatch):
+    """TranslateCancelled means "user cancelled; completed batches are checkpointed" —
+    it must not surface as a generic stage failure."""
+
+    def boom(job, **kw):
+        raise jobs.translate.TranslateCancelled("cancelled mid-batch")
+
+    monkeypatch.setattr(jobs.translate, "translate", boom)
+    state = manager.create("c3", url="u", options={})
+    asyncio.run(manager.run_until_gate("c3"))
+
+    assert state.stage == Stage.ERROR
+    assert state.error == "cancelled"      # not "TranslateCancelled: cancelled mid-batch"
+    assert not state.job.vi_srt.exists()
+
+
 # --- thin FastAPI validation check ---------------------------------------------
 
 def test_create_job_requires_url_or_file():

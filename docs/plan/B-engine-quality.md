@@ -1,15 +1,29 @@
-# Workstream B — Engine Quality (remaining)
+# Workstream B — Engine Quality  ✅ SHIPPED (historical)
 
-Output-quality tasks that survived plan v2. Status verified against code 2026-07-02 (grep-confirmed
-absent unless noted). Every quality claim needs a committed measurement (use `backend/app/qa.py`:
+> **STATUS: all five tasks landed.** This file is now a record of *why* each engine feature was built,
+> not a to-do list. The premises below were written on 2026-07-02 and describe the repo **before** the
+> work — in particular every "does not exist" sentence is now false. Do not re-derive these tasks.
+>
+> | Task | Commit | What landed |
+> |---|---|---|
+> | ENG-1 | `388b78b` | `pipeline/terms.py` (116 lines) + glossary compliance report |
+> | ENG-2 | `f32052a` | `pipeline/separate.py` (63 lines) — Demucs "keep music" dub mode |
+> | ENG-3 | `f14ff32` | fused ASR prefers whisperX forced alignment, faster-whisper fallback |
+> | ENG-4 | `b9601f9` | pure `group_frames()` + `rep_frame` in `ocr_report.json` + `ocr_eval.py` |
+> | ENG-5 | `55c899b` | persisted hardsub band; blur covers it, not the whole bottom-third |
+>
+> Follow-up fixes to the above: `9b54d93` (three bugs from the workstream-B adversarial review).
+
+Output-quality tasks that survived plan v2. Status as verified against code 2026-07-02 (grep-confirmed
+absent unless noted) — **historical, see the banner above**. Every quality claim needs a committed measurement (use `backend/app/qa.py`:
 `cer`, `srt_text_cer`, `timing_stats`), not vibes. Respect the 8 GB VRAM rule: heavy models run
 inside `app.heavy.heavy_task()` and `unload()` after use.
 
 ---
 
-## ENG-1 [M] Auto term-extraction pre-pass + glossary compliance report (was N-15 — not started)
+## ✅ ENG-1 [M] Auto term-extraction pre-pass + glossary compliance report — SHIPPED `388b78b`
 
-`backend/app/pipeline/terms.py` does not exist. Build:
+~~`backend/app/pipeline/terms.py` does not exist.~~ **It exists now** (landed `388b78b`). Original plan:
 1. `extract_terms(cues, provider, context) -> dict[str, str]` — ONE chunked LLM call (reuse the
    selected draft translator; numbered-list reply, tolerant parser modeled on `parse_numbered`)
    over the full CN transcript, extracting recurring proper nouns/brands/personas with suggested
@@ -32,9 +46,10 @@ with the merged glossary.
 
 ---
 
-## ENG-2 [L] Demucs "keep the music" dub mode (was N-8 — not started)
+## ✅ ENG-2 [L] Demucs "keep the music" dub mode — SHIPPED `f32052a`
 
-`backend/app/pipeline/separate.py` does not exist; `assemble` has replace/mix/duck only. Note:
+~~`backend/app/pipeline/separate.py` does not exist; `assemble` has replace/mix/duck only.~~
+**Both exist now** — `separate.py` landed `f32052a`, `assemble` has `audio_mode="keep_music"`. Note:
 `backend/pyproject.toml` `[audio]` extra ALREADY declares demucs — but it is NOT installed in the
 venv; installing it is part of this task (watch the torch pin vs faster-whisper).
 1. `separate.py::separate_background(job, *, model="htdemucs", log) -> Path` — run demucs
@@ -55,7 +70,7 @@ graph. One manual listen.
 
 ---
 
-## ENG-3 [L] Finish the fused ASR (was N-7 deferred bits — partial)
+## ✅ ENG-3 [L] Finish the fused ASR — SHIPPED `f14ff32`
 
 Done: `funasr_aligned` provider + pure `align.fuse_transcript_timing` (tested) with faster-whisper
 word timestamps as phase 2. Missing (grep-confirmed): whisperx path, `[asr-align]` extra,
@@ -73,7 +88,7 @@ installs `.[asr-accurate]`; code + tests must not require it (fusion tests are s
 
 ---
 
-## ENG-4 [M] Finish OCR refactor (was N-14 deferred bits — partial)
+## ✅ ENG-4 [M] Finish OCR refactor — SHIPPED `b9601f9`
 
 Done: per-cue confidence + suspect classifier + `ocr_report.json` + suspect-only proofread.
 Missing: the grouping state machine is still inline in `extract_hardsubs`
@@ -87,7 +102,7 @@ Missing: the grouping state machine is still inline in `extract_hardsubs`
 
 ---
 
-## ENG-5 [M] Persist the detected hardsub band; blur uses it (was N-16 deferred bit — partial)
+## ✅ ENG-5 [M] Persist the detected hardsub band; blur uses it — SHIPPED `55c899b`
 
 Done: cover_mode off/box/blur + GUI combo + CLI `--cover`; blur band is HARDCODED bottom-third.
 Missing: `hardsub_region.json` (grep-confirmed absent).

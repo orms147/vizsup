@@ -1,14 +1,18 @@
-# Workstream C — Workflow & UX (remaining)
+# Workstream C — Workflow & UX (remaining)  ← **ACTIVE WORKSTREAM**
 
-Statuses verified against code 2026-07-02. DOC-1 first — it removes stale premises that would
-mislead any implementer (including you).
+Workstreams A and B have shipped; this is the live to-do list. Statuses were verified against code
+2026-07-02 and re-verified 2026-09-11 (DOC-1 done, UX-6 parked — see each task).
+
+Recommended order: **UX-4** (find/replace, [S], biggest per-job win) → **UX-3** (undo gaps + redo)
+→ **UX-5** (settings fields) → UX-2 / UX-1 / UX-7 by user preference. UX-6 is parked.
 
 ---
 
-## DOC-1 [S] Fix docs that contradict the code — DO THIS FIRST
+## ✅ DOC-1 [S] Fix docs that contradict the code — DONE
 
-`CLAUDE.md` and `docs/dev-plan.md:158` were corrected on 2026-07-02 (same commit as this handbook).
-Remaining contradictions to fix:
+`CLAUDE.md` and `docs/dev-plan.md:158` were corrected on 2026-07-02 (same commit as this handbook);
+items 1-4 below landed in `108d062`; the `docs/plan/` refresh (test counts, shipped workstreams,
+false "does not exist" premises) landed 2026-09-11. Original list:
 1. `docs/architecture.md:14-25` still describes VideOCR / WhisperX / a React editor — the
    implementation is RapidOCR frame sampling (`backend/app/pipeline/ocr.py:5-9`), faster-whisper /
    FunASR providers, and a PySide6 editor (`desktop/views/editor_view.py`).
@@ -85,15 +89,30 @@ construct test — populated fields round-trip to .env.
 
 ---
 
-## UX-6 [M] API (FastAPI) parity: auto/OCR route + cover_mode (verified gaps)
+## ⏸ UX-6 [M] API (FastAPI) parity: auto/OCR route + cover_mode — **PARKED, do not start**
 
-`jobs.py` SUBTITLE stage runs provided-SRT or ASR only (`jobs.py:171-178`, comment at :166-168);
-`RenderOptions` has audio_mode/volumes (done in N-11) but only the legacy `cover_hardsubs` bool
-(no `cover_mode` blur). Web UI (`frontend/`) does not exist and stays out of scope (D-backlog).
+**Parked 2026-09-11 by user decision.** The FastAPI surface has **no consumer**: there is no
+`frontend/`, and both the desktop worker (`desktop/worker.py:19`) and the CLI import `app.*`
+directly. The only caller of `/api/jobs` in the repo is one line in `tests/test_api_contract.py`.
+Spending effort — and desktop-regression risk — on parity for a front-end that does not exist is
+not worth it.
+
+**Do not "fix" the gaps below, and do not propose a unified headless runner to close them.** The
+duplication between `cli.py:67-141`, `jobs.py:147-221` and `desktop/worker.py:82-273` is known and
+accepted: the desktop is the PRIMARY UI per `CLAUDE.md`, it works, and a shared-runner refactor
+would put it at risk to serve dead code. (Note the heavy-model lock is **not** duplicated — it lives
+inside the stages themselves: `asr.py:38`, `ocr.py:304`, `hardsub_detect.py:142`, `separate.py:42`.)
+
+**Un-park only if** a real HTTP consumer appears (the React frontend in `D-backlog.md`). Then do
+exactly this, and nothing larger:
 1. `CreateJob` gains `source: "auto"|"asr"|"ocr"|None`, `ocr_region`, `ocr_proofread`; `jobs.py`
    mirrors the worker's auto→(OCR|ASR) routing, wrapped in `heavy_task` (already imported for ASR).
 2. `RenderOptions.cover_mode: str | None` → `_render_kwargs` passes it through.
 3. Extend `test_api_contract.py` with fakes for the OCR route.
+
+Already done separately (2026-09-11, *not* parity work — just honesty): `cancel=` is now propagated
+from `jobs.py` into `translate`/`tts`, and `_render_kwargs` documents which kwargs it deliberately
+omits.
 
 ---
 

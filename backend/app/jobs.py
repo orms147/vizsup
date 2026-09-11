@@ -61,7 +61,11 @@ def _render_kwargs(opts: dict) -> dict:
     """Map API render options onto assemble.assemble's real signature — kept as
     one pure function so the contract test can bind it against the signature
     (this call once passed a removed ``replace_audio`` kwarg and every API
-    render died with a TypeError after TTS had already been paid for)."""
+    render died with a TypeError after TTS had already been paid for).
+
+    Deliberately NOT forwarded (the API has no consumer that sets them — see UX-6
+    "PARKED" in docs/plan/C-workflow-ux.md): ``cover_mode``, ``style``, ``size``,
+    ``burn_cues``. That is a scope decision, not a bug — don't "fix" it here."""
     return {
         "audio_mode": opts.get("audio_mode")
                       or ("mix" if opts.get("keep_audio") else "replace"),
@@ -185,13 +189,14 @@ class JobManager:
                 job,
                 draft=opts.get("translator", "passthrough"),
                 refine=opts.get("refine"),
+                cancel=lambda: state.cancelled,
             )
             await loop.run_in_executor(None, fn)
 
             # 4) park at the edit gate
             self._emit(state, stage=Stage.AWAIT_EDIT, progress=1.0,
                        message="review/edit subtitles, then render")
-        except CancelledError:
+        except (CancelledError, translate.TranslateCancelled):
             self._emit(state, stage=Stage.ERROR, message="cancelled", error="cancelled")
         except Exception as exc:  # noqa: BLE001 - surface any stage failure to the client
             self._emit(state, stage=Stage.ERROR, message="failed", error=f"{type(exc).__name__}: {exc}")
@@ -206,8 +211,10 @@ class JobManager:
             if not job.vi_srt.exists():
                 raise FileNotFoundError("no vi.srt to render; run to the edit gate first")
             self._emit(state, stage=Stage.TTS, progress=0.2, message="synthesizing Vietnamese voice")
+            # tts.synthesize returns a PARTIAL list on cancel (it never raises) — the
+            # _check_cancel below is what actually aborts before we pay for the encode.
             fn = functools.partial(tts.synthesize, job, provider=opts.get("tts", settings.vizsup_default_tts),
-                                   voice=opts.get("voice"))
+                                   voice=opts.get("voice"), cancel=lambda: state.cancelled)
             segments = await loop.run_in_executor(None, fn)
 
             self._check_cancel(state)

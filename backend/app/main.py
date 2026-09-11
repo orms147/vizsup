@@ -163,9 +163,11 @@ async def job_ws(ws: WebSocket, job_id: str) -> None:
         while True:
             event = await q.get()
             await ws.send_json(event)
-            if event.get("stage") in (Stage.DONE.value, Stage.ERROR.value, Stage.AWAIT_EDIT.value):
-                # keep the socket open a beat so the client receives terminal/gate states
-                continue
+            if event.get("stage") in (Stage.DONE.value, Stage.ERROR.value):
+                await ws.close()      # terminal — nothing further will be published
+                return
+            # AWAIT_EDIT deliberately holds the socket OPEN: the client parks at the
+            # human gate and the same socket carries the render progress that follows.
     except WebSocketDisconnect:
         pass
     finally:

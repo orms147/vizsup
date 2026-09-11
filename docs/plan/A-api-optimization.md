@@ -1,4 +1,19 @@
-# Workstream A — API Optimization (latency + token cost)
+# Workstream A — API Optimization (latency + token cost)  ✅ SHIPPED (historical)
+
+> **STATUS: all ten tasks landed** (`bc7eda1` → `069a25c`, with follow-up `9b54d93`). This file is a
+> record of *why* the transport/token work was done, not a to-do list.
+>
+> | Phase | Tasks | Commit |
+> |---|---|---|
+> | 1 — transport foundations | API-1…API-4 | `bc7eda1` |
+> | 2 — token/latency wins | API-5, API-7 | `0510d04` |
+> | 2 — refine checkpoint | API-6 | `b6686c9` |
+> | 3 — length budgets in refine | API-8 | `c5740bd` |
+> | 3 — parallel draft+refine | API-9 | `0b596d3` |
+> | 3 — parallel edge-tts | API-10 | `f294d08`, fix `069a25c` |
+>
+> Premises and line numbers below describe the **2026-07-02 tree** — re-verify before reusing.
+
 
 **Goal:** cut the two waits the user actually feels — *Start → edit gate* and *render-click → MP4*
 — and cut token spend, with special attention to the **OCR path** (videos that already carry

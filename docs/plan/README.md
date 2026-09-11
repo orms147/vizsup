@@ -1,38 +1,54 @@
 # vizsup — Implementation Handbook (docs/plan/)
 
-**Audience: the model/session that will WRITE THE CODE** (planned: Claude Opus 4.8, fresh session,
-no memory of prior work). Everything you need is in this directory + `CLAUDE.md`. Each task spec is
-self-contained: premise (verified against code on 2026-07-02 with file:line evidence), approach,
-invariants that must not break, and headless verification.
+**Audience: the model/session that will WRITE THE CODE** (fresh session, no memory of prior work).
+Everything you need is in this directory + `CLAUDE.md`. Each task spec is self-contained: premise,
+approach, invariants that must not break, and headless verification.
+
+> ⚠ **Premises in A/B were verified on 2026-07-02 and are now HISTORICAL** — those workstreams have
+> shipped. Statements there of the form "`x.py` does not exist" describe the repo *before* the work
+> landed. Only `C-workflow-ux.md` and `D-backlog.md` are forward-looking. Re-verify any premise
+> against the code before acting on it.
 
 ## Files in this directory — read in this order
 
 | File | What | Priority |
 |---|---|---|
 | `README.md` (this) | Status, environment, working rules | read first |
-| `A-api-optimization.md` | **Active workstream**: 10 verified tasks (API-1…API-10) cutting latency + token cost, with an OCR-path focus | do next |
-| `B-engine-quality.md` | Remaining engine tasks (term extraction, Demucs, N-7/14/16 completions) | after A |
-| `C-workflow-ux.md` | Remaining workflow/UX tasks (GUI queue, nudge, undo/redo, settings, API parity, doc fixes) | after A, interleave with B |
+| `A-api-optimization.md` | ✅ **SHIPPED** — API-1…API-10 landed (`bc7eda1`…`069a25c`). Historical record of the latency/token work | reference only |
+| `B-engine-quality.md` | ✅ **SHIPPED** — ENG-1…ENG-5 landed (`388b78b`…`9b54d93`). Historical record | reference only |
+| `C-workflow-ux.md` | **Active workstream**: remaining workflow/UX tasks (find/replace, undo+redo, settings, GUI queue, nudge). **UX-6 is PARKED — read its note before touching the API** | do next |
 | `D-backlog.md` | Parked ideas — do not start without the user asking | never by default |
 
 History: `docs/dev-plan.md` is the previous plan (v2) with DONE annotations for milestones M5–M8;
 it remains the record of what was built and why. This directory is the forward-looking plan.
 
-## Status snapshot (2026-07-02, HEAD `14784d3`)
+## Status snapshot (2026-09-11, HEAD `9b54d93`)
 
 The app **works end-to-end** and has been verified with a real CLI job (hardsubbed clip → auto-detect
-→ OCR → edit gate → edge-tts dub → MP4). Test suite: **152 headless tests green** (`pytest -q` from
-repo root), ruff clean, GitHub Actions CI on every push. Done: M5 (correctness/data-safety), M6
-(long-run reliability: translate checkpoints, TTS manifest resume, render lock/cancel, long-video
-ffmpeg), M7-light (heavy-model lock, fused ASR provider, OCR suspect-only proofread, pre-gate
-auto-shorten, cover off/box/blur, dub loudness), M8-light (glossary dialog, CLI batch, BBDown
-fallback).
+→ OCR → edit gate → edge-tts dub → MP4). Test suite: **235 headless tests green** (`pytest -q` from
+repo root), ruff clean, GitHub Actions CI on every push.
+
+Done: M5 (correctness/data-safety), M6 (long-run reliability: translate checkpoints, TTS manifest
+resume, render lock/cancel, long-video ffmpeg), M7-light (heavy-model lock, fused ASR provider, OCR
+suspect-only proofread, pre-gate auto-shorten, cover off/box/blur, dub loudness), M8-light (glossary
+dialog, CLI batch, BBDown fallback), **workstream A** (API-1…API-10: transport reuse, refine
+checkpointing, batch autoshorten, OCR-tolerant prompts, parallel draft+refine, parallel edge-tts),
+**workstream B** (ENG-1…ENG-5: term extraction + glossary report, Demucs keep-music, whisperX forced
+alignment, pure `group_frames`, persisted hardsub band).
+
+**Known and deliberate gaps** (do not "fix" without reading the rationale):
+- The FastAPI surface (`backend/app/main.py`, `jobs.py`) serves the provided-SRT/ASR path only — no
+  OCR/auto route, no `cover_mode`/`style`/`size`/`burn_cues`. It has **no consumer** (no `frontend/`;
+  desktop and CLI import `app.*` directly). Parity work is PARKED — see UX-6 in `C-workflow-ux.md`.
+- `samples/` is gitignored on purpose (copyrighted source clips). Reference fixtures go in
+  `samples/refs/*.srt` (text only); generate media with `backend/scripts/make_fixtures.py`.
 
 ## Dev environment (this exact machine — do not rediscover)
 
-- **Python venv:** `backend/.venv` (Python 3.12). ALL backend deps AND PySide6 live there.
+- **Python venv:** `backend/.venv` (Python 3.12.10). ALL backend deps AND PySide6 live there.
+  CI runs **3.11** (the floor in `pyproject.toml`), so don't use 3.12-only syntax.
 - **Run tests:** from repo root: `backend\.venv\Scripts\python -m pytest -q` (pytest.ini sets
-  testpaths). Expect 152+ passing, ~1-2s. GUI tests use `QT_QPA_PLATFORM=offscreen` and
+  testpaths). Expect 235+ passing, ~1-2s. GUI tests use `QT_QPA_PLATFORM=offscreen` and
   skip cleanly when PySide6 is absent (CI).
 - **Lint:** `backend\.venv\Scripts\python -m ruff check backend/app desktop` (config: root
   `ruff.toml`). Must stay clean.
@@ -95,8 +111,15 @@ backend\.venv\Scripts\python -m app.cli render --workdir storage\smoke
 
 ## Suggested execution order
 
-1. `C-workflow-ux.md` → **DOC-1** (30 min: fix stale docs so nothing misleads you later).
-2. `A-api-optimization.md` **Phase 1** (API-1…API-4): transport foundations. Small, independent.
-3. `A` **Phase 2** (API-5, API-6, API-7): cheap token/latency wins, OCR-path payoff.
-4. `A` **Phase 3** (API-8, API-9, API-10): the big rocks — parallel translate, parallel TTS.
-5. Then `B` / `C` by user preference.
+Workstreams A and B are done. What remains, in order:
+
+1. **API honesty** (small, no refactor): propagate `cancel=` from `jobs.py` into `translate`/`tts`;
+   drop the dead branch in the `main.py` WS loop. Explicitly *not* a unified-runner refactor.
+2. **Test the uncovered edges**: `cli.py` (0 tests today), `download.py` (`normalize_url`,
+   `platform_of`, BBDown fallback), the `main.py` subtitles routes. Reuse the monkeypatch +
+   `inspect.signature().bind` pattern from `tests/test_api_contract.py`.
+3. **CI: add a `windows-latest` matrix job** with the `desktop` extra, so the PySide6 tests actually
+   run instead of skipping silently.
+4. `C-workflow-ux.md` → **UX-4** (find/replace), then **UX-3** (undo gaps + redo), then **UX-5**
+   (settings fields). These are what the user touches every job.
+5. `D-backlog.md` only when the user explicitly asks.
