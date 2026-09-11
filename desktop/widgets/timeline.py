@@ -27,7 +27,8 @@ def _col(hex_or_rgba: str) -> QColor:
 class Timeline(QWidget):
     seeked = Signal(float)
     blockSelected = Signal(int)
-    cueChanged = Signal(int)  # a cue's start/end was dragged
+    cueChanged = Signal(int)  # a cue's start/end was dragged (fires per mouse-move)
+    dragStarted = Signal()    # a drag gesture BEGAN — one undo snapshot per drag
 
     def __init__(self) -> None:
         super().__init__()
@@ -178,6 +179,7 @@ class Timeline(QWidget):
             self.blockSelected.emit(idx)
             c = self._cues[idx]
             self._drag = (idx, mode, x, c.start, c.end)
+            self.dragStarted.emit()   # before any mutation — snapshot the pre-drag state
             self.update()
         else:
             t = max(0.0, x / self._pps)

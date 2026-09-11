@@ -144,10 +144,18 @@ class EditorView(QWidget):
         self.video.dragCommitted.connect(self._reburn_preview)                # release → exact frame
         self.style_panel.resetSelectedRequested.connect(self._reset_selected_style)
 
-        # undo (Ctrl+Z): snapshot before table cell edits and before each tool action
+        # undo/redo (Ctrl+Z / Ctrl+Y). Snapshot points: table cell edits, each tool
+        # action, timeline drags, per-line style, and gain/mute — i.e. everything that
+        # mutates self.cues. Anything that mutates cues WITHOUT a _snapshot() first is
+        # a hole in undo; add the call rather than special-casing it here.
         self._undo_stack: list[list[EditorCue]] = []
+        self._redo_stack: list[list[EditorCue]] = []
         self.table.beforeEdit.connect(self._snapshot)
+        self.timeline.dragStarted.connect(self._snapshot)     # once per drag, not per pixel
+        self.gain.sliderPressed.connect(self._snapshot)       # once per slider gesture
         QShortcut(QKeySequence.Undo, self, activated=self._undo_action)
+        QShortcut(QKeySequence.Redo, self, activated=self._redo_action)          # Ctrl+Y
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._redo_action)
         QShortcut(QKeySequence.Find, self, activated=lambda: self._toggle_find(True))
         esc = QShortcut(QKeySequence(Qt.Key_Escape), self.find_bar,
                         activated=lambda: self._toggle_find(False))
@@ -311,27 +319,25 @@ class EditorView(QWidget):
             self._find_next()
             return
         self._snapshot()
-        if cuemodel.replace_in_cue(self.cues, i, needle, self.repl_in.text(),
-                                   case_sensitive=self._case()):
-            self._reload()
-            self.table.selectRow(i)
-        else:
-            self._undo_stack.pop()
+        cuemodel.replace_in_cue(self.cues, i, needle, self.repl_in.text(),
+                                case_sensitive=self._case())
+        self._reload()
+        self.table.selectRow(i)
         self._find_next()
 
     def _replace_all(self) -> None:
         needle = self.find_in.text()
         if not needle:
             return
+        if not cuemodel.find_matches(self.cues, needle, case_sensitive=self._case()):
+            self.find_lbl.setText("không thấy")
+            return                       # decide before snapshotting: a no-op must not
+                                         # touch the undo stack or clear the redo chain
         self._snapshot()
         occ, lines = cuemodel.replace_all(self.cues, needle, self.repl_in.text(),
                                           case_sensitive=self._case())
-        if occ:
-            self._reload()
-            self.find_lbl.setText(f"đã thay {occ} chỗ / {lines} câu")
-        else:
-            self._undo_stack.pop()       # nothing changed — no no-op step in the undo stack
-            self.find_lbl.setText("không thấy")
+        self._reload()
+        self.find_lbl.setText(f"đã thay {occ} chỗ / {lines} câu")
 
     # --- per-cue dub panel ---------------------------------------------------
     def _cue_panel(self) -> QWidget:
@@ -418,12 +424,19 @@ class EditorView(QWidget):
 
     def _on_gain(self, v: int) -> None:
         if 0 <= self._sel < len(self.cues):
+            if not self.gain.isSliderDown():
+                # keyboard/wheel step — a discrete action, so one undo step each.
+                # During a mouse drag the sliderPressed snapshot already covers it.
+                self._snapshot()
             self.cues[self._sel].gain_db = float(v)
             self.gain_lbl.setText(f"{v:+d} dB")
             self._mark_dirty()
 
     def _on_mute(self, on: bool) -> None:
         if 0 <= self._sel < len(self.cues):
+            # snapshot HERE, not via a second toggled connection: this handler is
+            # connected first, so a later connection would capture the post-edit state.
+            self._snapshot()
             self.cues[self._sel].mute = on
             self.table.refresh_row(self._sel)
             self._mark_dirty()
@@ -538,6 +551,7 @@ class EditorView(QWidget):
         self.timeline.set_cues(self.cues)
         self.count.setText(f"{len(self.cues)} dòng")
         self._undo_stack.clear()
+        self._redo_stack.clear()
         self._update_cue_panel(-1)
         st = self._load_style(job)
         if st:
@@ -553,18 +567,34 @@ class EditorView(QWidget):
         self.count.setText(f"{len(self.cues)} dòng")
         self._mark_dirty()
 
-    # --- undo ----------------------------------------------------------------
+    # --- undo / redo ---------------------------------------------------------
+    def _copy_cues(self) -> list[EditorCue]:
+        return [EditorCue(c.start, c.end, c.vi, c.zh, c.gain_db, c.mute, c.style)
+                for c in self.cues]
+
     def _snapshot(self) -> None:
-        self._undo_stack.append(
-            [EditorCue(c.start, c.end, c.vi, c.zh, c.gain_db, c.mute, c.style) for c in self.cues])
+        """Record the state BEFORE an edit. A fresh edit invalidates the redo chain
+        (standard editor semantics: you cannot redo a future you just diverged from)."""
+        self._undo_stack.append(self._copy_cues())
         if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
+        self._redo_stack.clear()
 
     def _undo_action(self) -> None:
         if not self._undo_stack:
             return
+        self._redo_stack.append(self._copy_cues())
         self.cues = self._undo_stack.pop()
         self._reload()
+        self._update_cue_panel(self._sel)     # gain/mute widgets must follow the restore
+
+    def _redo_action(self) -> None:
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(self._copy_cues())
+        self.cues = self._redo_stack.pop()
+        self._reload()
+        self._update_cue_panel(self._sel)
 
     def _save(self) -> None:
         if self.job is not None:
@@ -581,8 +611,12 @@ class EditorView(QWidget):
     def _on_style_changed(self) -> None:
         # scope "selected" applies to the chosen/current cue; if there is none, fall
         # back to the global style so an edit is NEVER silently lost.
-        if self.style_panel.get_scope() == "selected" and self._apply_style_to_selection():
-            pass
+        if self.style_panel.get_scope() == "selected":
+            self._snapshot()        # per-line style lives on the cues → undoable
+            if not self._apply_style_to_selection():
+                self._undo_stack.pop()
+                self._set_global_from_panel()
+                self.video.set_style(self._g_style, self._g_size, self._g_font)
         else:
             self._set_global_from_panel()                # update the global (Default) style
             self.video.set_style(self._g_style, self._g_size, self._g_font)
