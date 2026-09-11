@@ -157,3 +157,73 @@ def merge_cues(a: EditorCue, b: EditorCue) -> EditorCue:
         mute=a.mute or b.mute,
         style=a.style,
     )
+
+
+# --- pure find / replace over the VI column (UX-4) ---------------------------
+# Kept here, Qt-free, so the search semantics are headless-testable; the editor's
+# find bar is a thin wrapper. Only the VI text is searched — the zh column is a
+# read-only reference and must never be rewritten.
+
+def find_matches(cues: list[EditorCue], needle: str, *,
+                 case_sensitive: bool = False) -> list[int]:
+    """Indices of cues whose VI text contains ``needle``. Empty needle → no match
+    (so an empty box never "matches everything" and selects row 0)."""
+    if not needle:
+        return []
+    hay = (lambda s: s) if case_sensitive else str.lower
+    n = hay(needle)
+    return [i for i, c in enumerate(cues) if n in hay(c.vi)]
+
+
+def find_next(cues: list[EditorCue], needle: str, start: int, *,
+              case_sensitive: bool = False) -> int:
+    """Next matching index at or after ``start``, wrapping around; -1 if none.
+
+    ``start`` may be out of range (no selection yet → -1); it is clamped, so the
+    first Enter in a fresh find bar lands on the first match in the file.
+    """
+    hits = find_matches(cues, needle, case_sensitive=case_sensitive)
+    if not hits:
+        return -1
+    start = max(0, start)
+    for i in hits:
+        if i >= start:
+            return i
+    return hits[0]                      # wrap
+
+
+def replace_in_cue(cues: list[EditorCue], idx: int, needle: str, repl: str, *,
+                   case_sensitive: bool = False) -> bool:
+    """Replace the FIRST occurrence in one cue. True when something changed."""
+    if not needle or not (0 <= idx < len(cues)):
+        return False
+    text = cues[idx].vi
+    if case_sensitive:
+        pos = text.find(needle)
+    else:
+        pos = text.lower().find(needle.lower())
+    if pos < 0:
+        return False
+    cues[idx].vi = text[:pos] + repl + text[pos + len(needle):]
+    return True
+
+
+def replace_all(cues: list[EditorCue], needle: str, repl: str, *,
+                case_sensitive: bool = False) -> tuple[int, int]:
+    """Replace every occurrence across every cue. Returns (occurrences, lines).
+
+    Case-insensitive mode replaces the matched span, not the needle's casing, so
+    "Hà nội" → "Hà Nội" works regardless of how each line happened to spell it.
+    """
+    if not needle:
+        return (0, 0)
+    occurrences = lines = 0
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pat = re.compile(re.escape(needle), flags)
+    for c in cues:
+        new, n = pat.subn(repl, c.vi)
+        if n:
+            c.vi = new
+            occurrences += n
+            lines += 1
+    return (occurrences, lines)

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -100,6 +101,8 @@ class EditorView(QWidget):
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
         rlay.addLayout(self._toolbar())
+        rlay.addWidget(self._find_bar())
+        self.find_bar.hide()                 # opens on Ctrl+F / the 🔍 button
         rlay.addWidget(self._cue_panel())
         self.table = SubtitleTable()
         rlay.addWidget(self.table, 1)
@@ -145,6 +148,10 @@ class EditorView(QWidget):
         self._undo_stack: list[list[EditorCue]] = []
         self.table.beforeEdit.connect(self._snapshot)
         QShortcut(QKeySequence.Undo, self, activated=self._undo_action)
+        QShortcut(QKeySequence.Find, self, activated=lambda: self._toggle_find(True))
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self.find_bar,
+                        activated=lambda: self._toggle_find(False))
+        esc.setContext(Qt.WidgetWithChildrenShortcut)   # don't swallow Esc app-wide
 
     def _toolbar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -171,6 +178,11 @@ class EditorView(QWidget):
             b.setObjectName("ghost")
             b.clicked.connect(slot)
             bar.addWidget(b)
+        fb = QPushButton("🔍 Tìm")
+        fb.setObjectName("ghost")
+        fb.setToolTip("Tìm / thay trong phụ đề tiếng Việt (Ctrl+F)")
+        fb.clicked.connect(lambda: self._toggle_find())
+        bar.addWidget(fb)
         gl = QPushButton("📖 Thuật ngữ")
         gl.setObjectName("ghost")
         gl.setToolTip("Sửa bảng thuật ngữ Trung → Việt (tự nạp khi dịch)")
@@ -207,6 +219,119 @@ class EditorView(QWidget):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lay.addWidget(scroll, 1)
         return dock
+
+    # --- find / replace (UX-4) -----------------------------------------------
+    def _find_bar(self) -> QWidget:
+        """Find/replace over the VI column. Search semantics are pure functions in
+        cuemodel (headless-tested); this is the thin wrapper."""
+        bar = QWidget()
+        bar.setObjectName("dock")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(16, 7, 16, 7)
+        h.setSpacing(8)
+
+        self.find_in = QLineEdit()
+        self.find_in.setPlaceholderText("Tìm trong phụ đề tiếng Việt…")
+        self.find_in.setFixedWidth(210)
+        self.find_in.returnPressed.connect(self._find_next)
+        self.find_in.textChanged.connect(self._update_find_count)
+        self.repl_in = QLineEdit()
+        self.repl_in.setPlaceholderText("Thay bằng…")
+        self.repl_in.setFixedWidth(210)
+        self.repl_in.returnPressed.connect(self._replace_one)
+        self.find_case = QCheckBox("Phân biệt hoa/thường")
+        self.find_case.toggled.connect(self._update_find_count)
+        self.find_lbl = QLabel("")
+        self.find_lbl.setObjectName("mono")
+
+        h.addWidget(self.find_in)
+        h.addWidget(self.repl_in)
+        h.addWidget(self.find_case)
+        for label, slot, tip in (
+            ("Tiếp", self._find_next, "Tới câu khớp tiếp theo (Enter)"),
+            ("Thay", self._replace_one, "Thay ở câu đang chọn, rồi tới câu khớp sau"),
+            ("Thay tất cả", self._replace_all,
+             "Thay trong TOÀN BỘ phụ đề — hoàn tác được bằng Ctrl+Z"),
+        ):
+            b = QPushButton(label)
+            b.setObjectName("ghost")
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            h.addWidget(b)
+        h.addWidget(self.find_lbl)
+        h.addStretch(1)
+        close = QPushButton("✕")
+        close.setObjectName("ghost")
+        close.setFixedSize(26, 26)
+        close.setToolTip("Đóng (Esc)")
+        close.clicked.connect(lambda: self._toggle_find(False))
+        h.addWidget(close)
+
+        self.find_bar = bar
+        return bar
+
+    def _toggle_find(self, on: bool | None = None) -> None:
+        show = self.find_bar.isHidden() if on is None else on
+        self.find_bar.setVisible(show)
+        if show:
+            self.tabs.setCurrentIndex(0)     # the bar lives on the content tab
+            self.find_in.setFocus()
+            self.find_in.selectAll()
+            self._update_find_count()
+
+    def _case(self) -> bool:
+        return self.find_case.isChecked()
+
+    def _update_find_count(self) -> None:
+        needle = self.find_in.text()
+        if not needle:
+            self.find_lbl.setText("")
+            return
+        n = len(cuemodel.find_matches(self.cues, needle, case_sensitive=self._case()))
+        self.find_lbl.setText(f"{n} câu khớp" if n else "không thấy")
+
+    def _find_next(self) -> None:
+        i = cuemodel.find_next(self.cues, self.find_in.text(), self._cur() + 1,
+                               case_sensitive=self._case())
+        if i >= 0:
+            self.table.selectRow(i)
+            self._select(i, seek=True)
+        self._update_find_count()
+
+    def _replace_one(self) -> None:
+        needle = self.find_in.text()
+        i = self._cur()
+        if not needle:
+            return
+        # only replace where the cursor already sits on a match — otherwise the
+        # first click would silently edit whichever row happened to be selected
+        here = 0 <= i < len(self.cues) and bool(
+            cuemodel.find_matches([self.cues[i]], needle, case_sensitive=self._case()))
+        if not here:
+            self._find_next()
+            return
+        self._snapshot()
+        if cuemodel.replace_in_cue(self.cues, i, needle, self.repl_in.text(),
+                                   case_sensitive=self._case()):
+            self._reload()
+            self.table.selectRow(i)
+        else:
+            self._undo_stack.pop()
+        self._find_next()
+
+    def _replace_all(self) -> None:
+        needle = self.find_in.text()
+        if not needle:
+            return
+        self._snapshot()
+        occ, lines = cuemodel.replace_all(self.cues, needle, self.repl_in.text(),
+                                          case_sensitive=self._case())
+        if occ:
+            self._reload()
+            self.find_lbl.setText(f"đã thay {occ} chỗ / {lines} câu")
+        else:
+            self._undo_stack.pop()       # nothing changed — no no-op step in the undo stack
+            self.find_lbl.setText("không thấy")
 
     # --- per-cue dub panel ---------------------------------------------------
     def _cue_panel(self) -> QWidget:
