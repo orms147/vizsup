@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,14 +14,37 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      # Base deps only — the suite is pure-Python/headless; [ocr]/[asr]/[desktop]
-      # extras pull heavy or Windows-tuned wheels CI doesn't need.
-      - name: Install
-        run: |
-          python -m pip install -e "backend[dev]"
+      - run: python -m pip install -e "backend[dev]"
       - name: Lint (ruff)
-        run: |
-          python -m ruff check backend/app desktop
+        run: python -m ruff check backend/app desktop
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: base deps only — fast signal on the pure-Python core. The
+          # [ocr]/[asr] extras pull heavy wheels CI doesn't need.
+          - os: ubuntu-latest
+            extras: "[dev]"
+          # Windows is the platform this tool is actually tuned for (ffmpeg
+          # resolution, cp1252 consoles, the 32k argv ceiling, PySide6). Adding
+          # [desktop] here makes the offscreen Qt tests RUN instead of being
+          # importorskip'd away — on Linux they skip silently, which is how a
+          # desktop regression could reach main unnoticed.
+          - os: windows-latest
+            extras: "[dev,desktop]"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e "backend${{ matrix.extras }}"
       - name: Tests
-        run: |
-          python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
