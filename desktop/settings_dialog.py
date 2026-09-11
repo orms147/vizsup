@@ -1,6 +1,6 @@
-"""Settings dialog: per-provider API keys (password fields) saved to .env, with
-a working **Test connection** button per provider and, for OpenRouter, a
-**Fetch models** button that lists every available model into a picker.
+"""Settings dialog: per-provider API keys (password fields) plus the non-secret
+knobs (cookies, paths, model sizes), all saved to the repo-root .env. Each provider
+has a working **Test connection** button and OpenRouter a **Fetch models** picker.
 
 Network calls run on a background QThread so the UI never freezes.
 """
@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -39,6 +40,30 @@ KEYS = [
     ("AZURE_SPEECH_KEY", "Azure Speech (TTS)", "azure_speech_key", "azure"),
 ]
 ATTR_BY_ENV = {env: attr for env, _n, attr, _p in KEYS}
+
+# Non-secret settings. Every attr already exists in app.config.Settings — this
+# dialog only stops the user from hand-editing .env for them.
+# (env var, label, settings attr, kind, hint, choices)
+OPTIONS = [
+    ("YTDLP_COOKIES_FROM_BROWSER", "Cookie từ trình duyệt", "ytdlp_cookies_from_browser",
+     "choice", "Douyin thường cần cookie mới. Chọn trình duyệt đã đăng nhập douyin.com "
+     "rồi ĐÓNG trình duyệt đó trước khi tải.",
+     ["", "edge", "chrome", "firefox", "brave", "chromium", "opera", "vivaldi"]),
+    ("YTDLP_COOKIES_FILE", "…hoặc tệp cookies.txt", "ytdlp_cookies_file",
+     "file", "Dùng khi không lấy được cookie trực tiếp từ trình duyệt.", None),
+    ("FFMPEG_PATH", "Đường dẫn ffmpeg", "ffmpeg_path",
+     "file", "Trỏ tới ffmpeg.exe hoặc thư mục bin của nó. Bỏ trống = tìm trong PATH.", None),
+    ("BBDOWN_PATH", "Đường dẫn BBDown", "bbdown_path",
+     "file", "Bộ tải dự phòng cho Bilibili, chỉ chạy khi yt-dlp thất bại.", None),
+    ("VIZSUP_STORAGE_DIR", "Thư mục lưu dự án", "vizsup_storage_dir",
+     "dir", "Mỗi video là một thư mục con. Đổi ở đây KHÔNG di chuyển dự án cũ.", None),
+    ("WHISPER_MODEL", "Model faster-whisper", "whisper_model",
+     "choice", "Nhỏ hơn = nhanh hơn nhưng kém chính xác. Card 8 GB chạy được large-v3.",
+     ["tiny", "base", "small", "medium", "large-v2", "large-v3"]),
+    ("ZHIPU_MODEL", "Model GLM (ghi đè mặc định)", "zhipu_model",
+     "text", "Bỏ trống = dùng mặc định (glm-5.2).", None),
+]
+OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
@@ -80,6 +105,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("vizsup — Cài đặt")
         self.resize(620, 680)
         self._fields: dict[str, QLineEdit] = {}
+        self._opts: dict[str, QWidget] = {}
         self._status: dict[str, QLabel] = {}
         self._buttons: list[QPushButton] = []
         self._jobs: list[tuple] = []  # (QThread, _NetWorker) — keep BOTH alive until done
@@ -102,6 +128,17 @@ class SettingsDialog(QDialog):
         bl.setSpacing(10)
         for env, name, attr, prov in KEYS:
             bl.addWidget(self._key_card(env, name, attr, prov))
+
+        opt_title = QLabel("Tải video, đường dẫn & model")
+        opt_title.setObjectName("h1")
+        opt_sub = QLabel("Các tùy chọn không phải khóa bí mật. Cũng lưu vào .env.")
+        opt_sub.setObjectName("muted")
+        opt_sub.setWordWrap(True)
+        bl.addSpacing(10)
+        bl.addWidget(opt_title)
+        bl.addWidget(opt_sub)
+        for spec in OPTIONS:
+            bl.addWidget(self._opt_card(*spec))
         bl.addStretch(1)
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
@@ -174,6 +211,54 @@ class SettingsDialog(QDialog):
             cl.addLayout(mrow)
         return card
 
+    # --- non-secret option card ----------------------------------------------
+    def _opt_card(self, env: str, name: str, attr: str, kind: str,
+                  hint: str, choices: list[str] | None) -> QWidget:
+        card = QWidget()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.addWidget(QLabel(name))
+
+        current = str(getattr(settings, attr, "") or "")
+        row = QHBoxLayout()
+        if kind == "choice":
+            w = QComboBox()
+            w.setEditable(True)          # allow values we did not list
+            w.addItems(choices or [])
+            w.setEditText(current)
+        else:
+            w = QLineEdit(current)
+            w.setObjectName("mono")
+        row.addWidget(w, 1)
+        if kind in ("file", "dir"):
+            browse = QPushButton("Chọn…")
+            browse.setObjectName("ghost")
+            browse.clicked.connect(lambda _=False, e=w, k=kind, n=name: self._browse(e, k, n))
+            self._buttons.append(browse)
+            row.addWidget(browse)
+        cl.addLayout(row)
+
+        lbl = QLabel(hint)
+        lbl.setObjectName("muted")
+        lbl.setWordWrap(True)
+        cl.addWidget(lbl)
+        self._opts[env] = w
+        return card
+
+    def _browse(self, target, kind: str, name: str) -> None:
+        start = target.text().strip() or str(Path.home())
+        if kind == "dir":
+            picked = QFileDialog.getExistingDirectory(self, name, start)
+        else:
+            picked, _ = QFileDialog.getOpenFileName(self, name, start)
+        if picked:
+            target.setText(picked)
+
+    def _opt_value(self, env: str) -> str:
+        w = self._opts[env]
+        text = w.currentText() if isinstance(w, QComboBox) else w.text()
+        return text.strip()
+
     # --- background runner ---------------------------------------------------
     def _bg(self, fn, on_done) -> None:
         th = QThread(self)
@@ -245,16 +330,29 @@ class SettingsDialog(QDialog):
 
     # --- save ----------------------------------------------------------------
     def _save(self) -> None:
+        # keys: only write non-empty ones — blanking a field must not wipe a key
+        # the user still has in .env (they clear it by editing .env directly).
         updates = {env: f.text().strip() for env, f in self._fields.items() if f.text().strip()}
         model = self.or_model.currentText().strip()
         if model:
             updates["OPENROUTER_MODEL"] = model
-        if updates:
-            _write_env(updates)
+        # options: always write, INCLUDING empties — clearing one is a real intent
+        # ("no cookie browser", "resolve ffmpeg from PATH") and must round-trip.
+        for env, _n, _a, _k, _h, _c in OPTIONS:
+            updates[env] = self._opt_value(env)
+        _write_env(updates)
+
         for env, f in self._fields.items():
             setattr(settings, ATTR_BY_ENV[env], f.text().strip())
         if model:
             settings.openrouter_model = model
+        for env, attr in OPT_ATTR_BY_ENV.items():
+            value = self._opt_value(env)
+            # vizsup_storage_dir is typed Path; assigning a str breaks every "/" use
+            if isinstance(getattr(settings, attr, None), Path):
+                setattr(settings, attr, Path(value) if value else settings.vizsup_storage_dir)
+            else:
+                setattr(settings, attr, value)
         self.accept()
 
     def closeEvent(self, e) -> None:  # join any in-flight network threads
