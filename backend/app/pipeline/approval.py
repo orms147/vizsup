@@ -1,0 +1,69 @@
+"""The human edit gate, made durable: which REVISION of the subtitles was approved.
+
+CLAUDE.md: never spend TTS credits or encode time on un-approved subtitles. The
+desktop app used to treat "the user clicked Duyệt" as approval for whatever the
+files held later; v2 (qt-handoff) asks the backend to compare the approved revision
+with the current one, so an edit made AFTER approving locks rendering again until
+the user re-approves — even across screens or restarts.
+
+A revision is a hash of everything that changes what gets voiced or burned in:
+vi.srt, the per-cue overrides (gain / mute), per-cue styles and the global style.
+Editor-only review bookkeeping (lock, "Đã xem") is excluded — marking a line
+reviewed must not revoke an approval.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+
+from app.models import Job
+
+_FILE = "approved.json"
+_EDITOR_ONLY = ("lock", "reviewed")
+
+
+def _overrides_bytes(job: Job) -> bytes:
+    p = job.work_dir / "overrides.json"
+    try:
+        rows = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return b""
+    if not isinstance(rows, list):
+        return b""
+    clean = [{k: v for k, v in r.items() if k not in _EDITOR_ONLY} if isinstance(r, dict) else r
+             for r in rows]
+    if not any(isinstance(r, dict) and (r.get("gain_db") or r.get("mute")) for r in clean):
+        return b""          # all-default rows == no overrides file
+    return json.dumps(clean, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+def revision(job: Job) -> str:
+    h = hashlib.sha256()
+    for name in ("vi.srt", "style_overrides.json", "style.json"):
+        p = job.work_dir / name
+        h.update(name.encode())
+        h.update(p.read_bytes() if p.exists() else b"")
+    h.update(b"overrides.json")
+    h.update(_overrides_bytes(job))
+    return h.hexdigest()[:16]
+
+
+def approve(job: Job, *, cues: int | None = None) -> str:
+    rev = revision(job)
+    (job.work_dir / _FILE).write_text(json.dumps(
+        {"revision": rev, "approved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "cues": cues},
+        ensure_ascii=False, indent=1), encoding="utf-8")
+    return rev
+
+
+def approved_revision(job: Job) -> str | None:
+    try:
+        return json.loads((job.work_dir / _FILE).read_text(encoding="utf-8")).get("revision")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def is_approved(job: Job) -> bool:
+    rev = approved_revision(job)
+    return bool(rev) and rev == revision(job)

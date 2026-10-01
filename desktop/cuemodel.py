@@ -23,6 +23,8 @@ class EditorCue:
     gain_db: float = 0.0          # per-line dub volume trim
     mute: bool = False            # drop this line's dub (keep the subtitle)
     style: dict | None = None     # per-line subtitle style override (sparse)
+    locked: bool = False          # timing locked against accidental nudges / drags (v2)
+    reviewed: str = ""            # fingerprint() at the moment the user marked it "Đã xem"
 
     @property
     def dur(self) -> float:
@@ -106,7 +108,8 @@ def load_pair(job) -> list[EditorCue]:
         o = ov[i] if i < len(ov) else {}
         out.append(EditorCue(start=c.start, end=c.end, vi=c.text, zh=zh_texts[i],
                              gain_db=float(o.get("gain_db", 0.0)), mute=bool(o.get("mute", False)),
-                             style=sov.get(str(i + 1))))
+                             style=sov.get(str(i + 1)), locked=bool(o.get("lock", False)),
+                             reviewed=str(o.get("reviewed", "") or "")))
     return out
 
 
@@ -115,7 +118,7 @@ def save_vi(job, cues: list[EditorCue]) -> None:
 
     rows = [Cue(index=i + 1, start=c.start, end=c.end, text=c.vi) for i, c in enumerate(cues)]
     write_srt(rows, job.vi_srt)
-    sidecars.save_overrides(job, [{"gain_db": round(c.gain_db, 2), "mute": c.mute} for c in cues])
+    sidecars.save_overrides(job, [_override_row(c) for c in cues])
     sidecars.save_style_overrides(job, {str(i + 1): c.style for i, c in enumerate(cues) if c.style})
     # zh reference sidecar: rows are positional, so split/merge/delete shift later
     # rows off the naive cn.srt pairing — persist the editor's zh column whenever
@@ -126,6 +129,90 @@ def save_vi(job, cues: list[EditorCue]) -> None:
         p.write_text(json.dumps(zh_list, ensure_ascii=False), encoding="utf-8")
     elif p.exists():
         p.unlink()
+
+
+def _override_row(c: EditorCue) -> dict:
+    row: dict = {"gain_db": round(c.gain_db, 2), "mute": c.mute}
+    if c.locked:
+        row["lock"] = True
+    if c.reviewed:
+        row["reviewed"] = c.reviewed
+    return row
+
+
+# --- review state ("Đã xem") --------------------------------------------------
+# Stored as a fingerprint of what the user looked at, not a bool: ANY later edit to
+# the cue's text or timing makes it stale, so "đã xem" can never vouch for content
+# the user has not seen (qt-handoff: "sửa cue sẽ làm trạng thái kiểm tra hết hiệu lực").
+
+def fingerprint(c: EditorCue) -> str:
+    import hashlib
+
+    raw = f"{c.start:.3f}|{c.end:.3f}|{c.vi}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def is_reviewed(c: EditorCue) -> bool:
+    return bool(c.reviewed) and c.reviewed == fingerprint(c)
+
+
+def mark_reviewed(c: EditorCue) -> None:
+    c.reviewed = fingerprint(c)
+
+
+def copy_cue(c: EditorCue) -> EditorCue:
+    """Deep enough for undo snapshots: the style dict is copied, not shared."""
+    from dataclasses import replace
+
+    return replace(c, style=dict(c.style) if c.style else None)
+
+
+# --- timing edits (v2 inspector / keyboard) -------------------------------------
+MIN_CUE = 0.2   # seconds — a cue can never be shorter than this after an edit
+
+
+def clamp_edge(c: EditorCue, which: str, t: float, *, duration: float | None = None) -> bool:
+    """Set ``which`` ("start" | "end") to ``t``, kept inside [0, duration] and with
+    start < end by at least MIN_CUE. Locked cues are not changed. True if changed."""
+    if c.locked:
+        return False
+    hi = duration if duration and duration > 0 else None
+    t = max(0.0, t)
+    if hi is not None:
+        t = min(t, hi)
+    if which == "start":
+        t = min(t, c.end - MIN_CUE)
+        t = max(0.0, t)
+        changed = abs(t - c.start) > 1e-9
+        c.start = round(t, 3)
+    else:
+        t = max(t, c.start + MIN_CUE)
+        if hi is not None:
+            t = min(t, hi)
+        changed = abs(t - c.end) > 1e-9
+        c.end = round(t, 3)
+    return changed
+
+
+def nudge(c: EditorCue, which: str, delta_ms: int, *, duration: float | None = None) -> bool:
+    return clamp_edge(c, which, (c.start if which == "start" else c.end) + delta_ms / 1000.0,
+                      duration=duration)
+
+
+def split_at(c: EditorCue, t: float) -> tuple[EditorCue, EditorCue] | None:
+    """Split at playhead ``t`` (must be strictly inside the cue, MIN_CUE from each
+    edge). Words are divided in proportion to time; zh stays on the first half;
+    dub + style settings are inherited. None when ``t`` is not a valid cut."""
+    if not (c.start + MIN_CUE <= t <= c.end - MIN_CUE):
+        return None
+    words = c.vi.split()
+    k = round(len(words) * (t - c.start) / max(c.dur, 1e-9))
+    k = min(max(k, 1 if len(words) > 1 else 0), max(len(words) - 1, 0))
+    a = EditorCue(start=c.start, end=round(t, 3), vi=" ".join(words[:k]), zh=c.zh,
+                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+    b = EditorCue(start=round(t, 3), end=c.end, vi=" ".join(words[k:]), zh="",
+                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+    return a, b
 
 
 # --- pure structural edits (policy lives HERE, headless-testable; the editor

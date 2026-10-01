@@ -248,6 +248,12 @@ class PipelineWorker(QObject):
             self._check()
             if not job.vi_srt.exists():
                 raise FileNotFoundError("Chưa có vi.srt — hãy chạy tới bước duyệt trước.")
+            # the edit gate, enforced where the money is spent: TTS + encode only run
+            # for the exact revision the user approved (app/pipeline/approval.py)
+            from app.pipeline import approval
+            if not approval.is_approved(job):
+                raise RuntimeError("Phụ đề chưa được duyệt, hoặc đã sửa sau khi duyệt — quay lại "
+                                   "Sửa phụ đề và bấm Duyệt và dựng.")
 
             # ENG-2: when keeping the music, separate the instrumental BEFORE TTS
             # (both heavy → sequential, 8 GB rule). Failure degrades to mix in assemble.

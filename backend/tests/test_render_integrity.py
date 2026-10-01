@@ -34,6 +34,9 @@ def test_run_render_forwards_burn_cues_snapshot(qapp, tmp_path, monkeypatch):
     job = Job(id="t", work_dir=tmp_path / "job")
     job.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nphiên bản ĐÃ DUYỆT\n",
                           encoding="utf-8")
+    from app.pipeline import approval
+
+    approval.approve(job)                                  # the gate: only approved revisions render
     snapshot = object()                                    # sentinel travels untouched
     seen: dict = {}
 

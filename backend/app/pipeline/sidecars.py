@@ -5,7 +5,9 @@ pipeline/tts.py, pipeline/assemble.py and desktop/cuemodel.py (and had already
 drifted on key types). The ON-DISK schema is unchanged, so existing job dirs
 keep working:
 
-- ``overrides.json``       — list[{gain_db, mute}] aligned with vi.srt order.
+- ``overrides.json``       — list[{gain_db, mute, lock?, reviewed?}] aligned with vi.srt
+  order. ``lock`` / ``reviewed`` are editor-only (timing lock, "Đã xem" fingerprint);
+  the TTS / assemble readers ignore keys they do not use.
 - ``style_overrides.json`` — {"<1-based position>": sparse style dict}; string
   keys on disk (JSON), int keys via ``load_cue_styles`` for ``write_ass``.
 
@@ -35,7 +37,8 @@ def load_overrides(job: Job) -> list[dict]:
 def save_overrides(job: Job, rows: list[dict]) -> None:
     """Persist dub overrides; an all-defaults list removes the file."""
     p = job.work_dir / _OVERRIDES
-    if any(r.get("gain_db") or r.get("mute") for r in rows):
+    if any(r.get("gain_db") or r.get("mute") or r.get("lock") or r.get("reviewed")
+           for r in rows):
         p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     elif p.exists():
         p.unlink()
