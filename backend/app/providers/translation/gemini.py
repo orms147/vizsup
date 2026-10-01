@@ -10,6 +10,7 @@ from app.providers.translation._common import (
     SYSTEM_PROMPT,
     build_refine_prompt,
     build_user_prompt,
+    system_prompt_for,
     parse_numbered,
 )
 
@@ -48,14 +49,14 @@ class GeminiTranslator(TranslationProvider):
     def translate_texts(self, texts, *, source_lang="zh", target_lang="vi", context=None, glossary=None):
         if not texts:
             return []
-        prompt = SYSTEM_PROMPT + "\n\n" + build_user_prompt(texts, context=context, glossary=glossary)
+        prompt = system_prompt_for(SYSTEM_PROMPT, context) + "\n\n" + build_user_prompt(texts, context=context, glossary=glossary)
         resp = self._client().models.generate_content(model=self.model, contents=prompt)
         return parse_numbered(resp.text or "", len(texts), texts)
 
     def refine_texts(self, cn_texts, vi_texts, *, context=None, glossary=None):
         if not vi_texts:
             return []
-        prompt = (REFINE_SYSTEM_PROMPT + "\n\n"
+        prompt = (system_prompt_for(REFINE_SYSTEM_PROMPT, context) + "\n\n"
                   + build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary))
         resp = self._client().models.generate_content(model=self.model, contents=prompt)
         return parse_numbered(resp.text or "", len(vi_texts), vi_texts)

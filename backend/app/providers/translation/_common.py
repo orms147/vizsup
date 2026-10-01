@@ -13,30 +13,69 @@ import httpx
 
 from app.providers.base import TranslationProvider, _installed
 
-SYSTEM_PROMPT = (
-    "You are a professional Chinese-to-Vietnamese subtitle translator for short videos.\n"
-    "Rules:\n"
-    "- Translate into natural, spoken Vietnamese with the right register for the content.\n"
-    "- Keep each line roughly the same length as the source (it must fit on screen and be dubbable).\n"
+# Shared by the draft and refine passes so the two can never drift apart.
+_FORMAT_RULES = (
+    "Output format (strict):\n"
     "- Preserve the exact line numbering and count. Output ONLY lines of the form `n| <vietnamese>`.\n"
-    "- Do not merge, split, reorder, add, or drop lines. No commentary, no extra text.\n"
-    "- Keep proper nouns / brand names consistent; follow the glossary if given."
+    "- Do not merge, split, reorder, add, or drop lines. No commentary, notes, or extra text.\n"
+    "- One sentence may be spread over several numbered lines: translate each line so the lines\n"
+    "  still read naturally in sequence, keeping each line's content on its own line.\n"
+)
+
+_TRANSLATION_RULES = (
+    "How to translate:\n"
+    "- Natural, everyday SPOKEN Vietnamese — what a Vietnamese creator would actually say.\n"
+    "  Avoid stiff word-for-word Sino-Vietnamese (\"văn dịch\"); prefer common words.\n"
+    "- Pronouns (xưng hô): Chinese 我/你/他/我们 must become the Vietnamese pronouns that fit\n"
+    "  the speaker, the listener and their relationship (mình / tôi / em / anh / chị / bạn /\n"
+    "  các bạn / mọi người …). Decide once from the context and keep them CONSISTENT for the\n"
+    "  whole video. A creator talking to viewers usually says \"mình\" and \"các bạn\" / \"mọi người\".\n"
+    "- Names: Chinese person and place names take their Hán-Việt reading (小王 → Tiểu Vương,\n"
+    "  张总 → Tổng Trương, 成都 → Thành Đô). Keep Latin-script brands and names as written.\n"
+    "  When a glossary is given, follow it exactly.\n"
+    "- Internet slang, memes and idioms → a natural Vietnamese equivalent with the same effect,\n"
+    "  never a literal gloss.\n"
+    "- Sentence-final particles (啊/吧/呢/哦/嘛) → Vietnamese particles (nhé, nha, đấy, à, mà)\n"
+    "  only where they sound natural; do not overuse them.\n"
+    "- Brevity: every line is shown on screen AND voiced by a Vietnamese dub in the same time\n"
+    "  slot. Drop filler (那个, 就是, 然后…) and keep each line about as short as the source.\n"
+    "  Meaning first, then brevity.\n"
+    "- Keep numbers, prices and units accurate (元 → tệ). Keep English words from the source.\n"
+    "- Laughter / onomatopoeia → natural Vietnamese (哈哈哈 → Haha).\n"
+    "- Keep proper nouns / brand names consistent across all lines.\n"
+)
+
+SYSTEM_PROMPT = (
+    "You are a professional Chinese-to-Vietnamese subtitle translator for short videos\n"
+    "(Douyin / Bilibili). Your lines are shown on screen and read aloud by a Vietnamese voice-over.\n\n"
+    + _FORMAT_RULES + "\n" + _TRANSLATION_RULES
 )
 
 REFINE_SYSTEM_PROMPT = (
-    "You are a senior Vietnamese subtitle editor doing a SECOND-PASS polish.\n"
-    "For each line you get the Chinese source and a first-pass Vietnamese draft.\n"
-    "Rewrite each Vietnamese line into natural, fluent spoken Vietnamese with the right\n"
-    "register, staying faithful to the Chinese meaning and fixing any mistranslation.\n"
-    "Rules:\n"
-    "- Keep each line roughly the same length as the source (it must fit on screen and be dubbable).\n"
-    "- Preserve the exact line numbering and count. Output ONLY lines of the form `n| <vietnamese>`.\n"
-    "- Do not merge, split, reorder, add, or drop lines. No commentary, no extra text.\n"
-    "- Keep proper nouns / brand names consistent; follow the glossary if given.\n"
-    "- If a draft line is already good, keep it.\n"
-    "- If a draft line is annotated with a word budget, also shorten it to fit while "
-    "keeping the meaning."
+    "You are a senior Vietnamese subtitle editor doing a SECOND-PASS polish of Chinese-to-\n"
+    "Vietnamese subtitles for short videos. For each line you get the Chinese source and a\n"
+    "first-pass Vietnamese draft. Rewrite each draft into the best natural spoken Vietnamese,\n"
+    "faithful to the Chinese meaning: fix mistranslations, wrong or inconsistent xưng hô, and\n"
+    "stiff phrasing. If a draft line is already good, keep it. If a draft line is annotated\n"
+    "with a word budget, also shorten it to fit while keeping the meaning.\n\n"
+    + _FORMAT_RULES + "\n" + _TRANSLATION_RULES
 )
+
+# Per-video brief (pipeline/brief.py) — appended to the SYSTEM prompt, not the user
+# turn: it is constant across every batch of one video, so the cacheable prefix stays
+# byte-identical within the video, and system position gives it instruction weight.
+_BRIEF_HEADER = (
+    "\nVIDEO BRIEF — written for THIS video. Follow it, especially for xưng hô, names and\n"
+    "tone. Where it records the user's own notes, those are facts and override your guesses:\n"
+)
+
+
+def system_prompt_for(base: str, context: dict | None) -> str:
+    """``base`` plus the per-video brief when one rides in ``context['_brief']``."""
+    brief = (context or {}).get("_brief")
+    if not brief or not str(brief).strip():
+        return base
+    return base + _BRIEF_HEADER + str(brief).strip() + "\n"
 
 PROOFREAD_SYSTEM_PROMPT = (
     "You are correcting OCR errors in Chinese subtitle lines read off a video.\n"
@@ -225,7 +264,7 @@ class OpenAICompatTranslator(TranslationProvider):
             temperature=0.3,
             max_tokens=cap,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt_for(SYSTEM_PROMPT, context)},
                 {"role": "user", "content": build_user_prompt(texts, context=context, glossary=glossary)},
             ],
         )
@@ -241,7 +280,7 @@ class OpenAICompatTranslator(TranslationProvider):
             temperature=0.3,
             max_tokens=cap,
             messages=[
-                {"role": "system", "content": REFINE_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt_for(REFINE_SYSTEM_PROMPT, context)},
                 {"role": "user",
                  "content": build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary)},
             ],

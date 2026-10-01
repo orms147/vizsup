@@ -13,6 +13,7 @@ from app.providers.translation._common import (
     SYSTEM_PROMPT,
     build_refine_prompt,
     build_user_prompt,
+    system_prompt_for,
     parse_numbered,
 )
 
@@ -55,7 +56,7 @@ class ClaudeTranslator(TranslationProvider):
         msg = self._client().messages.create(
             model=self.model,
             max_tokens=8192,
-            system=SYSTEM_PROMPT,
+            system=system_prompt_for(SYSTEM_PROMPT, context),
             messages=[{"role": "user", "content": build_user_prompt(texts, context=context, glossary=glossary)}],
         )
         reply = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
@@ -67,7 +68,7 @@ class ClaudeTranslator(TranslationProvider):
         msg = self._client().messages.create(
             model=self.model,
             max_tokens=8192,
-            system=REFINE_SYSTEM_PROMPT,
+            system=system_prompt_for(REFINE_SYSTEM_PROMPT, context),
             messages=[{"role": "user",
                        "content": build_refine_prompt(cn_texts, vi_texts, context=context, glossary=glossary)}],
         )

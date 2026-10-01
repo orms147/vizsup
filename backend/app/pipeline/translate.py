@@ -513,6 +513,15 @@ def translate(
         context["_ocr_source"] = True
         if log:
             log("ℹ Nguồn OCR — dịch chịu lỗi OCR ngay trong prompt (+~25 token/lô)")
+    # Per-video brief (pipeline/brief.py), if one was built for this job. Private key:
+    # it renders into the SYSTEM prompt, never into the "Video context:" meta line.
+    from app.pipeline.brief import load_brief
+
+    brief = load_brief(job)
+    if brief:
+        context["_brief"] = brief
+        if log:
+            log("ℹ Dịch theo brief ngữ cảnh của video này")
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,

@@ -175,6 +175,21 @@ class PipelineWorker(QObject):
                 self.log.emit("✓ Nhận dạng xong")
 
             store.debug("subtitle stage ok")
+            # 2.4) per-video brief: the AI skims the video (auto) and/or expands the
+            # user's own note into a context sheet the translator reads with every
+            # batch. Only when translate will actually run — a kept vi.srt needs none.
+            note = (o.get("context_note") or "").strip()
+            if (o.get("auto_context") or note) and not job.vi_srt.exists():
+                self._check()
+                from app.pipeline import brief
+                self.progress.emit(0.7, "Đọc nhanh ngữ cảnh video…")
+                b = brief.build_brief(job, o.get("translator", "passthrough"),
+                                      note=note or None, log=self.log.emit)
+                if b:
+                    self.log.emit("── Brief ngữ cảnh (bộ dịch sẽ theo) ──")
+                    for ln in b.splitlines():
+                        if ln.strip():
+                            self.log.emit("   " + ln.rstrip())
             # 2.5) optional pre-pass: suggest a glossary of recurring names/brands so
             # they translate consistently (writes glossary.suggested.json; user wins)
             if o.get("extract_terms"):

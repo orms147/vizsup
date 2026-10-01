@@ -140,6 +140,26 @@ class InputView(QWidget):
         )
         col.addWidget(self.extract_terms)
 
+        # per-video context brief: the AI skims the video before translating, and/or
+        # expands the user's own note — the translator then follows it for xưng hô,
+        # names and tone. The note is per-video, so it is NOT saved into ui_state.
+        self.auto_context = QCheckBox("  Tự đọc ngữ cảnh video trước khi dịch (AI · tốn rất ít API)")
+        self.auto_context.setToolTip(
+            "Trước khi dịch, bộ dịch bản nháp đọc nhanh tiêu đề + nội dung phụ đề tiếng Trung và "
+            "viết một 'brief' ngắn: thể loại, ai nói với ai, cách xưng hô, tên riêng, giọng điệu. "
+            "Mọi lô dịch của video đều theo brief này nên xưng hô và tên giữ nhất quán."
+        )
+        col.addWidget(self.auto_context)
+        self.context_note = QPlainTextEdit()
+        self.context_note.setPlaceholderText(
+            "Ghi chú ngữ cảnh cho video này (không bắt buộc) — VD: vlog nấu ăn của một cô gái "
+            "Tứ Xuyên, nói thân mật với người xem; \"老李\" là chồng cô ấy, gọi là \"anh Lý\". "
+            "AI sẽ viết lại thành brief đầy đủ và LUÔN theo thông tin của bạn."
+        )
+        self.context_note.setFixedHeight(66)
+        self.context_note.setTabChangesFocus(True)
+        col.addWidget(self.context_note)
+
         # engines
         col.addSpacing(4)
         erow = QHBoxLayout()
@@ -246,6 +266,7 @@ class InputView(QWidget):
             self.rb_asr.setChecked(True)  # anything else keeps the 'auto' default
         self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
         self.extract_terms.setChecked(bool(st.get("extract_terms")))
+        self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -343,7 +364,11 @@ class InputView(QWidget):
             "ocr_region": self.ocr_region.currentData(),
             "ocr_proofread": self.ocr_proofread.isChecked(),
             "extract_terms": self.extract_terms.isChecked(),
+            "auto_context": self.auto_context.isChecked(),
         }
+        note = self.context_note.toPlainText().strip()
+        if note:
+            opts["context_note"] = note     # per-video: passed to the worker, never persisted
         if self._file:
             opts["file"] = self._file
         else:

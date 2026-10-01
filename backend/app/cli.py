@@ -116,6 +116,16 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             asr.transcribe(job, provider=args.asr)
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
 
+    # 2.4) optional: per-video brief (AI skim and/or your own note) for the translator
+    note = (getattr(args, "context", None) or "").strip()
+    if (getattr(args, "auto_context", False) or note) and (force or not job.vi_srt.exists()):
+        from app.pipeline import brief
+
+        print("[run] building the video context brief ...")
+        b = brief.build_brief(job, args.translator, note=note or None, force=force, log=print)
+        if b:
+            print("[run] brief:\n" + "\n".join("    " + ln for ln in b.splitlines() if ln.strip()))
+
     # 2.5) optional: auto-suggest a glossary before translating
     if getattr(args, "extract_terms", False) and job.cn_srt.exists():
         from app.pipeline import terms
@@ -214,6 +224,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--refine", default=None, help="optional second-pass refiner (e.g. claude)")
     r.add_argument("--extract-terms", action="store_true",
                    help="auto-suggest a glossary of recurring names/brands before translating")
+    r.add_argument("--auto-context", action="store_true",
+                   help="let the translator skim the video first and write a context brief "
+                        "(genre, speakers, xưng hô, names) it then follows")
+    r.add_argument("--context", metavar="NOTE",
+                   help="your own context note for this video; the AI expands it into a brief "
+                        "and treats it as authoritative (implies a brief even without --auto-context)")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
     r.add_argument("--workdir", help="explicit working directory")
     r.set_defaults(func=cmd_run)

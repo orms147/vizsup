@@ -298,3 +298,46 @@ def test_keep_music_degrades_when_demucs_fails(render_stages, tmp_path, monkeypa
 def test_cover_hardsubs_legacy_flag_still_reaches_assemble(render_stages, tmp_path):
     run("render", "--workdir", str(_gated_job(tmp_path)), "--cover-hardsubs")
     assert render_stages["assemble"]["cover_hardsubs"] is True
+
+
+# --- per-video context brief --------------------------------------------------
+
+@pytest.fixture()
+def brief_calls(monkeypatch):
+    from app.pipeline import brief
+
+    calls: list[dict] = []
+
+    def fake(job, provider, *, note=None, force=False, log=None):
+        calls.append({"provider": provider, "note": note, "force": force})
+        return "Xưng hô: mình / các bạn"
+
+    monkeypatch.setattr(brief, "build_brief", fake)
+    return calls
+
+
+def test_context_note_builds_a_brief_with_that_note(stages, tmp_path, brief_calls, capsys):
+    run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "j"), "--source", "asr",
+        "--translator", "openrouter", "--context", "vlog nấu ăn")
+    assert brief_calls == [{"provider": "openrouter", "note": "vlog nấu ăn", "force": False}]
+    assert "Xưng hô: mình" in capsys.readouterr().out
+
+
+def test_auto_context_builds_a_brief_without_a_note(stages, tmp_path, brief_calls):
+    run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "j"), "--source", "asr",
+        "--auto-context")
+    assert brief_calls and brief_calls[0]["note"] is None
+
+
+def test_no_flags_no_brief(stages, tmp_path, brief_calls):
+    run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "j"), "--source", "asr")
+    assert brief_calls == []
+
+
+def test_no_brief_when_a_kept_vi_srt_means_no_translation(stages, tmp_path, brief_calls):
+    """A brief is only worth paying for when translate will actually run."""
+    wd = tmp_path / "j"
+    wd.mkdir()
+    (wd / "vi.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nđã sửa\n", encoding="utf-8")
+    run("run", "https://b23.tv/x", "--workdir", str(wd), "--source", "asr", "--auto-context")
+    assert brief_calls == []
