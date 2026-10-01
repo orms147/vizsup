@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from desktop import paths  # noqa: F401
 from desktop import store
+from desktop.cuemodel import fmt_time
 from desktop.ui_thread import connect_on_ui
 from desktop.settings_dialog import SettingsDialog
 from desktop.theme import load_fonts, qss
@@ -72,6 +73,10 @@ class MainWindow(QMainWindow):
         self.input.resumeRequested.connect(self._resume)
         self.input.deleteRequested.connect(self._delete_job)
         self.editor.dirtyChanged.connect(self._on_dirty)
+        self.editor.saveFailed.connect(self._on_save_failed)
+        self.editor.message.connect(self.status.set_status)
+        self.editor.approveRequested.connect(self._approve)
+        self.editor.shortcutsRequested.connect(self._show_shortcuts)
         self.render.renderRequested.connect(self._start_render)
         self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
@@ -175,6 +180,13 @@ class MainWindow(QMainWindow):
 
     # --- approve -> render ---------------------------------------------------
     def _approve(self) -> None:
+        """The human gate: one explicit confirmation, recorded as the approved
+        revision (app.pipeline.approval). Render refuses anything else."""
+        from app.pipeline import approval
+
+        if self.job is None or not self.editor.cues:
+            self.status.set_status("Hãy tạo phụ đề cho một video trước.", "warn")
+            return
         try:
             self.editor.save_now()
             tts_name = self.opts.get("tts") or settings.vizsup_default_tts
@@ -182,6 +194,21 @@ class MainWindow(QMainWindow):
                 voices = get_tts(tts_name).voices()
             except Exception:  # noqa: BLE001
                 voices = []
+            if not approval.is_approved(self.job):
+                from desktop.widgets.dialogs import ApproveDialog
+
+                voice = self.opts.get("voice") or (voices[0] if voices else tts_name)
+                dur = self.editor.video.duration() or max((c.end for c in self.editor.cues),
+                                                          default=0.0)
+                dlg = ApproveDialog(self, cues=len(self.editor.cues),
+                                    voice=str(voice).replace("vi-VN-", "").replace("Neural", ""),
+                                    duration=fmt_time(dur, 0),
+                                    pending=self.editor.pending_count())
+                if not dlg.exec():
+                    return
+                approval.approve(self.job, cues=len(self.editor.cues))
+                self.editor.refresh_approval()
+                self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
             self.render.set_voices(voices)
             self.render.set_preview(self.job.source_video, self.editor.cues)  # show VI caption bar in step 3
             self.stack.setCurrentIndex(RENDER)
@@ -346,6 +373,10 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         e.accept()
+
+    def _on_save_failed(self, msg: str) -> None:
+        self.nav.set_saved("error")
+        self.status.set_status(f"Chưa lưu được ({msg}) — đang thử lại…", "err")
 
     def _on_dirty(self, dirty: bool) -> None:
         self.nav.set_saved("saving" if dirty else "saved")

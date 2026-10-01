@@ -114,7 +114,7 @@ Thêm **slider âm lượng gốc** (0–100%, 0 = thay hẳn) + **âm lượng 
 | Mục | Chỗ cắm | Công sức |
 |---|---|---|
 | B1 chính sách fit mới (hết đè) | [assemble.py](../backend/app/pipeline/assemble.py) | **M** |
-| B2 per-line controls + overrides | [editor_view.py](../desktop/views/editor_view.py), [subtitle_table.py](../desktop/widgets/subtitle_table.py), cuemodel | **M** |
+| B2 per-line controls + overrides | [editor_view.py](../desktop/views/editor_view.py), [cue_list.py](../desktop/widgets/cue_list.py), cuemodel | **M** |
 | B3 duck + slider âm lượng gốc/dub | [assemble.py](../backend/app/pipeline/assemble.py) + [render_view.py](../desktop/views/render_view.py)/editor | **S–M** |
 | B4 nghe thử per-cue + live volume | [video_panel.py](../desktop/widgets/video_panel.py)/editor | **S–M** |
 

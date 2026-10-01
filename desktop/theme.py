@@ -183,7 +183,9 @@ QPushButton#ghost:checked, QToolButton#ghost:checked {{ color:{v['purple_bright'
 QPushButton#danger {{ background:{v['red_soft']}; border-color:{v['red_line']}; color:{v['red']}; }}
 QPushButton#active, QToolButton#active, QPushButton:checked {{ color:{v['purple_bright']};
     background:{v['purple_soft']}; border-color:{v['purple_line']}; }}
-QPushButton#small, QToolButton#small {{ min-height:27px; padding:0 9px; font-size:11px; }}
+QPushButton#small, QToolButton#small, QPushButton[small="true"] {{ min-height:27px;
+    padding:0 9px; font-size:11px; }}
+QToolButton::menu-indicator {{ image:none; width:0; }}
 QPushButton#large {{ min-height:47px; font-size:14px; padding:0 20px; font-weight:600; }}
 QPushButton#nudge {{ min-height:25px; max-height:27px; padding:0 4px; font-size:11px;
     font-family:"{mono}"; color:{v['secondary']}; }}

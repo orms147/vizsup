@@ -40,15 +40,15 @@ def view(qapp):
     v.cues = [EditorCue(start=0.0, end=2.0, vi="một", zh="一"),
               EditorCue(start=2.0, end=4.0, vi="hai", zh="二"),
               EditorCue(start=4.0, end=6.0, vi="ba", zh="三")]
-    v.table.load(v.cues)
+    v.cue_list.load(v.cues)
     v.timeline.set_cues(v.cues)
     v._update_cue_panel(0)
     return v
 
 
 def _press(widget, x=70.0, y=90.0):
-    """Press inside cue 0's block. Blocks begin at RULER_H+WAVE_H (76 px) and cue 0
-    spans x=0..148 at the default 74 px/s; x must clear the 6 px edge grab zones or
+    """Press inside cue 0's block. Blocks begin at RULER_H+WAVE_H (78 px) and cue 0
+    spans x=0..80 at the default 40 px/s; x must clear the 6 px edge grab zones or
     the hit reads as an edge-resize (or a miss, which only seeks)."""
     ev = QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPoint(int(x), int(y)),
                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)

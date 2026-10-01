@@ -157,7 +157,7 @@ def qapp():
 def view(qapp):
     v = editor_view.EditorView()
     v.cues = cues("Hà Nội mùa thu", "về hà nội", "Sài Gòn nắng")
-    v.table.load(v.cues)
+    v.cue_list.load(v.cues)
     v.timeline.set_cues(v.cues)
     return v
 
@@ -183,11 +183,11 @@ def test_count_label_reports_matches(view):
     assert view.find_lbl.text() == "không thấy"
 
 
-def test_find_next_moves_the_table_selection(view):
+def test_find_next_moves_the_list_selection(view):
     view.find_in.setText("hà nội")
-    view.table.setCurrentCell(0, 0)
+    view.cue_list.selectRow(0)
     view._find_next()
-    assert view.table.currentRow() == 1
+    assert view.cue_list.currentRow() == 1
 
 
 def test_replace_all_edits_every_line_and_is_undoable(view):
@@ -217,10 +217,10 @@ def test_replace_one_jumps_before_it_edits(view):
     rather than editing the unrelated row under the cursor."""
     view.find_in.setText("hà nội")
     view.repl_in.setText("HN")
-    view.table.setCurrentCell(2, 0)
+    view.cue_list.selectRow(2)
     view._replace_one()
     assert [c.vi for c in view.cues] == ["Hà Nội mùa thu", "về hà nội", "Sài Gòn nắng"]
-    assert view.table.currentRow() == 0          # moved onto a match
+    assert view.cue_list.currentRow() == 0          # moved onto a match
 
     view._replace_one()                          # now it edits
     assert view.cues[0].vi == "HN mùa thu"

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop.widgets.chrome import button, icon_button
 from desktop.widgets.no_wheel import NoWheelComboBox, NoWheelSlider
 
 FONTS = ["Be Vietnam Pro", "Noto Sans", "Arial"]
@@ -123,23 +124,15 @@ class StylePanel(QScrollArea):
         self.scope_hint.setWordWrap(True)
         self.scope_hint.setStyleSheet("color:#8b8b9a;font-size:11px;")
         ll.addWidget(self.scope_hint)
-        self.btn_reset_cue = QPushButton("Bỏ kiểu riêng (câu đang chọn)")
-        self.btn_reset_cue.setObjectName("ghost")
+        self.btn_reset_cue = button("Bỏ kiểu riêng (câu đang chọn)", variant="ghost", small=True)
         self.btn_reset_cue.clicked.connect(self.resetSelectedRequested)
         ll.addWidget(self.btn_reset_cue)
 
         # Mẫu kiểu (cross-project library)
         self.preset = NoWheelComboBox()
-        self.btn_save_preset = QPushButton("Lưu")
-        self.btn_save_preset.setObjectName("ghost")
-        self.btn_save_preset.setFixedWidth(46)
-        self.btn_del_preset = QPushButton("Xóa")
-        self.btn_del_preset.setObjectName("ghost")
-        self.btn_del_preset.setFixedWidth(46)
-        self.btn_reset = QPushButton("↻")
-        self.btn_reset.setObjectName("ghost")
-        self.btn_reset.setFixedWidth(34)
-        self.btn_reset.setToolTip("Cài lại (về mẫu đang chọn, hoặc mặc định)")
+        self.btn_save_preset = icon_button("Plus", "Lưu kiểu hiện tại thành mẫu")
+        self.btn_del_preset = icon_button("Trash2", "Xóa mẫu đang chọn")
+        self.btn_reset = icon_button("RefreshCw", "Cài lại (về mẫu đang chọn, hoặc mặc định)")
         self.preset.activated.connect(self._on_preset)
         self.btn_save_preset.clicked.connect(self._save_preset)
         self.btn_del_preset.clicked.connect(self._delete_preset)
@@ -208,13 +201,12 @@ class StylePanel(QScrollArea):
         self.m_left = self._slider(ll, "Lề trái", 0, 800, 60, "")
         self.m_right = self._slider(ll, "Lề phải", 0, 800, 60, "")
         self.m_v = self._slider(ll, "Lề dọc", 0, 900, 60, "")
-        self.btn_reset_pos = QPushButton("↺  Đặt lại vị trí")
-        self.btn_reset_pos.setObjectName("ghost")
+        self.btn_reset_pos = button("Đặt lại vị trí", "RefreshCw", variant="ghost", small=True)
         self.btn_reset_pos.clicked.connect(self._reset_pos)
         ll.addWidget(self.btn_reset_pos)
 
-        self.preview_btn = QPushButton("🖼  Xem thử kiểu trên video")
-        self.preview_btn.setObjectName("ghost")
+        self.preview_btn = button("Xem thử kiểu", "Eye", variant="primary",
+                                  tip="Dựng thử một khung hình đúng như video xuất")
         self.preview_btn.clicked.connect(self.previewRequested)
         ll.addWidget(self.preview_btn)
         ll.addStretch(1)

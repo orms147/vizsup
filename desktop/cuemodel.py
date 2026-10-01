@@ -41,13 +41,16 @@ class EditorCue:
         return self.dur > 0 and self.est_speak > self.dur
 
 
-def fmt_time(s: float) -> str:
+def fmt_time(s: float, decimals: int = 1) -> str:
+    """mm:ss.d — ``decimals`` 0..3 (v2: 2 in lists / transport, 3 in timing fields)."""
     s = max(0.0, s)
     m = int(s // 60)
     sec = s - m * 60
     ss = int(sec)
-    d = int((sec - ss) * 10 + 1e-4)
-    return f"{m:02d}:{ss:02d}.{d}"
+    if decimals <= 0:
+        return f"{m:02d}:{ss:02d}"
+    frac = int((sec - ss) * 10 ** decimals + 1e-4)
+    return f"{m:02d}:{ss:02d}.{frac:0{decimals}d}"
 
 
 def parse_time(text: str) -> float | None:

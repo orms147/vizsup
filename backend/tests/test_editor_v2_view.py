@@ -1,0 +1,126 @@
+"""v2 editor view behaviour (offscreen Qt): timing nudges respect the lock and are
+one undo step each, typing is one undo step per editing session, "Đã xem" + F8 walk
+the same pending set the filter shows, and a failed autosave never reports saved."""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root → `desktop`
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+pytest.importorskip("PySide6.QtWidgets")
+editor_view = pytest.importorskip("desktop.views.editor_view")
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from desktop import cuemodel  # noqa: E402
+from desktop.cuemodel import EditorCue  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture()
+def view(qapp):
+    v = editor_view.EditorView()
+    v.cues = [EditorCue(start=0.0, end=2.0, vi="một", zh="一"),
+              EditorCue(start=2.0, end=2.3, vi="hai", zh="二"),        # short → flagged
+              EditorCue(start=4.0, end=6.0, vi="ba", zh="三"),
+              EditorCue(start=6.0, end=6.4, vi="bốn", zh="四")]        # short → flagged
+    v._reload(dirty=False)
+    v.cue_list.selectRow(0)
+    return v
+
+
+def test_nudge_is_one_undo_step(view):
+    view._nudge("end", 200)
+    assert view.cues[0].end == pytest.approx(2.2)
+    assert view.inspector.t_fields["end"].text() == "00:02.200"
+    view._undo_action()
+    assert view.cues[0].end == 2.0
+
+
+def test_locked_cue_refuses_nudges_without_an_undo_step(view):
+    view.inspector.lock_cb.setChecked(True)          # the lock itself is undoable
+    assert view.cues[0].locked
+    depth = len(view._undo_stack)
+    view._nudge("start", 50)
+    view._set_edge("end")
+    assert (view.cues[0].start, view.cues[0].end) == (0.0, 2.0)
+    assert len(view._undo_stack) == depth
+    view._undo_action()
+    assert not view.cues[0].locked
+
+
+def test_typing_is_one_undo_step_per_session(view):
+    ed = view.inspector.vi_edit
+    depth = len(view._undo_stack)
+    for ch in "xyz":
+        ed.insertPlainText(ch)
+    assert view.cues[0].vi.endswith("xyz")
+    assert len(view._undo_stack) == depth + 1
+    view._undo_action()
+    assert view.cues[0].vi == "một"
+
+
+def test_enter_commits_and_moves_to_the_next_cue(view):
+    view.inspector.commitNext.emit()
+    assert view.cue_list.currentRow() == 1 and view._sel == 1
+
+
+def test_review_filter_f8_and_reviewed_share_one_set(view):
+    assert view.cue_list.pending_rows() == [1, 3]
+    view._goto_pending(+1)
+    assert view._sel == 1
+    view._mark_reviewed()                            # → jumps to the next pending cue
+    assert cuemodel.is_reviewed(view.cues[1])
+    assert view._sel == 3
+    assert view.cue_list.pending_rows() == [3]
+    view.cue_list.set_review_only(True)
+    assert view.cue_list.view.isRowHidden(0) and not view.cue_list.view.isRowHidden(3)
+
+
+def test_editing_a_reviewed_cue_puts_it_back_in_review(view):
+    view.cue_list.selectRow(1)
+    view._mark_reviewed()
+    assert 1 not in view.cue_list.pending_rows()
+    view.cue_list.selectRow(1)
+    view.inspector.vi_edit.insertPlainText("!")
+    assert 1 in view.cue_list.pending_rows()
+
+
+def test_failed_autosave_reports_and_retries(view, monkeypatch, tmp_path):
+    from app.models import Job
+
+    view.job = Job(id="x", work_dir=tmp_path / "x")
+    events = []
+    view.saveFailed.connect(lambda m: events.append(("failed", m)))
+    view.dirtyChanged.connect(lambda d: events.append(("dirty", d)))
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cuemodel, "save_vi", boom)
+    view.save_now()
+    assert ("failed", "disk full") in events
+    assert ("dirty", False) not in events
+    assert view._save_timer.isActive()               # retry scheduled
+    view._save_timer.stop()
+
+
+def test_split_needs_the_playhead_inside_the_cue(view, monkeypatch):
+    msgs = []
+    view.message.connect(lambda t, k: msgs.append(k))
+    monkeypatch.setattr(view.video, "current_time", lambda: 5.0)
+    view._split()                                    # cue 0 is 0–2 s
+    assert len(view.cues) == 4 and msgs == ["warn"]
+    monkeypatch.setattr(view.video, "current_time", lambda: 1.0)
+    view._split()
+    assert len(view.cues) == 5
+    assert (view.cues[0].end, view.cues[1].start) == (1.0, 1.0)

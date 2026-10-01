@@ -1,19 +1,21 @@
-"""Video player panel. The video is rendered via QVideoSink → QImage into a
-VideoCanvas (not a QVideoWidget) so the Vietnamese subtitle can be drawn ON the
-frame as a draggable/resizable box. Play/pause, scrub, seek, volume preserved.
-A caption bar under the video is kept as a redundant always-visible readout.
+"""Video panel (v2): a titled panel holding the VideoCanvas — the real frame with the
+Vietnamese subtitle drawn on it as a draggable / resizable box — and a transport
+row: play, loop-current-line, time, volume, speed (optional scrub bar).
+
+The frame comes via QVideoSink → QImage so the subtitle can be painted ON it; the
+aspect ratio of the source is always kept (720×1566 stays 720×1566, never 9:16).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSlider,
     QStackedLayout,
     QVBoxLayout,
@@ -22,7 +24,9 @@ from PySide6.QtWidgets import (
 
 from desktop import store
 from desktop.cuemodel import fmt_time
-from desktop.theme import C
+from desktop.icons import icon
+from desktop.theme import V2
+from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from desktop.widgets.video_canvas import VideoCanvas
 
 try:
@@ -32,34 +36,65 @@ try:
 except Exception:  # noqa: BLE001
     HAVE_MM = False
 
+SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
 
 class VideoPanel(QFrame):
     positionChanged = Signal(float)          # seconds
     durationChanged = Signal(float)          # seconds
     marginsChanged = Signal(int, int, int)   # subtitle box dragged → margin_l/r/v
     dragCommitted = Signal()                 # drag released → re-burn an exact frame
+    loopToggled = Signal(bool)               # "lặp câu đang chọn"
+    expandRequested = Signal()               # ⤢ in the panel head
+    playStateChanged = Signal(bool)          # playing?
+    dimsChanged = Signal(int, int)           # source frame size (w, h)
 
-    def __init__(self) -> None:
+    def __init__(self, title: str = "Video nguồn", *, scrub: bool = False) -> None:
         super().__init__()
+        self.setObjectName("panel")
         self._dur = 0.0
         self._cues: list = []
+        self._dims = (0, 0)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(0)
 
+        # head: title · orientation badge · expand
+        head = QFrame()
+        head.setObjectName("panelHead")
+        hh = QHBoxLayout(head)
+        hh.setContentsMargins(14, 9, 10, 9)
+        hh.setSpacing(8)
+        self.title = label(title, "h3")
+        self._orient = badge("")
+        self._orient.setVisible(False)
+        self._expand = icon_button("Maximize2", "Ưu tiên video (bố cục tập trung)")
+        self._expand.clicked.connect(self.expandRequested)
+        hh.addWidget(self.title)
+        hh.addStretch(1)
+        hh.addWidget(self._orient)
+        hh.addWidget(self._expand)
+        root.addWidget(head)
+
+        # stage: placeholder | canvas, with a dims badge floating top-left
         stage = QWidget()
+        stage.setStyleSheet(f"background:{V2['input']};")
         self._stack = QStackedLayout(stage)
         self._placeholder = QLabel("Chưa có video")
         self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setStyleSheet(
-            f"background:{C['deep']};border:1px solid {C['line3']};border-radius:14px;color:{C['muted3']};"
-        )
+        self._placeholder.setStyleSheet(f"color:{V2['muted']};")
         self._stack.addWidget(self._placeholder)
-
         self._canvas = VideoCanvas()
         self._canvas.marginsChanged.connect(self.marginsChanged)
         self._canvas.dragCommitted.connect(self.dragCommitted)
         self._stack.addWidget(self._canvas)
+        self._dims_lbl = QLabel(stage)
+        self._dims_lbl.setStyleSheet(
+            f"background:rgba(17,18,24,0.82);color:{V2['secondary']};border-radius:5px;"
+            f"padding:3px 7px;font-size:10px;")
+        self._dims_lbl.move(12, 12)
+        self._dims_lbl.setVisible(False)
+        root.addWidget(stage, 1)
 
         if HAVE_MM:
             self._player = QMediaPlayer()
@@ -71,51 +106,64 @@ class VideoPanel(QFrame):
             self._player.positionChanged.connect(self._on_pos)
             self._player.durationChanged.connect(self._on_dur)
             self._player.errorOccurred.connect(self._on_media_error)
+            self._player.playbackStateChanged.connect(self._on_state)
         else:
             self._player = None
             self._audio = None
-        root.addWidget(stage, 1)
 
-        # caption bar (current Vietnamese cue) — redundant always-visible readout
-        self._sub = QLabel("")
-        self._sub.setWordWrap(True)
-        self._sub.setAlignment(Qt.AlignCenter)
-        self._sub.setMinimumHeight(40)
-        self._sub.setStyleSheet(
-            f"color:#fff; background:{C['deep']}; border:1px solid {C['line2']};"
-            "border-radius:8px; padding:6px 12px; font-size:15px; font-weight:600;"
-        )
-        root.addWidget(self._sub)
-
-        # controls
-        ctl = QHBoxLayout()
-        ctl.setSpacing(9)
-        self._play = QPushButton("▶")
-        self._play.setObjectName("ghost")
-        self._play.setFixedSize(32, 30)
-        self._play.clicked.connect(self.toggle)
-        self._time = QLabel("00:00.0 / 00:00.0")
-        self._time.setObjectName("mono")
+        # transport
+        bar = QFrame()
+        bar.setObjectName("panelHead")
+        bar.setStyleSheet(f"QFrame#panelHead{{border-bottom:none;border-top:1px solid "
+                          f"{V2['line_soft']};}}")
+        tl = QVBoxLayout(bar)
+        tl.setContentsMargins(12, 8, 12, 8)
+        tl.setSpacing(6)
         self._scrub = QSlider(Qt.Horizontal)
         self._scrub.setRange(0, 0)
         self._scrub.sliderMoved.connect(self._on_scrub)
+        self._scrub.setVisible(scrub)
+        tl.addWidget(self._scrub)
+        ctl = QHBoxLayout()
+        ctl.setSpacing(8)
+        self._play = button("", "Play", variant="primary", tip="Phát / dừng (Space)")
+        self._play.setFixedSize(31, 31)
+        self._play.setIconSize(QSize(15, 15))
+        self._play.setStyleSheet("QPushButton#primary{padding:0;min-height:31px;}")
+        self._play.clicked.connect(self.toggle)
+        self._loop = icon_button("Repeat2", "Lặp câu đang chọn (Ctrl+Space)", checkable=True)
+        self._loop.toggled.connect(self.loopToggled)
+        self._time = label("00:00.00 / 00:00", "monoText")
         ctl.addWidget(self._play)
+        ctl.addWidget(self._loop)
         ctl.addWidget(self._time)
-        ctl.addWidget(self._scrub, 1)
+        ctl.addStretch(1)
+        ctl.addWidget(icon_label("Volume2", V2["secondary"], 16))
         self._vol = QSlider(Qt.Horizontal)
-        self._vol.setFixedWidth(84)
+        self._vol.setFixedWidth(96)
         self._vol.setRange(0, 100)
         self._vol.setValue(100)
         self._vol.setToolTip("Âm lượng xem trước")
         self._vol.valueChanged.connect(self._on_volume)
-        ctl.addWidget(QLabel("🔊"))
         ctl.addWidget(self._vol)
-        root.addLayout(ctl)
+        self._speed = QComboBox()
+        for s in SPEEDS:
+            self._speed.addItem(f"{s:g}×", s)
+        self._speed.setCurrentIndex(SPEEDS.index(1.0))
+        self._speed.setFixedWidth(64)
+        self._speed.setToolTip("Tốc độ phát")
+        self._speed.currentIndexChanged.connect(self._on_speed)
+        ctl.addWidget(self._speed)
+        tl.addLayout(ctl)
+        root.addWidget(bar)
 
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:
         self._placeholder.setText("Chưa có video")
-        ok = bool(HAVE_MM and self._player and path and Path(path).exists() and self._probe_ok(path))
+        dims = self._probe(path) if path and Path(path).exists() else None
+        ok = bool(HAVE_MM and self._player and dims is not None)
+        if dims and dims[0] > 0:
+            self.set_dims(*dims)
         store.debug(f"VideoPanel.load path={path} ok={ok}")
         if ok:
             from PySide6.QtCore import QUrl
@@ -127,6 +175,18 @@ class VideoPanel(QFrame):
                 self._placeholder.setText("Không mở được video (tệp hỏng hoặc tải dở).")
             self._stack.setCurrentWidget(self._placeholder)
 
+    def set_dims(self, w: int, h: int) -> None:
+        """Source size → the floating "720 × 1566" badge and the orientation chip."""
+        self._dims = (w, h)
+        ok = w > 0 and h > 0
+        self._dims_lbl.setVisible(ok)
+        self._orient.setVisible(ok)
+        if ok:
+            self._dims_lbl.setText(f"● {w} × {h}")
+            self._dims_lbl.adjustSize()
+            self._orient.setText("Dọc · giữ đúng tỉ lệ" if h > w else "Ngang · giữ đúng tỉ lệ")
+            self.dimsChanged.emit(w, h)
+
     def set_style(self, style: dict, size_px: int, font: str) -> None:
         self._canvas.set_style(style, size_px, font)
 
@@ -136,22 +196,67 @@ class VideoPanel(QFrame):
     def current_time(self) -> float:
         return (self._player.position() / 1000.0) if self._player else 0.0
 
+    def duration(self) -> float:
+        return self._dur
+
+    def is_playing(self) -> bool:
+        return bool(self._player and
+                    self._player.playbackState() == QMediaPlayer.PlayingState)
+
+    def play(self) -> None:
+        if self._player:
+            self._player.play()
+
+    def pause(self) -> None:
+        if self._player and self.is_playing():
+            self._player.pause()
+
+    def set_cues(self, cues: list) -> None:
+        self._cues = cues or []
+        self._refresh_caption(self.current_time())
+
+    def toggle(self) -> None:
+        if not self._player:
+            return
+        if self.is_playing():
+            self._player.pause()
+        else:
+            self._player.play()
+
+    def seek_seconds(self, s: float) -> None:
+        if self._player:
+            self._player.setPosition(int(max(0.0, s) * 1000))
+        self._refresh_caption(max(0.0, s))
+
+    def loop_enabled(self) -> bool:
+        return self._loop.isChecked()
+
+    def set_loop(self, on: bool) -> None:
+        self._loop.setChecked(on)
+
+    # --- internal ------------------------------------------------------------
     @staticmethod
-    def _probe_ok(path: Path) -> bool:
-        """Validate the file with ffprobe before handing it to QMediaPlayer."""
+    def _probe(path: Path) -> tuple[int, int] | None:
+        """Validate the file with ffprobe before handing it to QMediaPlayer; returns
+        the video size ((0, 0) for audio-only) or None when the file is unusable."""
+        import json
         import subprocess
 
         try:
             from app.ffmpegutil import ffprobe_bin
 
             r = subprocess.run(
-                [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=nw=1:nk=1", str(path)],
+                [ffprobe_bin(), "-v", "error", "-show_entries",
+                 "format=duration:stream=width,height,codec_type", "-of", "json", str(path)],
                 capture_output=True, text=True, timeout=15,
             )
-            return r.returncode == 0 and r.stdout.strip() not in ("", "N/A")
+            data = json.loads(r.stdout or "{}")
+            if r.returncode != 0 or data.get("format", {}).get("duration") in (None, "N/A"):
+                return None
+            v = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
+            return int(v.get("width") or 0), int(v.get("height") or 0)
         except Exception:  # noqa: BLE001
-            return False
+            return None
 
     def _on_frame(self, frame) -> None:
         try:
@@ -163,6 +268,8 @@ class VideoPanel(QFrame):
         if img.isNull():
             return
         nw, nh = img.width(), img.height()
+        if (nw, nh) != self._dims:
+            self.set_dims(nw, nh)
         if max(nw, nh) > 960:
             img = img.scaled(960, 960, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self._canvas.set_frame(img, nw, nh)
@@ -175,25 +282,15 @@ class VideoPanel(QFrame):
         if self._audio is not None:
             self._audio.setVolume(v / 100.0)
 
-    def set_cues(self, cues: list) -> None:
-        self._cues = cues or []
-
-    def toggle(self) -> None:
-        if not self._player:
-            return
-        if self._player.playbackState() == QMediaPlayer.PlayingState:
-            self._player.pause()
-            self._play.setText("▶")
-        else:
-            self._player.play()
-            self._play.setText("❚❚")
-
-    def seek_seconds(self, s: float) -> None:
+    def _on_speed(self, i: int) -> None:
         if self._player:
-            self._player.setPosition(int(max(0.0, s) * 1000))
-        self._refresh_caption(max(0.0, s))
+            self._player.setPlaybackRate(float(self._speed.itemData(i)))
 
-    # --- internal ------------------------------------------------------------
+    def _on_state(self, _state) -> None:
+        playing = self.is_playing()
+        self._play.setIcon(icon("Pause" if playing else "Play", "#ffffff", 15))
+        self.playStateChanged.emit(playing)
+
     def _active_text(self, t: float) -> str:
         for c in self._cues:
             if c.start <= t < c.end:
@@ -201,22 +298,20 @@ class VideoPanel(QFrame):
         return ""
 
     def _refresh_caption(self, t: float) -> None:
-        txt = self._active_text(t)
-        if txt != self._sub.text():
-            self._sub.setText(txt)
-        self._canvas.set_caption(txt)
+        self._canvas.set_caption(self._active_text(t))
 
     def _on_pos(self, ms: int) -> None:
         if not self._scrub.isSliderDown():
             self._scrub.setValue(ms)
         t = ms / 1000.0
-        self._time.setText(f"{fmt_time(t)} / {fmt_time(self._dur)}")
+        self._time.setText(f"{fmt_time(t, 2)} / {fmt_time(self._dur, 0)}")
         self._refresh_caption(t)
         self.positionChanged.emit(t)
 
     def _on_dur(self, ms: int) -> None:
         self._dur = ms / 1000.0
         self._scrub.setRange(0, ms)
+        self._time.setText(f"{fmt_time(self.current_time(), 2)} / {fmt_time(self._dur, 0)}")
         self.durationChanged.emit(self._dur)
 
     def _on_scrub(self, ms: int) -> None:

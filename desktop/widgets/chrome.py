@@ -26,12 +26,15 @@ from desktop.theme import V2, fonts
 
 def button(text: str = "", icon_name: str | None = None, *, variant: str = "",
            tip: str = "", icon_color: str | None = None, checkable: bool = False,
-           icon_size: int = 16) -> QPushButton:
+           icon_size: int = 16, small: bool = False) -> QPushButton:
     """A v2 button. ``variant``: "" (secondary) | primary | ghost | danger | small |
-    large | nudge | link. Icon color follows the variant unless given."""
+    large | nudge | link. ``small`` shrinks any variant (ghost + small). Icon color
+    follows the variant unless given."""
     b = QPushButton(text)
     if variant:
         b.setObjectName(variant)
+    if small:
+        b.setProperty("small", True)
     if icon_name:
         color = icon_color or ("#ffffff" if variant == "primary" else
                                V2["red"] if variant == "danger" else V2["secondary"])
@@ -297,7 +300,9 @@ class ProjectBar(QFrame):
         h.addLayout(self.actions)
 
     def set_project(self, title: str, meta: str) -> None:
-        self.title.setText(title)
+        fm = self.title.fontMetrics()
+        self.title.setText(fm.elidedText(title, Qt.ElideRight, 620))
+        self.title.setToolTip(title)
         self.meta.setText(meta)
 
     def add_action(self, w: QWidget) -> QWidget:
