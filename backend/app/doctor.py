@@ -12,6 +12,7 @@ Exit code 0 = pipeline can run (possibly degraded), 1 = a hard requirement
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -88,12 +89,25 @@ def _check_download() -> list[Check]:
         out.append(("ok", "yt-dlp", _module_version("yt_dlp.version") or "đã cài"))
     else:
         out.append(("fail", "yt-dlp", 'chưa cài — pip install -e "." (backend/)'))
-    if settings.ytdlp_cookies_file or settings.ytdlp_cookies_from_browser:
-        src = settings.ytdlp_cookies_file or f"trình duyệt {settings.ytdlp_cookies_from_browser}"
-        out.append(("ok", "cookies Douyin", src))
+    browser = (settings.ytdlp_cookies_from_browser or "").lower()
+    if settings.ytdlp_cookies_file:
+        ok = Path(settings.ytdlp_cookies_file).exists()
+        out.append(("ok" if ok else "fail", "cookies Douyin",
+                    f"tệp {settings.ytdlp_cookies_file}" if ok
+                    else f"tệp không tồn tại: {settings.ytdlp_cookies_file}"))
+    elif browser and browser != "firefox" and os.name == "nt":
+        # Chromium browsers on Windows lock the cookie DB while open AND app-bound
+        # encrypt it (127+), which yt-dlp cannot decrypt — this never works there
+        out.append(("warn", "cookies Douyin",
+                    f"đặt trình duyệt '{browser}' — trên Windows yt-dlp không đọc được cookie "
+                    f"Edge/Chrome (khoá + mã hoá App-Bound). Dùng tệp cookies.txt: ⚙ Cài đặt → "
+                    f"'Tệp cookies.txt' (xuất bằng tiện ích \"Get cookies.txt LOCALLY\")"))
+    elif browser:
+        out.append(("ok", "cookies Douyin", f"trình duyệt {browser}"))
     else:
-        out.append(("info", "cookies Douyin",
-                    "chưa cấu hình — Douyin thường cần cookie (YTDLP_COOKIES_FROM_BROWSER=edge trong .env)"))
+        out.append(("warn", "cookies Douyin",
+                    "chưa cấu hình — Douyin BẮT BUỘC có cookie. Xuất cookies.txt từ douyin.com "
+                    "rồi đặt ở ⚙ Cài đặt → 'Tệp cookies.txt'"))
     if settings.bbdown_path:
         ok = Path(settings.bbdown_path).exists()
         out.append(("ok" if ok else "warn", "BBDown (bilibili)",

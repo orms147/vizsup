@@ -213,3 +213,70 @@ def test_bbdown_invokes_the_exe_and_tags_metadata(tmp_path, monkeypatch):
     assert job.source_video.exists()             # normalized off .flv
     assert str(work) in seen["cmd"]              # --work-dir points at the job dir
     assert "-F" in seen["cmd"]
+
+
+# --- cookies: file wins, and failures say what actually works ------------------
+
+def test_a_cookie_file_wins_over_the_browser(monkeypatch):
+    """With both set, yt-dlp tried the browser first and died on Edge's locked,
+    app-bound-encrypted DB — so a perfectly good cookies.txt was never used."""
+    monkeypatch.setattr(download.settings, "ytdlp_cookies_file", "C:/c/douyin.cookies.txt")
+    monkeypatch.setattr(download.settings, "ytdlp_cookies_from_browser", "edge")
+    assert download._cookie_opts() == {"cookiefile": "C:/c/douyin.cookies.txt"}
+
+
+def _cookie_cfg(monkeypatch, *, file="", browser=""):
+    monkeypatch.setattr(download.settings, "ytdlp_cookies_file", file)
+    monkeypatch.setattr(download.settings, "ytdlp_cookies_from_browser", browser)
+
+
+def test_locked_browser_db_points_to_cookies_txt(monkeypatch):
+    _cookie_cfg(monkeypatch, browser="edge")
+    err = download._cookie_error(RuntimeError(
+        "ERROR: Could not copy Chrome cookie database. See https://github.com/yt-dlp/yt-dlp/issues/7271"))
+    assert err is not None
+    msg = str(err)
+    assert "đang mở" in msg and "App-Bound" in msg and "cookies.txt" in msg
+
+
+def test_fresh_cookie_error_without_any_cookies(monkeypatch):
+    _cookie_cfg(monkeypatch)
+    err = download._cookie_error(RuntimeError(
+        "[Douyin] 768: Fresh cookies (not necessarily logged in) are needed"))
+    assert "Chưa cấu hình cookie" in str(err) and "cookies.txt" in str(err)
+
+
+def test_fresh_cookie_error_with_an_expired_file(monkeypatch):
+    _cookie_cfg(monkeypatch, file="C:/c/old.txt")
+    err = download._cookie_error(RuntimeError("Fresh cookies are needed"))
+    assert "hết hạn" in str(err)
+
+
+def test_non_cookie_errors_pass_through(monkeypatch):
+    _cookie_cfg(monkeypatch, browser="edge")
+    assert download._cookie_error(RuntimeError("HTTP Error 404: Not Found")) is None
+
+
+def test_the_friendly_message_reaches_the_caller(tmp_path, monkeypatch):
+    """End to end through _ytdlp with yt-dlp itself faked."""
+    import sys
+    import types
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            raise RuntimeError("ERROR: Could not copy Chrome cookie database. See ...7271")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL))
+    _cookie_cfg(monkeypatch, browser="edge")
+    job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/1")
+    with pytest.raises(RuntimeError, match="cookies.txt"):
+        download._ytdlp(job, job.url)

@@ -47,12 +47,16 @@ ATTR_BY_ENV = {env: attr for env, _n, attr, _p in KEYS}
 # dialog only stops the user from hand-editing .env for them.
 # (env var, label, settings attr, kind, hint, choices)
 OPTIONS = [
-    ("YTDLP_COOKIES_FROM_BROWSER", "Cookie từ trình duyệt", "ytdlp_cookies_from_browser",
-     "choice", "Douyin thường cần cookie mới. Chọn trình duyệt đã đăng nhập douyin.com "
-     "rồi ĐÓNG trình duyệt đó trước khi tải.",
-     ["", "edge", "chrome", "firefox", "brave", "chromium", "opera", "vivaldi"]),
-    ("YTDLP_COOKIES_FILE", "…hoặc tệp cookies.txt", "ytdlp_cookies_file",
-     "file", "Dùng khi không lấy được cookie trực tiếp từ trình duyệt.", None),
+    ("YTDLP_COOKIES_FILE", "Tệp cookies.txt (Douyin cần — cách chắc chắn nhất)",
+     "ytdlp_cookies_file",
+     "file", "Douyin bắt buộc có cookie. Cài tiện ích \"Get cookies.txt LOCALLY\" cho Edge/Chrome, "
+     "mở douyin.com, bấm tiện ích → Export, rồi chọn tệp ở đây. Tệp này được ưu tiên hơn "
+     "'cookie từ trình duyệt'. Cookie hết hạn sau một thời gian — khi lỗi quay lại thì xuất lại.",
+     None),
+    ("YTDLP_COOKIES_FROM_BROWSER", "…hoặc cookie từ trình duyệt", "ytdlp_cookies_from_browser",
+     "choice", "Edge/Chrome trên Windows KHÔNG dùng được (khoá tệp khi đang mở + mã hoá "
+     "App-Bound từ bản 127+). Chỉ Firefox còn đọc được. Để trống nếu đã dùng tệp cookies.txt.",
+     ["", "firefox", "edge", "chrome", "brave", "chromium", "opera", "vivaldi"]),
     ("FFMPEG_PATH", "Đường dẫn ffmpeg", "ffmpeg_path",
      "file", "Trỏ tới ffmpeg.exe hoặc thư mục bin của nó. Bỏ trống = tìm trong PATH.", None),
     ("BBDOWN_PATH", "Đường dẫn BBDown", "bbdown_path",

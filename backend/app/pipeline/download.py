@@ -38,12 +38,47 @@ def normalize_url(url: str) -> str:
 
 
 def _cookie_opts() -> dict:
-    opts: dict = {}
+    """A cookies.txt file WINS over browser extraction — they are not combined. With
+    both set, yt-dlp still tried the browser first and died on it (Edge/Chrome lock and
+    app-bound-encrypt their cookie DB on Windows), so a perfectly good file was never
+    used."""
     if settings.ytdlp_cookies_file:
-        opts["cookiefile"] = settings.ytdlp_cookies_file
+        return {"cookiefile": settings.ytdlp_cookies_file}
     if settings.ytdlp_cookies_from_browser:
-        opts["cookiesfrombrowser"] = (settings.ytdlp_cookies_from_browser,)
-    return opts
+        return {"cookiesfrombrowser": (settings.ytdlp_cookies_from_browser,)}
+    return {}
+
+
+_CHROMIUM = ("edge", "chrome", "chromium", "brave", "opera", "vivaldi")
+_COOKIE_HELP = (
+    "Cách chắc chắn: xuất cookie ra tệp. Trong Edge/Chrome cài tiện ích \"Get cookies.txt "
+    "LOCALLY\", mở douyin.com (không cần đăng nhập), bấm tiện ích → Export → lưu tệp, rồi "
+    "vào ⚙ Cài đặt → \"…hoặc tệp cookies.txt\" chọn tệp đó (hoặc .env: YTDLP_COOKIES_FILE="
+    "<đường dẫn>). Tệp cookie luôn được ưu tiên hơn trình duyệt. Cookie Douyin hết hạn sau "
+    "một thời gian — lỗi này quay lại thì xuất lại tệp."
+)
+
+
+def _cookie_error(exc: Exception) -> RuntimeError | None:
+    """Map yt-dlp's cookie failures to an actionable Vietnamese message (or None)."""
+    m = str(exc).lower()
+    browser = (settings.ytdlp_cookies_from_browser or "").lower()
+    if "could not copy" in m and "cookie database" in m:
+        return RuntimeError(
+            f"Không đọc được cookie của trình duyệt '{browser}': trình duyệt đang mở nên khóa "
+            f"tệp cookie. Trên Windows, Edge/Chrome bản mới còn MÃ HOÁ cookie (App-Bound) nên "
+            f"yt-dlp không đọc được kể cả khi đã đóng hẳn trình duyệt. " + _COOKIE_HELP)
+    if "failed to decrypt" in m or ("decrypt" in m and "cookie" in m):
+        return RuntimeError(
+            f"Không giải mã được cookie của '{browser}' (Edge/Chrome trên Windows dùng mã hoá "
+            f"App-Bound mà yt-dlp không hỗ trợ). " + _COOKIE_HELP)
+    if "cookie" in m:
+        why = ("Cookie trong tệp đã hết hạn hoặc không phải của douyin.com." if
+               settings.ytdlp_cookies_file else
+               f"Chưa có cookie dùng được (trình duyệt '{browser}' không đọc được)." if
+               browser in _CHROMIUM else "Chưa cấu hình cookie.")
+        return RuntimeError(f"Douyin cần cookie mới để tải. {why} " + _COOKIE_HELP)
+    return None
 
 
 def _find_produced(job: Job) -> Path:
@@ -116,14 +151,9 @@ def _ytdlp(job: Job, url: str) -> Job:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
     except Exception as exc:  # noqa: BLE001 - give a fixable message for the cookie case
-        m = str(exc).lower()
-        if "cookie" in m or "fresh cookies" in m:
-            raise RuntimeError(
-                "Douyin cần cookie mới để tải. Trong file .env đặt "
-                "YTDLP_COOKIES_FROM_BROWSER=edge  (hoặc chrome/firefox — trình duyệt bạn "
-                "đã mở douyin.com), ĐÓNG trình duyệt đó rồi chạy lại. Hoặc xuất cookies.txt "
-                "và đặt YTDLP_COOKIES_FILE=<đường dẫn>."
-            ) from exc
+        friendly = _cookie_error(exc)
+        if friendly is not None:
+            raise friendly from exc
         raise
 
     # Locate the produced file (merge yields source.mp4; otherwise pick newest source.*).
