@@ -33,6 +33,23 @@ REASONING_MIN = {"reasoning": {"effort": "minimal"}}
 REASONING_HEADROOM = 2048
 
 
+class EmptyReply(RuntimeError):
+    """HTTP 200 with no ``choices`` — OpenRouter relays an upstream provider failure
+    this way. Carries no status code on purpose: every retry ladder in the app treats
+    status-less errors as transient. Seen 2026-10-01 on the stealth model: the brief
+    pre-pass died with "TypeError: 'NoneType' object is not subscriptable"."""
+
+
+def require_choices(resp):
+    """Pass a chat completion through, or raise EmptyReply with the relayed error."""
+    if getattr(resp, "choices", None):
+        return resp
+    extra = getattr(resp, "model_extra", None) or {}
+    err = extra.get("error") if isinstance(extra, dict) else None
+    detail = (err.get("message") if isinstance(err, dict) else err) or "no choices in reply"
+    raise EmptyReply(f"OpenRouter returned an empty reply ({detail})")
+
+
 def _status(exc: Exception) -> int | None:
     return getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None),
                                                          "status_code", None)
@@ -115,7 +132,7 @@ class OpenRouter(OpenAICompatTranslator):
             if mandatory:
                 call["max_tokens"] = kw["max_tokens"] + REASONING_HEADROOM
             try:
-                return self._client().chat.completions.create(**call)
+                return require_choices(self._client().chat.completions.create(**call))
             except Exception as exc:
                 if not mandatory and _reasoning_is_mandatory(exc):
                     self._mandatory_reasoning.add(model)

@@ -73,7 +73,7 @@ class FasterWhisperASR(ASRProvider):
                 cues.append(Cue(index=len(cues) + 1, start=float(seg.start), end=float(seg.end), text=text))
         return cues
 
-    def transcribe(self, media: Path, *, language: str = "zh"):
+    def transcribe(self, media: Path, *, language: str = "zh", log=None):
         try:
             return self._run(media, language)
         except Exception as exc:  # noqa: BLE001

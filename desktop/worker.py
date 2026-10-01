@@ -172,7 +172,12 @@ class PipelineWorker(QObject):
                 from app.config import settings
                 asr_name = o.get("asr") or settings.vizsup_default_asr
                 self.log.emit(f"ASR: {asr_name}")
-                asr.transcribe(job, provider=asr_name)
+
+                def asr_log(msg: str) -> None:   # chunk progress → UI log + debug trail
+                    store.debug(f"asr: {msg.strip()}")
+                    self.log.emit(msg)
+
+                asr.transcribe(job, provider=asr_name, log=asr_log)
                 translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
                 self.log.emit("✓ Nhận dạng xong")
 

@@ -351,3 +351,18 @@ def reindex(cues: list[Cue]) -> list[Cue]:
     for i, c in enumerate(cues, 1):
         c.index = i
     return cues
+
+
+class Counter:
+    """Thread-safe 1, 2, 3 … for "chunk i/N done" progress lines from the pool."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self._n = 0
+        self._lock = threading.Lock()
+
+    def next(self) -> int:
+        with self._lock:
+            self._n += 1
+            return self._n

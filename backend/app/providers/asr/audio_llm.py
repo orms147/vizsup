@@ -70,6 +70,7 @@ class AudioLLM(ASRProvider):
             REASONING_MIN,
             REASONING_OFF,
             _reasoning_is_mandatory,
+            require_choices,
         )
 
         req = self._request(base64.b64encode(path.read_bytes()).decode())
@@ -81,7 +82,9 @@ class AudioLLM(ASRProvider):
                 kw["extra_body"] = REASONING_MIN if mandatory else REASONING_OFF
                 if mandatory:
                     kw["max_tokens"] = MAX_TOKENS + REASONING_HEADROOM
-            return _cloud.client().chat.completions.create(**kw)
+            # validate INSIDE the retried call: an empty 200 must be retried, not crash
+            # later at resp.choices[0]
+            return require_choices(_cloud.client().chat.completions.create(**kw))
 
         mandatory = self.model in self._mandatory_reasoning
         try:
@@ -98,14 +101,30 @@ class AudioLLM(ASRProvider):
         _cloud.check_transcript(text, seconds, model=self.model)
         return text
 
-    def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
+    def transcribe(self, media: Path, *, language: str = "zh", log=None) -> list[Cue]:
+        say = log or (lambda _m: None)
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
+        n = len(spans)
+        say(f"Gửi âm thanh lên {self.model} — {n} đoạn × ≤{int(CHUNK_SEC // 60)} phút…")
+        done = _cloud.Counter()
+
+        def hear(it):
+            text = self._call(it[0], it[1][1] - it[1][0])
+            say(f"  ✓ AI đã nghe xong đoạn {done.next()}/{n}")
+            return text
+
         with _cloud.chunk_files(media, spans) as paths:
             items = list(zip(paths, spans))
-            texts = _cloud.run_chunks(lambda it: self._call(it[0], it[1][1] - it[1][0]), items)
+            texts = _cloud.run_chunks(hear, items)
             # no local faster-whisper → the word-timing track comes from the cloud too,
             # fetched while the chunk files still exist
-            words = (None if _cloud.local_words_available()
-                     else _cloud.cloud_words(items, language))
+            if _cloud.local_words_available():
+                words = None
+                say("Lấy mốc thời gian từng từ (faster-whisper trên máy)…")
+            else:
+                say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
+                words = _cloud.cloud_words(items, language)
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
-        return _cloud.reindex(_cloud.time_groups(media, groups, language, words=words))
+        cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words))
+        say(f"  ✓ {len(cues)} câu tiếng Trung")
+        return cues

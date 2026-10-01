@@ -253,3 +253,21 @@ def test_translate_without_a_brief_sends_none(job, monkeypatch):
     monkeypatch.setattr(translate, "translate_cues", fake_cues)
     translate.translate(job, draft="passthrough")
     assert "_brief" not in seen
+
+
+def test_a_transient_failure_is_retried_once(job, monkeypatch):
+    """The brief has no retry ladder of its own; one empty/transient reply must not
+    cost the whole video its brief (seen on the stealth model, 2026-10-01)."""
+    calls = {"n": 0}
+
+    class Flaky(FakeProvider):
+        def rewrite(self, text, instruction, *, max_tokens=300):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("OpenRouter returned an empty reply")
+            return "Thể loại & nội dung: cover bài hát"
+
+    prov = Flaky()
+    monkeypatch.setattr("app.providers.registry.get_translator", lambda name: prov)
+    assert brief.build_brief(job, "openrouter") == "Thể loại & nội dung: cover bài hát"
+    assert calls["n"] == 2

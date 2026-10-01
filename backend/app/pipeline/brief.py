@@ -29,6 +29,7 @@ BRIEF_FILE = "context_brief.json"
 SAMPLE_CHARS = 6000          # transcript budget sent to the brief model
 _SAMPLE_BLOCKS = 3           # head / middle / tail — a video's topic drifts
 _MAX_TOKENS = 1200
+_ATTEMPTS = 2       # the brief has no retry ladder of its own (unlike translate batches)
 
 BRIEF_INSTRUCTION = (
     "You prepare a TRANSLATION BRIEF that a Chinese-to-Vietnamese subtitle translator will\n"
@@ -164,9 +165,15 @@ def build_brief(job: Job, provider_name: str, *, note: str | None = None,
     try:
         prov = get_translator(provider_name)
         if hasattr(prov, "rewrite") and prov.available():
-            reply = prov.rewrite(build_request(job, cn_lines, note), BRIEF_INSTRUCTION,
-                                 max_tokens=_MAX_TOKENS)
-            brief = (reply or "").strip() or None
+            request = build_request(job, cn_lines, note)
+            for attempt in range(_ATTEMPTS):   # an empty/transient reply is worth one retry
+                try:
+                    reply = prov.rewrite(request, BRIEF_INSTRUCTION, max_tokens=_MAX_TOKENS)
+                    brief = (reply or "").strip() or None
+                    break
+                except Exception:  # noqa: BLE001
+                    if attempt == _ATTEMPTS - 1:
+                        raise
     except Exception as exc:  # noqa: BLE001 - optional pre-pass; never break the run
         say(f"⚠ Không tạo được brief ngữ cảnh ({type(exc).__name__}: {exc})")
 

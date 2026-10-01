@@ -244,3 +244,25 @@ def test_other_openai_compatible_providers_send_no_openrouter_params(monkeypatch
     monkeypatch.setattr(ds, "_client", lambda: client)
     ds.translate_texts(["你好"])
     assert "extra_body" not in client.calls[0]
+
+
+# --- an HTTP 200 with no choices is a transient error, not a TypeError ---------
+
+def test_empty_choices_raise_a_status_less_transient_error(prov, monkeypatch):
+    """OpenRouter relays upstream failures as 200 + no choices; resp.choices[0] used to
+    blow up as TypeError far from the cause. EmptyReply carries no status, so every
+    retry ladder treats it as transient."""
+    empty = SimpleNamespace(choices=None, model_extra={"error": {"message": "upstream 502"}})
+    use(monkeypatch, prov, lambda call: empty)
+    with pytest.raises(orm.EmptyReply, match="upstream 502") as exc:
+        prov.translate_texts(["你好"])
+    assert getattr(exc.value, "status_code", None) is None
+
+
+def test_translate_ladder_retries_an_empty_reply(prov, monkeypatch):
+    from app.pipeline import translate
+
+    replies = iter([SimpleNamespace(choices=[], model_extra={}), ok("1| xin chào")])
+    use(monkeypatch, prov, lambda call: next(replies))
+    out = translate._retry(lambda: prov.translate_texts(["你好"]), sleep=lambda s: None)
+    assert out == ["xin chào"]

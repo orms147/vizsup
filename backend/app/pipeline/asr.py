@@ -23,21 +23,25 @@ def _extract_audio(job: Job) -> None:
     )
 
 
-def transcribe(job: Job, *, provider: str | None = None, language: str = "zh") -> Job:
+def transcribe(job: Job, *, provider: str | None = None, language: str = "zh",
+               log=None) -> Job:
     if provider is None:
         from app.config import settings
 
         provider = settings.vizsup_default_asr
     asr = get_asr(provider)
     if not asr.available():
-        raise RuntimeError(f"ASR provider '{provider}' is not available (missing dependency).")
+        raise RuntimeError(f"ASR provider '{provider}' is not available (missing dependency "
+                           f"or API key).")
     if not job.source_audio.exists():
+        if log:
+            log("Tách âm thanh từ video (ffmpeg)…")
         _extract_audio(job)
     from app.heavy import heavy_task
 
     with heavy_task(f"ASR ({provider})"):
         try:
-            cues = asr.transcribe(job.source_audio, language=language)
+            cues = asr.transcribe(job.source_audio, language=language, log=log)
         finally:
             asr.unload()   # free VRAM before the next heavy stage (8 GB rule)
     write_srt(cues, job.cn_srt)

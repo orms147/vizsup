@@ -131,7 +131,7 @@ class FunASRAligned(ASRProvider):
     def available(self) -> bool:
         return _installed("funasr") and _installed("faster_whisper")
 
-    def transcribe(self, media: Path, *, language: str = "zh"):
+    def transcribe(self, media: Path, *, language: str = "zh", log=None):
         from app.pipeline.align import fuse_transcript_timing
         from app.providers.registry import get_asr
 

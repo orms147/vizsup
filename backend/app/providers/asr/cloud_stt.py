@@ -79,11 +79,21 @@ class CloudSTT(ASRProvider):
                 self._text_only.add(model)
         return _cloud.with_retry(lambda: send("json"))
 
-    def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
+    def transcribe(self, media: Path, *, language: str = "zh", log=None) -> list[Cue]:
+        say = log or (lambda _m: None)
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
+        n = len(spans)
+        say(f"Gửi âm thanh lên {self.model} — {n} đoạn…")
+        done = _cloud.Counter()
+
+        def hear(it):
+            resp = self._call(it[0], language)
+            say(f"  ✓ Đã nhận dạng đoạn {done.next()}/{n}")
+            return resp
+
         with _cloud.chunk_files(media, spans) as paths:
             items = list(zip(paths, spans))
-            replies = _cloud.run_chunks(lambda it: self._call(it[0], language), items)
+            replies = _cloud.run_chunks(hear, items)
 
             timed: list[Cue] = []
             groups: list[_cloud.Group] = []

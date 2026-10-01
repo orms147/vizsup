@@ -49,7 +49,7 @@ class WhisperXFunASR(ASRProvider):
             )
         return self._model
 
-    def transcribe(self, media: Path, *, language: str = "zh"):
+    def transcribe(self, media: Path, *, language: str = "zh", log=None):
         model = self._load()
         res = model.generate(input=str(media), sentence_timestamp=True)
         cues: list[Cue] = []

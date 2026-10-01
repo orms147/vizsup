@@ -88,10 +88,12 @@ def debug(msg: str) -> None:
     """Append a line to storage/vizsup-debug.log, flushed immediately, so we can
     pinpoint where a native crash happened (no Python traceback on segfault)."""
     try:
+        import time
+
         p = _storage() / "vizsup-debug.log"
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
-            f.write(str(msg) + "\n")
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
             f.flush()
     except Exception:  # noqa: BLE001
         pass

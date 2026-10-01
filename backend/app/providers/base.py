@@ -161,5 +161,8 @@ class ASRProvider(Provider):
     """Transcribe audio/video to timed cues (Chinese, with timestamps)."""
 
     @abstractmethod
-    def transcribe(self, media: Path, *, language: str = "zh"):  # -> list[Cue]
+    def transcribe(self, media: Path, *, language: str = "zh", log=None):  # -> list[Cue]
+        """``log``: optional progress callback (one human-readable line per call).
+        Cloud engines report per-chunk progress — a 5-minute video otherwise sits
+        silent for over a minute and looks frozen."""
         ...

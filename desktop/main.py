@@ -339,6 +339,7 @@ class MainWindow(QMainWindow):
             self.input.append_log("⏳ Đang hủy…")
 
     def closeEvent(self, e) -> None:
+        store.debug(f"closeEvent (window closed) busy={self._busy()}")
         # flush a pending debounced edit BEFORE teardown — but never while a render
         # worker might be reading vi.srt mid-run
         try:
@@ -423,11 +424,58 @@ def _install_qt_log_filter() -> None:
     qInstallMessageHandler(handler)
 
 
+def _install_exit_tracing(app) -> None:
+    """Make every way the process can end leave a line in vizsup-debug.log.
+
+    2026-10-01: the window vanished ~2 s into a run with NO trace — no Python
+    traceback, nothing in vizsup-error.log, no Windows crash event — and the same
+    job ran fine in a QThread outside the GUI. Next time the log says which it was:
+    a native crash (faulthandler → vizsup-crash.log, all threads), Ctrl+C / Ctrl+Break
+    in the launching console (which a stray copy-shortcut sends), a window close, or
+    a normal exit."""
+    import atexit
+    import faulthandler
+    import os
+    import signal
+
+    try:
+        settings.vizsup_storage_dir.mkdir(parents=True, exist_ok=True)
+        crash = open(settings.vizsup_storage_dir / "vizsup-crash.log", "a",  # noqa: SIM115
+                     encoding="utf-8")
+        crash.write(f"\n=== vizsup start pid={os.getpid()} ===\n")
+        crash.flush()
+        faulthandler.enable(file=crash, all_threads=True)
+        app._crash_log = crash            # keep the file object alive for the process
+    except Exception:  # noqa: BLE001 - tracing must never stop the app starting
+        pass
+
+    store.debug(f"=== app start pid={os.getpid()} ===")
+
+    def on_signal(signum, _frame):
+        store.debug(f"!!! received signal {signal.Signals(signum).name} — quitting "
+                    f"(Ctrl+C / Ctrl+Break in the console that launched the app?)")
+        app.quit()
+
+    for name in ("SIGINT", "SIGBREAK", "SIGTERM"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), on_signal)
+    # Python runs signal handlers only between bytecodes on the main thread; while
+    # Qt's C++ event loop idles none run. A no-op tick lets them fire within 0.5 s.
+    from PySide6.QtCore import QTimer
+
+    tick = QTimer(app)
+    tick.timeout.connect(lambda: None)
+    tick.start(500)
+    app.aboutToQuit.connect(lambda: store.debug("app aboutToQuit"))
+    atexit.register(lambda: store.debug("process exiting (atexit)"))
+
+
 def main() -> int:
     _install_qt_log_filter()
     app = QApplication(sys.argv)
     app.setApplicationName("vizsup")
     _install_excepthook()
+    _install_exit_tracing(app)
     load_fonts(app)
     app.setStyleSheet(qss())
     win = MainWindow()
