@@ -12,11 +12,8 @@ import uuid
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -26,11 +23,11 @@ from desktop import paths  # noqa: F401
 from desktop import store
 from desktop.ui_thread import connect_on_ui
 from desktop.settings_dialog import SettingsDialog
-from desktop.theme import C, load_fonts, qss
+from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
 from desktop.views.render_view import RenderView
-from desktop.widgets.flow_steps import FlowSteps
+from desktop.widgets.chrome import AppNav, StatusBar
 from desktop.worker import PipelineWorker
 
 from app.config import settings  # noqa: E402
@@ -56,7 +53,8 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(central)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
-        v.addWidget(self._toolbar())
+        self._build_chrome()
+        v.addWidget(self.nav)
 
         self.stack = QStackedWidget()
         self.input = InputView(self.providers)
@@ -66,7 +64,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.editor)
         self.stack.addWidget(self.render)
         v.addWidget(self.stack, 1)
-        v.addWidget(self._statusbar())
+        v.addWidget(self.status)
 
         # wiring
         self.input.startRequested.connect(self._start_gate)
@@ -84,52 +82,26 @@ class MainWindow(QMainWindow):
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
 
-    # --- chrome --------------------------------------------------------------
-    def _toolbar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("toolbar")
-        bar.setFixedHeight(54)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(16, 0, 16, 0)
-        h.setSpacing(12)
-        logo = QLabel("◢ vizsup")
-        logo.setStyleSheet(f"color:{C['text2']};font-weight:600;font-size:14px;")
-        self.steps = FlowSteps()
-        h.addWidget(logo)
-        sep = QFrame()
-        sep.setFixedWidth(1)
-        sep.setStyleSheet(f"background:{C['line3']};")
-        h.addWidget(sep)
-        h.addWidget(self.steps)
-        h.addStretch(1)
-        self.saved_lbl = QLabel("")
-        self.saved_lbl.setObjectName("muted")
-        h.addWidget(self.saved_lbl)
-        settings_btn = QPushButton("⚙  Cài đặt")
-        settings_btn.setObjectName("ghost")
-        settings_btn.clicked.connect(self._open_settings)
-        h.addWidget(settings_btn)
-        self.approve_btn = QPushButton("🛡  Duyệt & Dựng video")
-        self.approve_btn.setObjectName("primary")
-        self.approve_btn.clicked.connect(self._approve)
-        h.addWidget(self.approve_btn)
-        return bar
+    # --- chrome (v2: appdesign/v2, desktop/widgets/chrome.py) ---------------
+    def _build_chrome(self) -> None:
+        self.nav = AppNav()
+        self.steps = self.nav.steps                 # v1 name kept for the call sites
+        self.nav.settingsClicked.connect(self._open_settings)
+        self.nav.primaryClicked.connect(self._approve)
+        self.nav.keysClicked.connect(self._show_shortcuts)
+        self.status = StatusBar()                   # .setText("● …") still works
 
-    def _statusbar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("statusbar")
-        bar.setFixedHeight(28)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(16, 0, 16, 0)
-        self.status = QLabel("● Sẵn sàng")
-        self.status.setStyleSheet(f"color:{C['muted2']};font-size:11px;")
-        h.addWidget(self.status)
-        h.addStretch(1)
-        return bar
+    def _show_shortcuts(self) -> None:
+        from desktop.widgets.shortcuts import ShortcutsDialog
+
+        ShortcutsDialog(self).exec()
 
     def _on_page(self, idx: int) -> None:
         self.steps.set_active(idx)
-        self.approve_btn.setVisible(idx == EDITOR)
+        self.nav.set_primary("Duyệt và dựng" if idx == EDITOR else None)
+        self.nav.set_saved("saved" if idx == EDITOR else None)
+        self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
+                              if idx == EDITOR else [])
 
     # --- gate run ------------------------------------------------------------
     def _start_gate(self, opts: dict) -> None:
@@ -250,7 +222,7 @@ class MainWindow(QMainWindow):
     def _show_style_popup(self, path: str) -> None:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QPixmap
-        from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+        from PySide6.QtWidgets import QDialog, QVBoxLayout
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Xem thử kiểu phụ đề")
@@ -376,7 +348,7 @@ class MainWindow(QMainWindow):
         e.accept()
 
     def _on_dirty(self, dirty: bool) -> None:
-        self.saved_lbl.setText("● Đang lưu…" if dirty else "✓ Đã lưu nháp")
+        self.nav.set_saved("saving" if dirty else "saved")
 
     def _open_glossary(self, *, job: bool) -> None:
         from desktop.glossary_dialog import GlossaryDialog
