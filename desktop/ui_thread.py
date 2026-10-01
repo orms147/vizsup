@@ -13,7 +13,7 @@ is. Use it for every connection from a worker signal to a non-QObject callable.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal
 
 
 class UiCall(QObject):
@@ -35,3 +35,55 @@ def connect_on_ui(signal, fn, owner: QObject) -> UiCall:
     relay = UiCall(fn, owner)
     signal.connect(relay.call)
     return relay
+
+
+class _BgTask(QObject):
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn) -> None:
+        super().__init__()
+        self._fn = fn
+
+    def run(self) -> None:
+        try:
+            self.done.emit(self._fn())
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+class BgRunner:
+    """Run short blocking calls on throwaway QThreads; results come back on the GUI
+    thread (via connect_on_ui). Keeps (thread, task) refs alive and joins them on
+    ``shutdown`` so closing the window never tears down a running QThread."""
+
+    def __init__(self, owner: QObject) -> None:
+        self._owner = owner
+        self._tasks: list = []
+
+    def run(self, fn, on_done, on_fail=None) -> None:
+        from PySide6.QtCore import QThread
+
+        thread = QThread()
+        task = _BgTask(fn)
+        pair = (thread, task)
+        self._tasks.append(pair)
+        task.moveToThread(thread)
+        thread.started.connect(task.run)
+        connect_on_ui(task.done, on_done, self._owner)
+        if on_fail:
+            connect_on_ui(task.failed, on_fail, self._owner)
+        task.done.connect(thread.quit)
+        task.failed.connect(thread.quit)
+        thread.finished.connect(task.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._tasks.remove(pair) if pair in self._tasks else None)
+        thread.start()
+
+    def shutdown(self) -> None:
+        for thread, _task in list(self._tasks):
+            try:
+                thread.quit()
+                thread.wait(2000)
+            except RuntimeError:
+                pass

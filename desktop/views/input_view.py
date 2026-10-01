@@ -1,13 +1,15 @@
-"""Screen 1 — Input / Setup: source + subtitle-source choice + per-stage engine
-pickers + start, with a live progress/log panel. Emits startRequested(opts).
+"""Screen 1 — Bắt đầu (v2, appdesign/v2 "v2 — Bắt đầu"): one hero link box, optional
+context note and options (collapsed by default), a running stage list with Hủy, and
+inline error cards (Douyin cookie in three steps · network · missing key). The aside
+lists recent projects to reopen at the edit gate. Emits startRequested(opts).
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -18,22 +20,87 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QProgressBar,
-    QPushButton,
-    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from desktop import store
-from desktop.theme import C
+from desktop.cuemodel import fmt_time
+from desktop.icons import pixmap
+from desktop.theme import V2
+from desktop.widgets.chrome import badge, button, icon_label, label
 from desktop.widgets.provider_combo import ProviderCombo
+from desktop.widgets.recent_projects import RecentProjects, short_title
+
+SOURCES = (("auto", "Tự động · khuyên dùng"), ("asr", "AI nghe âm thanh"),
+           ("ocr", "Đọc chữ cháy trên video (OCR)"), ("srt", "Tệp phụ đề .srt có sẵn"))
+OCR_REGIONS = (("Phía dưới (mặc định)", "bottom-third"), ("Nửa dưới", "bottom-half"),
+               ("Giữa màn hình", "middle-third"), ("Trên màn hình", "top-third"),
+               ("Toàn khung (phụ đề di động)", "full"))
+STAGES = (("download", "Tải video"), ("subtitle", "Lấy phụ đề tiếng Trung"),
+          ("context", "Đọc ngữ cảnh"), ("translate", "Dịch sang tiếng Việt"))
 
 
-def _section(text: str) -> QLabel:
-    lb = QLabel(text.upper())
-    lb.setObjectName("section")
-    return lb
+def _field(title: str, w: QWidget) -> QVBoxLayout:
+    box = QVBoxLayout()
+    box.setSpacing(5)
+    box.addWidget(label(title, "small"))
+    box.addWidget(w)
+    return box
+
+
+class _StageRow(QWidget):
+    def __init__(self, num: int, name: str) -> None:
+        super().__init__()
+        self._num = num
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 6, 0, 6)
+        h.setSpacing(12)
+        self.dot = QLabel()
+        self.dot.setFixedSize(26, 26)
+        self.dot.setAlignment(Qt.AlignCenter)
+        h.addWidget(self.dot, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.name = label(name)
+        self.detail = label("Chờ đến lượt", "small")
+        self.detail.setWordWrap(True)
+        col.addWidget(self.name)
+        col.addWidget(self.detail)
+        h.addLayout(col, 1)
+        self.dur = label("", "mono")
+        h.addWidget(self.dur, 0, Qt.AlignTop)
+        self.set_state("wait")
+
+    def set_state(self, state: str, detail: str | None = None, dur: str = "") -> None:
+        self.state = state
+        style = {"done": (V2["green_soft"], V2["green"]), "active": (V2["purple_soft"], V2["purple"]),
+                 "error": (V2["red_soft"], V2["red"])}.get(state, (V2["raised"], V2["line"]))
+        self.dot.setStyleSheet(f"background:{style[0]};border:1px solid {style[1]};"
+                               f"border-radius:13px;color:{V2['muted']};font-size:11px;")
+        if state == "done":
+            self.dot.setPixmap(pixmap("Check", V2["green"], 13))
+        elif state == "active":
+            self.dot.setPixmap(pixmap("LoaderCircle", V2["purple_bright"], 13))
+        elif state == "error":
+            self.dot.setPixmap(pixmap("X", V2["red"], 13))
+        elif state == "paused":
+            self.dot.setPixmap(pixmap("Pause", V2["muted"], 13))
+        else:
+            self.dot.setPixmap(QPixmapEmpty())
+            self.dot.setText(str(self._num))
+        self.name.setStyleSheet(f"color:{V2['text'] if state != 'wait' else V2['muted']};"
+                                f"font-weight:600;")
+        if detail is not None:
+            self.detail.setText(detail)
+        self.dur.setText(dur)
+
+
+def QPixmapEmpty():  # noqa: N802 - tiny helper: clear a QLabel's pixmap
+    from PySide6.QtGui import QPixmap
+
+    return QPixmap()
 
 
 class InputView(QWidget):
@@ -42,228 +109,279 @@ class InputView(QWidget):
     resumeRequested = Signal(str)  # job_id of a recent project to reopen
     deleteRequested = Signal(str)  # job_id of a recent project to delete
     glossaryRequested = Signal()   # open the glossary dialog (global scope)
+    settingsRequested = Signal()   # "Thêm khóa" on the missing-key card
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
         self._file: str | None = None
         self._srt: str | None = None
+        self._last_opts: dict | None = None
+        self._busy = False
+        self._t0 = 0.0
+        self._stage = ""
+        self._stage_t0: dict[str, float] = {}
+        self._tick = QTimer(self)
+        self._tick.setInterval(1000)
+        self._tick.timeout.connect(self._on_tick)
 
-        outer = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        wrap = QWidget()
-        wrap.setMaximumWidth(820)
-        col = QVBoxLayout(wrap)
-        col.setContentsMargins(32, 28, 32, 28)
-        col.setSpacing(14)
+        outer.setSpacing(0)
 
-        title = QLabel("Tạo dự án lồng tiếng mới")
-        title.setObjectName("h1")
-        sub = QLabel("Dán liên kết Douyin / Bilibili hoặc chọn tệp. vizsup sẽ lấy phụ đề tiếng Trung, "
-                     "dịch và để bạn duyệt trước khi lồng tiếng.")
-        sub.setObjectName("muted")
-        sub.setWordWrap(True)
-        col.addWidget(title)
-        col.addWidget(sub)
+        main = QWidget()
+        main.setMaximumWidth(780)
+        col = QVBoxLayout(main)
+        col.setContentsMargins(24, 24, 24, 24)
+        col.setSpacing(18)
+        intro = QVBoxLayout()
+        intro.setSpacing(10)
+        intro.addWidget(label("GÓC DỊCH VIDEO CỦA BẠN", "eyebrow"))
+        self.headline = label("Một đường link.\nMột video của bạn.", "display")
+        intro.addWidget(self.headline)
+        self.tagline = label("Từ video tiếng Trung đến phụ đề và giọng đọc tiếng Việt.\n"
+                             "Dán link, xem bản dịch, chỉnh cho vừa ý.", "secondary")
+        intro.addWidget(self.tagline)
+        col.addLayout(intro)
 
-        # recent projects (resume to the edit gate without re-downloading)
-        self._recent_box = QWidget()
-        self._recent_lay = QVBoxLayout(self._recent_box)
-        self._recent_lay.setContentsMargins(0, 0, 0, 0)
-        self._recent_lay.setSpacing(6)
-        col.addWidget(self._recent_box)
-        self._build_recent()
+        col.addWidget(self._hero())
+        col.addWidget(self._progress_card())
+        self.alert = QFrame()
+        self.alert.setVisible(False)
+        self._alert_lay = QVBoxLayout(self.alert)
+        col.addWidget(self.alert)
 
-        # source row
-        col.addWidget(_section("Nguồn video"))
-        srow = QHBoxLayout()
-        self.url = QLineEdit()
-        self.url.setPlaceholderText("https://www.douyin.com/video/…  hoặc  https://www.bilibili.com/video/…")
-        self.url.textChanged.connect(self._refresh_start)
-        pick = QPushButton("Chọn tệp…")
-        pick.setObjectName("ghost")
-        pick.clicked.connect(self._pick_file)
-        srow.addWidget(self.url, 1)
-        srow.addWidget(pick)
-        col.addLayout(srow)
-        self.file_lbl = QLabel("")
-        self.file_lbl.setObjectName("mono")
-        self.file_lbl.setVisible(False)
-        col.addWidget(self.file_lbl)
+        toggles = QHBoxLayout()
+        toggles.setSpacing(8)
+        self.note_btn = button("Ghi chú ngữ cảnh", "BookOpen", checkable=True)
+        self.opt_btn = button("Tùy chọn", "SlidersHorizontal", checkable=True)
+        toggles.addWidget(self.note_btn)
+        toggles.addWidget(self.opt_btn)
+        toggles.addWidget(label("Không bắt buộc", "small"))
+        toggles.addStretch(1)
+        gl = button("Thuật ngữ", "BookOpen", variant="ghost", small=True,
+                    tip="Bảng thuật ngữ Trung → Việt dùng chung — tự nạp vào bước dịch")
+        gl.clicked.connect(self.glossaryRequested)
+        toggles.addWidget(gl)
+        self._toggles = QWidget()
+        self._toggles.setLayout(toggles)
+        col.addWidget(self._toggles)
 
-        # subtitle source
-        col.addSpacing(4)
-        col.addWidget(_section("Nguồn phụ đề tiếng Trung"))
-        self.src_group = QButtonGroup(self)
-        self.rb_auto = QRadioButton("  Tự động phát hiện (khuyên dùng) — dò chữ cháy trên video rồi tự chọn OCR/ASR")
-        self.rb_asr = QRadioButton("  Tự nhận dạng giọng nói (ASR) — video chỉ có âm thanh, không có chữ")
-        self.rb_ocr = QRadioButton("  Đọc chữ cháy trên video (OCR) — video đã có sẵn phụ đề tiếng Trung")
-        self.rb_srt = QRadioButton("  Dùng file .srt tiếng Trung có sẵn")
-        self.rb_auto.setChecked(True)
-        for rb in (self.rb_auto, self.rb_asr, self.rb_ocr, self.rb_srt):
-            self.src_group.addButton(rb)
-            col.addWidget(rb)
-        self.srt_lbl = QLabel("")
-        self.srt_lbl.setObjectName("mono")
-        self.srt_lbl.setVisible(False)
-        col.addWidget(self.srt_lbl)
-
-        # OCR region — for subtitles that aren't in the default bottom strip
-        self._ocr_region_lbl = QLabel("Vùng đọc OCR")
-        self._ocr_region_lbl.setStyleSheet(f"color:{C['muted']};font-size:12px;")
-        self.ocr_region = QComboBox()
-        for label, key in (("Dưới màn hình (mặc định)", "bottom-third"),
-                           ("Nửa dưới", "bottom-half"),
-                           ("Giữa màn hình", "middle-third"),
-                           ("Trên màn hình", "top-third"),
-                           ("Toàn khung (phụ đề di động)", "full")):
-            self.ocr_region.addItem(label, key)
-        col.addWidget(self._ocr_region_lbl)
-        col.addWidget(self.ocr_region)
-
-        # opt-in: after OCR, let the (already-picked) LLM fix recognition errors in
-        # the Chinese lines. Text only — no frames uploaded. Off by default (costs API).
-        self.ocr_proofread = QCheckBox("  Dùng AI sửa lỗi OCR (dùng bộ dịch bản nháp · chỉ gửi chữ · tốn API)")
-        self.ocr_proofread.setToolTip(
-            "Không bắt buộc: bước dịch đã tự chịu lỗi OCR ngay trong prompt. Tùy chọn này "
-            "gửi thêm một lượt sửa lỗi nhận dạng riêng cho các dòng chữ Trung (không gửi hình "
-            "ảnh). Mặc định tắt vì tốn thêm API — chỉ bật khi còn lỗi rõ ở bước sửa phụ đề."
-        )
-        col.addWidget(self.ocr_proofread)
-
-        # opt-in: before translating, let the draft translator suggest a glossary of
-        # recurring names/brands so they stay consistent. Your own glossary always wins.
-        self.extract_terms = QCheckBox("  Tự trích xuất thuật ngữ (giữ tên riêng nhất quán · tốn ít API)")
-        self.extract_terms.setToolTip(
-            "Trước khi dịch, nhờ bộ dịch bản nháp liệt kê các tên riêng/thương hiệu lặp lại "
-            "và gợi ý cách dịch, để giữ nhất quán cả video. Đây chỉ là GỢI Ý ở mức thấp nhất — "
-            "bảng thuật ngữ của bạn (chung/dự án) luôn được ưu tiên. Mặc định tắt vì tốn thêm API."
-        )
-        col.addWidget(self.extract_terms)
-
-        # per-video context brief: the AI skims the video before translating, and/or
-        # expands the user's own note — the translator then follows it for xưng hô,
-        # names and tone. The note is per-video, so it is NOT saved into ui_state.
-        self.auto_context = QCheckBox("  Tự đọc ngữ cảnh video trước khi dịch (AI · tốn rất ít API)")
-        self.auto_context.setToolTip(
-            "Trước khi dịch, bộ dịch bản nháp đọc nhanh tiêu đề + nội dung phụ đề tiếng Trung và "
-            "viết một 'brief' ngắn: thể loại, ai nói với ai, cách xưng hô, tên riêng, giọng điệu. "
-            "Mọi lô dịch của video đều theo brief này nên xưng hô và tên giữ nhất quán."
-        )
-        col.addWidget(self.auto_context)
-        self.context_note = QPlainTextEdit()
-        self.context_note.setPlaceholderText(
-            "Ghi chú ngữ cảnh cho video này (không bắt buộc) — VD: vlog nấu ăn của một cô gái "
-            "Tứ Xuyên, nói thân mật với người xem; \"老李\" là chồng cô ấy, gọi là \"anh Lý\". "
-            "AI sẽ viết lại thành brief đầy đủ và LUÔN theo thông tin của bạn."
-        )
-        self.context_note.setFixedHeight(66)
-        self.context_note.setTabChangesFocus(True)
-        col.addWidget(self.context_note)
-
-        # engines
-        col.addSpacing(4)
-        erow = QHBoxLayout()
-        erow.addWidget(_section("Công cụ xử lý"))
-        erow.addStretch(1)
-        gl_btn = QPushButton("📖 Thuật ngữ")
-        gl_btn.setObjectName("ghost")
-        gl_btn.setToolTip("Bảng thuật ngữ Trung → Việt dùng chung — tự nạp vào bước dịch")
-        gl_btn.clicked.connect(self.glossaryRequested)
-        erow.addWidget(gl_btn)
-        col.addLayout(erow)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(13)
-        grid.setVerticalSpacing(10)
-        self.asr = ProviderCombo(providers["asr"])
-        self.draft = ProviderCombo(providers["translation"])
-        # refine list greys engines whose refine pass would be a silent no-op
-        self.refine = ProviderCombo(providers["translation"], allow_none=True,
-                                    require="can_refine")
-        self.tts = ProviderCombo(providers["tts"])
-        self._asr_caption = QLabel("Nhận dạng giọng nói (ASR)")
-        self._asr_caption.setStyleSheet(f"color:{C['muted']};font-size:12px;")
-        labelled = [
-            (self._asr_caption, self.asr),
-            (QLabel("Dịch — bản nháp"), self.draft),
-            (QLabel("Dịch — tinh chỉnh (tùy chọn)"), self.refine),
-            (QLabel("Giọng lồng tiếng (TTS)"), self.tts),
-        ]
-        for r, (cap, w) in enumerate(labelled):
-            if cap.styleSheet() == "":
-                cap.setStyleSheet(f"color:{C['muted']};font-size:12px;")
-            grid.addWidget(cap, (r // 2) * 2, r % 2)
-            grid.addWidget(w, (r // 2) * 2 + 1, r % 2)
-        col.addLayout(grid)
-
-        # start
-        col.addSpacing(8)
-        srow2 = QHBoxLayout()
-        self.start = QPushButton("▶  Bắt đầu")
-        self.start.setObjectName("primary")
-        self.start.setFixedHeight(42)
-        self.start.clicked.connect(self._emit_start)
-        self.hint = QLabel("Dán liên kết hoặc chọn tệp để bắt đầu")
-        self.hint.setObjectName("muted")
-        srow2.addWidget(self.start)
-        srow2.addWidget(self.hint, 1)
-        col.addLayout(srow2)
-
-        # progress (hidden until busy)
-        self.prog_box = QWidget()
-        pb = QVBoxLayout(self.prog_box)
-        pb.setContentsMargins(0, 10, 0, 0)
-        self.status = QLabel("Đang chuẩn bị…")
-        self.status.setWordWrap(True)  # long errors (e.g. cookie help) wrap instead of truncating
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 100)
-        self.log = QPlainTextEdit()
-        self.log.setObjectName("mono")
-        self.log.setReadOnly(True)
-        self.log.setFixedHeight(160)
-        self.cancel = QPushButton("✕  Hủy")
-        self.cancel.setObjectName("danger")
-        self.cancel.clicked.connect(self.cancelRequested)
-        prow = QHBoxLayout()
-        prow.addWidget(self.status, 1)
-        prow.addWidget(self.cancel)
-        pb.addLayout(prow)
-        pb.addWidget(self.bar)
-        pb.addWidget(self.log)
-        self.prog_box.setVisible(False)
-        col.addWidget(self.prog_box)
-
+        self.note_box = self._note_box()
+        col.addWidget(self.note_box)
+        self.options = self._options(providers)
+        col.addWidget(self.options)
         col.addStretch(1)
 
-        # Whole screen scrolls: the form + live log can exceed the window height,
-        # so without this the bottom (e.g. a long error in the log, and its own
-        # scrollbar) is pushed off-screen and unreachable.
-        center = QWidget()
-        clay = QHBoxLayout(center)
-        clay.setContentsMargins(0, 0, 0, 0)
-        clay.addStretch(1)
-        clay.addWidget(wrap)
-        clay.addStretch(1)
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setWidget(center)
-        outer.addWidget(self._scroll)
+        gate = QHBoxLayout()
+        gate.setSpacing(10)
+        gate.addWidget(icon_label("ShieldCheck", V2["secondary"], 16), 0, Qt.AlignTop)
+        gate.addWidget(label("Bạn luôn được đọc và sửa phụ đề trước.\nChỉ lồng tiếng và dựng "
+                             "khi bạn đã duyệt.", "secondary"), 1)
+        gw = QFrame()
+        gw.setStyleSheet(f"QFrame{{border-top:1px solid {V2['line_soft']};}} QLabel{{border:none;}}")
+        gw.setLayout(gate)
+        gate.setContentsMargins(0, 16, 0, 0)
+        col.addWidget(gw)
 
-        # wire subtitle-source behavior (after asr combo exists)
-        self.rb_srt.toggled.connect(self._on_srt_radio)
-        self.src_group.buttonToggled.connect(self._on_source_changed)
-        self._apply_saved_choices()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        holder = QWidget()
+        hl = QHBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addStretch(1)
+        hl.addWidget(main, 6)
+        hl.addStretch(0)
+        scroll.setWidget(holder)
+        self._scroll = scroll
+
+        self.recent = RecentProjects()
+        self.recent.openRequested.connect(self.resumeRequested)
+        self.recent.deleteRequested.connect(self.deleteRequested)
+        aside = QWidget()
+        aside.setFixedWidth(360)
+        al = QVBoxLayout(aside)
+        al.setContentsMargins(28, 24, 28, 24)
+        al.addWidget(self.recent)
+        outer.addWidget(scroll, 1)
+        vline = QFrame()
+        vline.setFixedWidth(1)
+        vline.setStyleSheet(f"background:{V2['line_soft']};")
+        outer.addWidget(vline)
+        outer.addWidget(aside)
+        outer.addSpacing(40)
+
+        self.note_btn.toggled.connect(self._toggle_note)
+        self.opt_btn.toggled.connect(self._toggle_options)
+        st = store.load_ui_state()
+        self.opt_btn.setChecked(bool(st.get("options_open")))
+        self._toggle_note(False)
+        self._toggle_options(self.opt_btn.isChecked())
+        self._apply_saved_choices(st)
         self._on_source_changed()
         self._refresh_start()
+        self.progress.setVisible(False)
 
-    def _apply_saved_choices(self) -> None:
+    # --- hero ------------------------------------------------------------------
+    def _hero(self) -> QFrame:
+        hero = QFrame()
+        hero.setObjectName("panel")
+        hero.setStyleSheet(f"QFrame#panel{{background:{V2['panel']};border-radius:13px;}}")
+        v = QVBoxLayout(hero)
+        v.setContentsMargins(18, 16, 18, 16)
+        v.setSpacing(14)
+        cap = QHBoxLayout()
+        cap.setSpacing(8)
+        cap.addWidget(icon_label("Link", V2["secondary"], 16))
+        cap.addWidget(label("Dán link Douyin hoặc Bilibili", "h3"))
+        cap.addStretch(1)
+        v.addLayout(cap)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.url = QLineEdit()
+        self.url.setObjectName("hero")
+        self.url.setPlaceholderText("https://www.douyin.com/video/…")
+        self.url.textChanged.connect(self._refresh_start)
+        self.url.returnPressed.connect(lambda: self.start.isEnabled() and self._emit_start())
+        self.start = button("Bắt đầu", "ArrowRight", variant="primary")
+        self.start.setMinimumWidth(122)
+        self.start.setStyleSheet("QPushButton{min-height:47px;font-size:14px;padding:0 18px;}")
+        self.start.clicked.connect(self._emit_start)
+        row.addWidget(self.url, 1)
+        row.addWidget(self.start)
+        v.addLayout(row)
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        pick = button("Chọn video trên máy", "Upload", variant="ghost", small=True)
+        pick.clicked.connect(self._pick_file)
+        foot.addWidget(pick)
+        foot.addWidget(label("hoặc kéo thả video vào đây", "small"))
+        self.file_badge = badge("", "purple")
+        self.file_badge.setVisible(False)
+        foot.addWidget(self.file_badge)
+        foot.addStretch(1)
+        v.addLayout(foot)
+        self.defaults = label("", "small")
+        v.addWidget(self.defaults)
+        self.hint = label("", "small")
+        self.hint.setVisible(False)
+        v.addWidget(self.hint)
+        self.setAcceptDrops(True)
+        self._hero_frame = hero
+        return hero
+
+    def dragEnterEvent(self, ev) -> None:  # noqa: N802
+        if ev.mimeData().hasUrls() and not self._busy:
+            ev.acceptProposedAction()
+
+    def dropEvent(self, ev) -> None:  # noqa: N802
+        for u in ev.mimeData().urls():
+            if u.isLocalFile():
+                self._set_file(u.toLocalFile())
+                return
+            self.url.setText(u.toString())
+            return
+
+    # --- note + options -------------------------------------------------------
+    def _note_box(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        v.addWidget(label("Ai nói với ai? Tên riêng hoặc cách xưng hô bạn muốn dùng.", "small"))
+        self.context_note = QPlainTextEdit()
+        self.context_note.setPlaceholderText(
+            "Ví dụ: vlog nấu ăn của một cô gái Tứ Xuyên, nói thân mật với người xem; "
+            "\"老李\" là chồng cô ấy, gọi là \"anh Lý\". AI viết lại thành brief đầy đủ và "
+            "LUÔN theo thông tin của bạn.")
+        self.context_note.setFixedHeight(74)
+        self.context_note.setTabChangesFocus(True)
+        v.addWidget(self.context_note)
+        return w
+
+    def _options(self, providers: dict) -> QFrame:
+        box = QFrame()
+        box.setObjectName("panel")
+        g = QGridLayout(box)
+        g.setContentsMargins(16, 14, 16, 14)
+        g.setHorizontalSpacing(14)
+        g.setVerticalSpacing(12)
+        self.source = QComboBox()
+        for key, text in SOURCES:
+            self.source.addItem(text, key)
+        self.source.currentIndexChanged.connect(self._on_source_changed)
+        g.addLayout(_field("Nguồn phụ đề tiếng Trung", self.source), 0, 0, 1, 2)
+        self.ocr_region = QComboBox()
+        for text, key in OCR_REGIONS:
+            self.ocr_region.addItem(text, key)
+        self._ocr_field = QWidget()
+        self._ocr_field.setLayout(_field("Vùng đọc chữ trên video", self.ocr_region))
+        self._ocr_field.layout().setContentsMargins(0, 0, 0, 0)
+        g.addWidget(self._ocr_field, 1, 0, 1, 2)
+        srt_row = QHBoxLayout()
+        self.srt_btn = button("Chọn tệp phụ đề .srt", "Upload", small=True)
+        self.srt_btn.clicked.connect(self._pick_srt)
+        self.srt_lbl = label("", "small")
+        srt_row.addWidget(self.srt_btn)
+        srt_row.addWidget(self.srt_lbl, 1)
+        self._srt_field = QWidget()
+        self._srt_field.setLayout(srt_row)
+        srt_row.setContentsMargins(0, 0, 0, 0)
+        g.addWidget(self._srt_field, 2, 0, 1, 2)
+
+        self.draft = ProviderCombo(providers["translation"])
+        # refine list greys engines whose refine pass would be a silent no-op
+        self.refine = ProviderCombo(providers["translation"], allow_none=True, require="can_refine")
+        self.asr = ProviderCombo(providers["asr"])
+        self.tts = ProviderCombo(providers["tts"])
+        g.addLayout(_field("Bộ dịch bản nháp", self.draft), 3, 0)
+        g.addLayout(_field("Tinh chỉnh · tùy chọn", self.refine), 3, 1)
+        self._asr_field = QWidget()
+        self._asr_field.setLayout(_field("Nhận dạng giọng nói", self.asr))
+        self._asr_field.layout().setContentsMargins(0, 0, 0, 0)
+        g.addWidget(self._asr_field, 4, 0)
+        g.addLayout(_field("Giọng lồng tiếng", self.tts), 4, 1)
+
+        self.auto_context = QCheckBox("Tự đọc ngữ cảnh video")
+        self.auto_context.setToolTip(
+            "Trước khi dịch, AI đọc nhanh tiêu đề + phụ đề tiếng Trung và viết một 'brief' ngắn: "
+            "thể loại, ai nói với ai, xưng hô, tên riêng, giọng điệu. Tốn rất ít API.")
+        self.extract_terms = QCheckBox("Tự trích thuật ngữ")
+        self.extract_terms.setToolTip(
+            "Nhờ bộ dịch liệt kê tên riêng / thương hiệu lặp lại để giữ nhất quán. Bảng thuật "
+            "ngữ của bạn luôn được ưu tiên. Tốn thêm API.")
+        self.ocr_proofread = QCheckBox("AI sửa lỗi OCR")
+        self.ocr_proofread.setToolTip("Một lượt sửa lỗi nhận dạng cho chữ Trung (chỉ gửi chữ, "
+                                      "không gửi hình). Tốn thêm API.")
+        g.addWidget(self.auto_context, 5, 0, 1, 2)
+        g.addWidget(self.extract_terms, 6, 0)
+        g.addWidget(self.ocr_proofread, 6, 1)
+        self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
+                              "small", wrap=True)
+        g.addWidget(self.asr_note, 7, 0, 1, 2)
+        for w in (self.draft, self.refine, self.asr, self.tts):
+            w.currentIndexChanged.connect(self._update_defaults)
+        return box
+
+    def _toggle_note(self, on: bool) -> None:
+        self.note_box.setVisible(on)
+        self.note_btn.setText("Ẩn ghi chú" if on else "Ghi chú ngữ cảnh")
+        if on:
+            self.context_note.setFocus()
+
+    def _toggle_options(self, on: bool) -> None:
+        self.options.setVisible(on)
+        self.opt_btn.setText("Ẩn tùy chọn" if on else "Tùy chọn")
         st = store.load_ui_state()
+        if bool(st.get("options_open")) != on:
+            st["options_open"] = on
+            store.save_ui_state(st)
+
+    def _apply_saved_choices(self, st: dict) -> None:
         src = st.get("subtitle_source")
-        if src == "ocr":  # don't auto-restore 'srt' (would pop a file dialog)
-            self.rb_ocr.setChecked(True)
-        elif src == "asr":
-            self.rb_asr.setChecked(True)  # anything else keeps the 'auto' default
+        if src in ("ocr", "asr"):  # never auto-restore 'srt' (needs a file)
+            self.source.setCurrentIndex(self.source.findData(src))
         self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
         self.extract_terms.setChecked(bool(st.get("extract_terms")))
         self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
@@ -274,85 +392,62 @@ class InputView(QWidget):
         self.draft.select(st.get("translator"))
         self.refine.select(st.get("refine"))
         self.tts.select(st.get("tts"))
-
-    # --- helpers -------------------------------------------------------------
-    def _build_recent(self) -> None:
-        while self._recent_lay.count():
-            item = self._recent_lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-        recent = store.list_jobs()
-        self._recent_box.setVisible(bool(recent))
-        if not recent:
-            return
-        self._recent_lay.addWidget(_section("Dự án gần đây"))
-        for j in recent:
-            row = QWidget()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 0, 0, 0)
-            rl.setSpacing(6)
-            status = "đã dựng video" if j["has_output"] else "sửa phụ đề"
-            open_b = QPushButton(f"  {j['title']}   ·   {status}")
-            open_b.setObjectName("ghost")
-            open_b.setStyleSheet("text-align:left;")
-            open_b.clicked.connect(lambda _=False, jid=j["id"]: self.resumeRequested.emit(jid))
-            del_b = QPushButton("Xóa")
-            del_b.setObjectName("danger")
-            del_b.setFixedWidth(58)
-            del_b.clicked.connect(lambda _=False, jid=j["id"]: self.deleteRequested.emit(jid))
-            rl.addWidget(open_b, 1)
-            rl.addWidget(del_b)
-            self._recent_lay.addWidget(row)
-
-    def refresh_recent(self) -> None:
-        self._build_recent()
-
-    def _pick_file(self) -> None:
-        fn, _ = QFileDialog.getOpenFileName(self, "Chọn video", "", "Video (*.mp4 *.mkv *.mov *.webm);;All (*.*)")
-        if fn:
-            self._file = fn
-            self.file_lbl.setText(f"📄 {Path(fn).name}")
-            self.file_lbl.setVisible(True)
-            self.url.clear()
-            self._refresh_start()
-
-    def _on_source_changed(self, *_args) -> None:
-        # auto may end up on either path → keep both option groups live for it
-        asr_on = self.rb_asr.isChecked() or self.rb_auto.isChecked()
-        ocr_on = self.rb_ocr.isChecked() or self.rb_auto.isChecked()
-        self.asr.setEnabled(asr_on)
-        self._asr_caption.setEnabled(asr_on)
-        self.ocr_region.setEnabled(ocr_on)
-        self._ocr_region_lbl.setEnabled(ocr_on)
-        self.ocr_proofread.setEnabled(ocr_on)
-
-    def _on_srt_radio(self, on: bool) -> None:
-        if on:
-            fn, _ = QFileDialog.getOpenFileName(self, "Chọn .srt tiếng Trung", "", "Subtitle (*.srt)")
-            if fn:
-                self._srt = fn
-                self.srt_lbl.setText(f"📑 {Path(fn).name}")
-                self.srt_lbl.setVisible(True)
-            else:
-                self.rb_asr.setChecked(True)  # cancelled → revert
-        else:
-            self._srt = None
-            self.srt_lbl.setVisible(False)
-
-    def _refresh_start(self) -> None:
-        ok = bool(self.url.text().strip()) or bool(self._file)
-        self.start.setEnabled(ok)
-        self.hint.setText("Sẵn sàng — nhấn Bắt đầu" if ok else "Dán liên kết hoặc chọn tệp để bắt đầu")
+        self._update_defaults()
 
     def _subtitle_source(self) -> str:
-        if self.rb_srt.isChecked():
-            return "srt"
-        if self.rb_ocr.isChecked():
-            return "ocr"
-        if self.rb_asr.isChecked():
-            return "asr"
-        return "auto"
+        return self.source.currentData() or "auto"
+
+    def _on_source_changed(self, *_a) -> None:
+        src = self._subtitle_source()
+        # auto may end up on either path → keep both option groups live for it
+        self._ocr_field.setVisible(src in ("auto", "ocr"))
+        self.ocr_proofread.setEnabled(src in ("auto", "ocr"))
+        self._asr_field.setEnabled(src in ("auto", "asr"))
+        self._srt_field.setVisible(src == "srt")
+        if src != "srt":
+            self._srt = None
+            self.srt_lbl.setText("")
+        self._update_defaults()
+        self._refresh_start()
+
+    def _update_defaults(self, *_a) -> None:
+        src = dict(SOURCES).get(self._subtitle_source(), "")
+        src = "Nguồn tự động" if self._subtitle_source() == "auto" else src
+        def name(combo) -> str:
+            return combo.currentText().split(" — ")[0].split(" · ")[0].strip()
+
+        parts = [src, name(self.draft), name(self.tts)]
+        self.defaults.setText("   ·   ".join(p for p in parts if p))
+
+    def _pick_srt(self) -> None:
+        fn, _ = QFileDialog.getOpenFileName(self, "Chọn .srt tiếng Trung", "", "Subtitle (*.srt)")
+        if fn:
+            self._srt = fn
+            self.srt_lbl.setText(Path(fn).name)
+        self._refresh_start()
+
+    def _pick_file(self) -> None:
+        fn, _ = QFileDialog.getOpenFileName(self, "Chọn video", "",
+                                            "Video (*.mp4 *.mkv *.mov *.webm);;All (*.*)")
+        if fn:
+            self._set_file(fn)
+
+    def _set_file(self, fn: str) -> None:
+        self._file = fn
+        self.file_badge.setText(Path(fn).name)
+        self.file_badge.setVisible(True)
+        self.url.clear()
+        self._refresh_start()
+
+    def _refresh_start(self) -> None:
+        has_src = bool(self.url.text().strip()) or bool(self._file)
+        need_srt = self._subtitle_source() == "srt" and not self._srt
+        self.start.setEnabled(has_src and not need_srt and not self._busy)
+        if self.url.text().strip():
+            self._file = None
+            self.file_badge.setVisible(False)
+        self.hint.setVisible(need_srt and has_src)
+        self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
 
     def _emit_start(self) -> None:
         opts: dict = {
@@ -375,8 +470,77 @@ class InputView(QWidget):
             opts["url"] = self.url.text().strip()
         if opts["subtitle_source"] == "srt" and self._srt:
             opts["srt"] = self._srt
-        store.save_ui_state(opts)
+        st = store.load_ui_state()
+        st.update({k: v for k, v in opts.items() if v is not None})
+        store.save_ui_state(st)
+        self._last_opts = dict(opts)
         self.startRequested.emit(opts)
+
+    # --- progress card -----------------------------------------------------------
+    def _progress_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("panel")
+        card.setStyleSheet(f"QFrame#panel{{background:{V2['panel']};border-radius:13px;}}")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 16, 18, 14)
+        v.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        thumb = QLabel()
+        thumb.setFixedSize(44, 44)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setPixmap(pixmap("FileVideo", V2["purple_bright"], 20))
+        thumb.setStyleSheet(f"background:{V2['raised']};border-radius:8px;")
+        head.addWidget(thumb)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(2)
+        self.p_title = label("Video mới", "h2")
+        self.p_meta = label("", "small")
+        tcol.addWidget(self.p_title)
+        tcol.addWidget(self.p_meta)
+        head.addLayout(tcol, 1)
+        self.p_badge = badge("0%", "purple")
+        head.addWidget(self.p_badge, 0, Qt.AlignTop)
+        v.addLayout(head)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        v.addWidget(self.bar)
+        sub = QHBoxLayout()
+        self.status = label("Đang chuẩn bị…", "small")
+        self.status.setWordWrap(True)
+        self.elapsed = label("00:00", "mono")
+        sub.addWidget(self.status, 1)
+        sub.addWidget(self.elapsed)
+        v.addLayout(sub)
+        self.stage_rows: dict[str, _StageRow] = {}
+        for i, (key, name) in enumerate(STAGES, 1):
+            row = _StageRow(i, name)
+            self.stage_rows[key] = row
+            v.addWidget(row)
+        self.log = QPlainTextEdit()
+        self.log.setObjectName("mono")
+        self.log.setReadOnly(True)
+        self.log.setFixedHeight(140)
+        self.log.setVisible(False)
+        v.addWidget(self.log)
+        foot = QHBoxLayout()
+        self.log_btn = button("Xem chi tiết", "ChevronDown", variant="ghost", small=True,
+                              checkable=True)
+        self.log_btn.toggled.connect(self._toggle_log)
+        foot.addWidget(self.log_btn)
+        foot.addStretch(1)
+        self.cancel = button("Hủy", "X", tip="Dừng sau bước hiện tại — các bước đã xong được giữ lại")
+        self.cancel.clicked.connect(self.cancelRequested)
+        foot.addWidget(self.cancel)
+        v.addLayout(foot)
+        self.progress = card
+        return card
+
+    def _toggle_log(self, on: bool) -> None:
+        self.log.setVisible(on)
+        self.log_btn.setText("Ẩn chi tiết" if on else "Xem chi tiết")
 
     # --- progress API (driven by MainWindow) ---------------------------------
     def refresh_providers(self, providers: dict) -> None:
@@ -384,23 +548,279 @@ class InputView(QWidget):
         self.draft.update_availability(providers["translation"])
         self.refine.update_availability(providers["translation"])
         self.tts.update_availability(providers["tts"])
+        self._update_defaults()
+
+    def refresh_recent(self) -> None:
+        self.recent.refresh()
 
     def set_busy(self, busy: bool) -> None:
+        self._busy = busy
         if busy:
             self.log.clear()
-            self.prog_box.setVisible(True)  # keep visible after the run so errors stay readable
-            self._scroll.ensureWidgetVisible(self.prog_box)  # scroll the page down to the log
+            self._clear_alert()
+            self._t0 = time.monotonic()
+            self._stage = ""
+            self._stage_t0.clear()
+            for row in self.stage_rows.values():
+                row.set_state("wait", "Chờ đến lượt")
+            self.bar.setValue(0)
+            self.p_badge.setText("0%")
+            self.p_badge.setObjectName("badgePurple")
+            self._repolish(self.p_badge)
+            src = self._file or self.url.text().strip()
+            self.p_title.setText(Path(src).name if self._file else "Video mới")
+            self.p_meta.setText(_host(src))
+            self.status.setText("Đang làm việc · bạn có thể mở Cài đặt")
+            self.progress.setVisible(True)
+            self.cancel.setEnabled(True)
+            self.cancel.setVisible(True)
+            self._tick.start()
+            self._set_running_copy(True)
         self.start.setEnabled(not busy)
+        self._hero_frame.setVisible(not busy)
+        self._toggles.setVisible(not busy)
+        self.note_box.setVisible(not busy and self.note_btn.isChecked())
+        self.options.setVisible(not busy and self.opt_btn.isChecked())
+
+    def _set_running_copy(self, running: bool) -> None:
+        self.headline.setText("Để tiếng Việt\nkể lại câu chuyện." if running else
+                              "Một đường link.\nMột video của bạn.")
+        self.tagline.setText("Ứng dụng chuẩn bị bản dịch. Bạn là người quyết định câu chữ cuối "
+                             "cùng." if running else
+                             "Từ video tiếng Trung đến phụ đề và giọng đọc tiếng Việt.\n"
+                             "Dán link, xem bản dịch, chỉnh cho vừa ý.")
+
+    def set_title(self, title: str, meta: str = "") -> None:
+        if title:
+            self.p_title.setText(short_title(title))
+            self.p_title.setToolTip(title)
+        if meta:
+            self.p_meta.setText(meta)
+
+    def set_stage(self, key: str) -> None:
+        """worker.stage_started: download → subtitle → translate (context is
+        detected from progress text, it has no stage of its own)."""
+        order = [k for k, _n in STAGES]
+        if key not in order:
+            return
+        now = time.monotonic()
+        for k in order[:order.index(key)]:
+            row = self.stage_rows[k]
+            if row.state == "active":
+                row.set_state("done", "Hoàn tất", self._dur(k, now))
+            elif row.state == "wait":
+                row.set_state("done", "Bỏ qua" if k == "context" else "Hoàn tất")
+        self._stage = key
+        self._stage_t0.setdefault(key, now)
+        self.stage_rows[key].set_state("active", "Đang xử lý…", "")
+
+    def _dur(self, key: str, now: float) -> str:
+        t0 = self._stage_t0.get(key)
+        return f"{int(now - t0):02d} s" if t0 else ""
 
     def set_progress(self, frac: float, msg: str) -> None:
-        self.bar.setValue(int(frac * 100))
-        self.status.setText(msg)
+        pct = int(frac * 100)
+        self.bar.setValue(pct)
+        self.p_badge.setText(f"{pct}%")
+        low = msg.lower()
+        if self._stage == "subtitle" and ("ngữ cảnh" in low or "thuật ngữ" in low):
+            self.set_stage("context")
+        if self._stage in self.stage_rows:
+            self.stage_rows[self._stage].set_state("active", msg, "Đang xử lý")
 
     def append_log(self, line: str) -> None:
         self.log.appendPlainText(line)
 
+    def set_cancelling(self) -> None:
+        self.status.setText("Đang hủy… (đợi bước hiện tại kết thúc)")
+        self.cancel.setEnabled(False)
+        self.append_log("⏳ Đang hủy…")
+
+    def set_done(self) -> None:
+        self._finish()
+        now = time.monotonic()
+        for k, row in self.stage_rows.items():
+            if row.state in ("active", "wait"):
+                row.set_state("done", "Hoàn tất" if row.state == "active" or k != "context"
+                              else "Bỏ qua", self._dur(k, now))
+        self.bar.setValue(100)
+        self.p_badge.setText("Xong")
+        self.p_badge.setObjectName("badgeOk")
+        self._repolish(self.p_badge)
+        self.status.setText("Phụ đề tiếng Việt đã sẵn sàng")
+        self.cancel.setVisible(False)
+        self.refresh_recent()
+
     def show_error(self, msg: str) -> None:
-        self.status.setText(f"Lỗi: {msg}")
+        cancelled = msg.strip().startswith("Đã hủy")
+        self._finish()
+        if self._stage in self.stage_rows:
+            self.stage_rows[self._stage].set_state("paused" if cancelled else "error",
+                                                   "Đã dừng" if cancelled else "Lỗi ở bước này")
+        self.p_badge.setText("Đã dừng" if cancelled else "Lỗi")
+        self.p_badge.setObjectName("badge" if cancelled else "badgeErr")
+        self._repolish(self.p_badge)
+        self.status.setText("Các bước đã xong được giữ lại" if cancelled else f"Lỗi: {msg}")
         self.append_log(f"✕ {msg}")
-        self.start.setEnabled(True)
-        self._scroll.ensureWidgetVisible(self.prog_box)  # bring the full error into view
+        self.cancel.setVisible(False)
+        if not cancelled:
+            self._show_alert(msg)
+            if not self.alert.isHidden():
+                self.progress.setVisible(False)     # the card says what to do; log is in it
+        self._scroll.ensureWidgetVisible(self.progress if self.alert.isHidden() else self.alert)
+
+    def idle(self) -> None:
+        """Worker finished without gate/failed (defensive) — never leave Start dead."""
+        if self._busy:
+            self._finish()
+
+    def _finish(self) -> None:
+        self._tick.stop()
+        self._busy = False
+        self.set_busy(False)
+        self._set_running_copy(False)
+        self._refresh_start()
+
+    def _on_tick(self) -> None:
+        self.elapsed.setText(fmt_time(time.monotonic() - self._t0, 0))
+
+    @staticmethod
+    def _repolish(w: QWidget) -> None:
+        w.style().unpolish(w)
+        w.style().polish(w)
+
+    # --- error cards ----------------------------------------------------------------
+    def _clear_alert(self) -> None:
+        while self._alert_lay.count():
+            item = self._alert_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                _clear_layout(item.layout())
+        self.alert.setVisible(False)
+
+    def _show_alert(self, msg: str) -> None:
+        self._clear_alert()
+        low = msg.lower()
+        if "cookie" in low:
+            self._cookie_card()
+        elif "api key" in low or "api_key" in low or "401" in low or "khóa api" in low:
+            self._simple_card("KeyRound", "Thêm khóa API để dịch video",
+                              "OpenRouter dùng chung cho nhận dạng giọng nói và dịch.",
+                              "Thêm khóa", self.settingsRequested.emit)
+        elif any(k in low for k in ("connection", "timed out", "timeout", "network",
+                                    "name resolution", "kết nối")):
+            self._simple_card("Wifi", "Chưa kết nối được máy chủ",
+                              "Kiểm tra mạng rồi thử lại.", "Thử lại", self._retry,
+                              icon_name="RefreshCw")
+        else:
+            return
+        self.alert.setVisible(True)
+
+    def _card_frame(self, warn: bool) -> None:
+        self.alert.setObjectName("warnCard" if warn else "panel")
+        self._repolish(self.alert)
+        self._alert_lay.setContentsMargins(18, 16, 18, 16)
+        self._alert_lay.setSpacing(10)
+
+    def _simple_card(self, ic: str, title: str, text: str, action: str, slot,
+                     icon_name: str | None = None) -> None:
+        self._card_frame(False)
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(icon_label(ic, V2["amber"], 18), 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.addWidget(label(title, "h3"))
+        col.addWidget(label(text, "small", wrap=True))
+        row.addLayout(col, 1)
+        b = button(action, icon_name, small=True)
+        b.clicked.connect(slot)
+        row.addWidget(b, 0, Qt.AlignVCenter)
+        self._alert_lay.addLayout(row)
+
+    def _cookie_card(self) -> None:
+        self._card_frame(True)
+        head = QHBoxLayout()
+        head.addWidget(icon_label("TriangleAlert", V2["amber"], 18))
+        t = label("Douyin cần cookie để tải video", "h2")
+        t.setStyleSheet(f"color:{V2['amber']};background:transparent;")
+        head.addWidget(t, 1)
+        self._alert_lay.addLayout(head)
+        self._alert_lay.addWidget(label("Chỉ cần làm một lần. Sau đó chọn tệp ngay ở đây rồi "
+                                        "tiếp tục.", "secondary", wrap=True))
+        steps = QHBoxLayout()
+        steps.setSpacing(18)
+        for n, title, text in (
+            (1, "Cài tiện ích", "Get cookies.txt LOCALLY trong trình duyệt bạn dùng Douyin."),
+            (2, "Mở Douyin", "Vào douyin.com, đăng nhập và mở video muốn dịch."),
+            (3, "Xuất cookie", "Chọn Export để lưu tệp cookies.txt trên máy."),
+        ):
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            num = QLabel(str(n))
+            num.setFixedSize(22, 22)
+            num.setAlignment(Qt.AlignCenter)
+            num.setStyleSheet(f"border:1px solid {V2['amber']};border-radius:11px;"
+                              f"color:{V2['amber']};font-size:11px;background:transparent;")
+            col.addWidget(num)
+            col.addWidget(label(title, "h3"))
+            col.addWidget(label(text, "small", wrap=True))
+            col.addStretch(1)
+            steps.addLayout(col, 1)
+        self._alert_lay.addLayout(steps)
+        acts = QHBoxLayout()
+        acts.setSpacing(8)
+        pick = button("Chọn tệp cookies.txt", "FolderOpen", variant="primary")
+        self.retry_btn = button("Thử lại", "RefreshCw")
+        self.retry_btn.setEnabled(False)
+        self.cookie_badge = badge("", "ok")
+        self.cookie_badge.setVisible(False)
+        pick.clicked.connect(self._pick_cookie)
+        self.retry_btn.clicked.connect(self._retry)
+        acts.addWidget(pick)
+        acts.addWidget(self.retry_btn)
+        acts.addWidget(self.cookie_badge)
+        acts.addStretch(1)
+        self._alert_lay.addLayout(acts)
+        self._alert_lay.addWidget(label("Tệp dùng để tải video và chỉ lưu trên máy của bạn.",
+                                        "small"))
+
+    def _pick_cookie(self) -> None:
+        fn, _ = QFileDialog.getOpenFileName(self, "Chọn tệp cookies.txt", "",
+                                            "Cookie (*.txt);;All (*.*)")
+        if not fn:
+            return
+        from app.config import settings
+        from desktop.settings_dialog import _write_env
+
+        _write_env({"YTDLP_COOKIES_FILE": fn})
+        settings.ytdlp_cookies_file = fn
+        self.cookie_badge.setText(Path(fn).name)
+        self.cookie_badge.setVisible(True)
+        self.retry_btn.setEnabled(True)
+
+    def _retry(self) -> None:
+        if self._last_opts and not self._busy:
+            self.startRequested.emit(dict(self._last_opts))
+
+    def shutdown(self) -> None:
+        self.recent.shutdown()
+
+
+def _host(src: str) -> str:
+    if not src:
+        return ""
+    if "douyin" in src:
+        return "Douyin"
+    if "bilibili" in src or "b23.tv" in src:
+        return "Bilibili"
+    return "Tệp trên máy" if Path(src).exists() else src[:60]
+
+
+def _clear_layout(lay) -> None:
+    while lay.count():
+        item = lay.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _clear_layout(item.layout())

@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self.editor.previewStyleRequested.connect(self._preview_style)
         self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
+        self.input.settingsRequested.connect(self._open_settings)
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -120,16 +121,29 @@ class MainWindow(QMainWindow):
         self.input.set_busy(True)
         self.input.append_log(f"▶ Bắt đầu (job {jid})")
         self._run("run_to_gate", opts, {
-            "stage_started": lambda s: self.input.append_log(f"• {s}"),
+            "stage_started": self._on_stage,
             "progress": self.input.set_progress,
             "log": self.input.append_log,
             "failed": self.input.show_error,
             "gate_reached": self._on_gate,
         })
 
+    def _on_stage(self, s: str) -> None:
+        self.input.append_log(f"• {s}")
+        self.input.set_stage(s)
+        if s != "download" and self.job is not None:
+            md = dict(self.job.metadata)    # copy: the worker thread owns the dict
+            plat = {"douyin": "Douyin", "bilibili": "Bilibili"}.get(md.get("platform") or "", "")
+            try:
+                dur = fmt_time(float(md.get("duration") or 0), 0) if md.get("duration") else ""
+            except (TypeError, ValueError):
+                dur = ""
+            self.input.set_title(md.get("title") or "", " · ".join(p for p in (dur, plat) if p))
+
     def _on_gate(self) -> None:
         store.debug("on_gate: editor.load begin")
         try:
+            self.input.set_done()
             self.editor.load(self.job)
             self.editor.set_context(self.opts)  # tts/voice/translator for preview & shorten
             store.debug("on_gate: editor.load done")
@@ -333,8 +347,7 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self) -> None:
         # gate failed/cancelled → re-enable Start but KEEP the log/error visible
-        if self.stack.currentIndex() == INPUT:
-            self.input.start.setEnabled(True)
+        self.input.idle()
         # single unlock point for EVERY render exit path (done/failed/cancelled) —
         # per-handler unlocks would risk a soft-locked app on a missed path
         self._set_render_locked(False)
@@ -345,8 +358,7 @@ class MainWindow(QMainWindow):
         # honored between stages, so the current stage runs to completion).
         if self._busy() and self._worker:
             self._worker.cancel()
-            self.input.status.setText("Đang hủy… (đợi bước hiện tại kết thúc)")
-            self.input.append_log("⏳ Đang hủy…")
+            self.input.set_cancelling()
 
     def closeEvent(self, e) -> None:
         store.debug(f"closeEvent (window closed) busy={self._busy()}")
@@ -370,6 +382,7 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.editor.shutdown()  # join any preview/shorten task threads
+            self.input.shutdown()   # recent-project summaries (thumbnails)
         except Exception:  # noqa: BLE001
             pass
         e.accept()

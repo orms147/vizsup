@@ -20,7 +20,7 @@ def _storage() -> Path:
 
 # --- UI choices ------------------------------------------------------------
 _UI_KEYS = ("subtitle_source", "asr", "translator", "refine", "tts",
-            "ocr_region", "ocr_proofread", "extract_terms", "auto_context")
+            "ocr_region", "ocr_proofread", "extract_terms", "auto_context", "options_open")
 
 
 def load_ui_state() -> dict:
@@ -68,7 +68,7 @@ def list_jobs(limit: int = 8) -> list[dict]:
         has_output = (d / "output.mp4").exists()
         if not (has_vi or has_output):
             continue
-        info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi,
+        info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
                 "has_output": has_output, "mtime": (d / "vi.srt").stat().st_mtime if has_vi
                 else (d / "output.mp4").stat().st_mtime}
         jf = d / "job.json"
@@ -76,12 +76,68 @@ def list_jobs(limit: int = 8) -> list[dict]:
             try:
                 saved = json.loads(jf.read_text(encoding="utf-8"))
                 info["title"] = saved.get("title") or d.name
+                info["platform"] = saved.get("platform")
                 info["opts"] = saved.get("opts", {})
             except Exception:  # noqa: BLE001
                 pass
         out.append(info)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
+
+
+def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:
+    """A small JPEG frame of the project's source (cached as thumb.jpg). Blocking —
+    call off the GUI thread."""
+    import subprocess
+
+    out = job_dir / "thumb.jpg"
+    src = job_dir / "source.mp4"
+    if out.exists():
+        return out
+    if not src.exists():
+        return None
+    try:
+        from app.ffmpegutil import ffmpeg_bin
+
+        subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-ss", "1", "-i", str(src),
+                        "-frames:v", "1", "-vf", f"scale={width}:-2", str(out)],
+                       capture_output=True, timeout=20)
+    except Exception:  # noqa: BLE001
+        return None
+    return out if out.exists() else None
+
+
+def project_summary(job_id: str) -> dict:
+    """Status details for the "Tiếp tục dự án" list: cue count, cues still needing
+    review, approval, duration, thumbnail. Blocking (reads files, may run ffmpeg)."""
+    d = _storage() / job_id
+    info: dict = {"id": job_id, "cues": 0, "pending": 0, "approved": False,
+                  "duration": 0.0, "thumb": None}
+    loaded = load_job(job_id)
+    if not loaded:
+        return info
+    job, _opts = loaded
+    try:
+        info["duration"] = float(job.metadata.get("duration") or 0)
+    except (TypeError, ValueError):
+        pass
+    if job.vi_srt.exists():
+        try:
+            from app.pipeline import approval, review
+            from desktop import cuemodel
+
+            cues = cuemodel.load_pair(job)
+            ocr, term = review.load_flag_spans(job)
+            issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term)
+            info["cues"] = len(cues)
+            info["pending"] = sum(1 for c, i in zip(cues, issues, strict=False)
+                                  if i and not cuemodel.is_reviewed(c))
+            info["approved"] = approval.is_approved(job)
+        except Exception:  # noqa: BLE001 - a summary must never break the start screen
+            pass
+    thumb = thumbnail(d)
+    info["thumb"] = str(thumb) if thumb else None
+    return info
 
 
 def debug(msg: str) -> None:
