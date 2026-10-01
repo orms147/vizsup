@@ -40,6 +40,20 @@ web before relying on them — don't trust memory.
 |---|---|---|---|---|
 | `faster_whisper` | faster-whisper (large-v3) | ✓ | `.[asr]` | **default** — 1 pip package, CPU/GPU, segment timestamps; CER ~5% on Mandarin (edit gate catches errors). **Implemented + verified.** |
 | `whisperx_funasr` | FunASR Paraformer (CN-native) | ✓ | `.[asr-accurate]` | **accuracy option** — CER ~1.7%, CPU-viable; needs `funasr` + torch. WhisperX word-alignment is a future refinement. **Implemented.** |
+| `audio_llm` | audio LLM via chat (`input_audio`) + local word timing | ✗ **uploads audio** | base deps (+ `.[asr]` for timing) | Text from a Chinese-native omni model (default `qwen/qwen3.8-omni-flash`), split into subtitle lines, snapped onto local faster-whisper **word** timestamps (`align.fuse_transcript_timing`, the funasr_aligned recipe). Without faster-whisper the times are proportional per chunk. 240 s chunks cut at silences. |
+| `cloud_stt` | `/audio/transcriptions` (Whisper-family API) | ✗ **uploads audio** | base deps | Text + segment timestamps in one call (default `openai/whisper-large-v3`). Models that reject `verbose_json` (gpt-4o-transcribe) are re-asked for `json` and get local word timing like `audio_llm`. 360 s chunks. |
+
+**Cloud ASR endpoint.** Both cloud providers default to OpenRouter and its key
+(`STT_API_BASE_URL` / `STT_API_KEY` blank). Set them to use a vendor directly (Groq,
+OpenAI, SiliconFlow …); the OpenRouter key is never sent to another host. Models:
+`STT_API_MODEL`, `AUDIO_LLM_MODEL`. Measured 2026-10-01 on a 12-line Mandarin TTS
+reference (clean speech — real Douyin audio will separate them more):
+
+| engine | CER | timestamps |
+|---|---|---|
+| qwen/qwen3.8-omni-flash, xiaomi/mimo-v2.6-flash, openai/gpt-audio-mini (chat) | 0.000 | no → local word timing |
+| openai/whisper-large-v3, openai/whisper-1 (`/audio/transcriptions`) | 0.015 | yes |
+| local faster-whisper small / large-v3 | 0.015 | yes |
 
 > ASR timing ≠ accuracy (CLAUDE.md): the ideal is WhisperX word timestamps + a
 > CN-native transcript. v1 ships faster-whisper as the default for install

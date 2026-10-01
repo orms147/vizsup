@@ -1,0 +1,95 @@
+"""Cloud STT over the OpenAI-compatible ``/audio/transcriptions`` endpoint —
+Whisper-family APIs (OpenRouter, OpenAI, Groq, SiliconFlow, …). UPLOADS the audio.
+
+Asks for ``verbose_json`` segments, so text and timing come back in one call.
+Models that only return plain text (gpt-4o-transcribe answers 400 to
+verbose_json) are detected once, re-asked for ``json``, and get their timing
+from local faster-whisper words (see _cloud.add_word_timing).
+
+Default model web-verified 2026-10-01 on OpenRouter: openai/whisper-large-v3
+returns segments for zh (CER 0.015 on a 12-line Mandarin reference, same as local
+faster-whisper). Point STT_API_BASE_URL / STT_API_MODEL elsewhere to use a vendor
+directly (e.g. Groq's id is plain "whisper-large-v3").
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from app.config import settings
+from app.models import Cue
+from app.providers.asr import _cloud
+from app.providers.base import ASRProvider, _installed
+
+DEFAULT_MODEL = "openai/whisper-large-v3"
+CHUNK_SEC = 360.0
+# The classic Whisper trick: a Simplified-Chinese, punctuated prompt pulls the output
+# toward Simplified hanzi WITH punctuation (it otherwise drifts to Traditional / none).
+ZH_PROMPT = "以下是普通话的句子，使用简体中文，并带有标点符号。"
+
+
+def _field(obj, name):
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+class CloudSTT(ASRProvider):
+    name = "cloud_stt"
+    display_name = "STT qua API (Whisper…) — gửi âm thanh lên mạng"
+    cost_note = "cloud · có mốc thời gian · tính tiền theo phút âm thanh · cần key"
+    local = False
+
+    _text_only: set[str] = set()   # models that rejected verbose_json (memo)
+
+    @property
+    def model(self) -> str:
+        return settings.stt_api_model.strip() or DEFAULT_MODEL
+
+    def available(self) -> bool:
+        return _installed("openai") and bool(_cloud.endpoint()[1])
+
+    def test_connection(self) -> tuple[bool, str]:
+        return _cloud.test_models_endpoint()
+
+    def _call(self, path: Path, language: str):
+        model = self.model
+        text_only = model in self._text_only
+
+        def send(fmt: str):
+            kw = dict(model=model, language=language, response_format=fmt)
+            if language == "zh":
+                kw["prompt"] = ZH_PROMPT
+            if fmt == "verbose_json":
+                kw["timestamp_granularities"] = ["segment"]
+            with path.open("rb") as fh:
+                return _cloud.client().audio.transcriptions.create(file=fh, **kw)
+
+        if not text_only:
+            try:
+                return _cloud.with_retry(lambda: send("verbose_json"))
+            except Exception as exc:
+                if not (_cloud.status(exc) == 400 and "response_format" in str(exc).lower()):
+                    raise
+                self._text_only.add(model)
+        return _cloud.with_retry(lambda: send("json"))
+
+    def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
+        spans = _cloud.plan_chunks(media, CHUNK_SEC)
+        with _cloud.chunk_files(media, spans) as paths:
+            replies = _cloud.run_chunks(lambda p: self._call(p, language), paths)
+
+        cues: list[Cue] = []
+        needs_timing = False
+        for (start, end), resp in zip(spans, replies):
+            segs = _field(resp, "segments")
+            if segs:
+                for s in segs:
+                    text = (_field(s, "text") or "").strip()
+                    if text:
+                        cues.append(Cue(0, round(start + float(_field(s, "start")), 3),
+                                        round(start + float(_field(s, "end")), 3), text))
+            else:
+                needs_timing = True
+                sentences = _cloud.split_sentences(_field(resp, "text") or "")
+                cues.extend(_cloud.proportional_cues(sentences, start, end))
+        if needs_timing:
+            cues = _cloud.add_word_timing(media, cues, language)
+        return _cloud.reindex(cues)

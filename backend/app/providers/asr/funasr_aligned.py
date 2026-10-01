@@ -42,14 +42,47 @@ def _free_vram() -> None:
 
 def _faster_whisper_words(media: Path, language: str) -> list[tuple[str, float, float]]:
     """Baseline phase-2: faster-whisper word timestamps. Always available when the
-    provider is (available() requires faster_whisper)."""
+    provider is (available() requires faster_whisper).
+
+    CUDA can fail at TWO points: model construction (no GPU) and — on an incomplete
+    CUDA install — only at the first inference (``cublas64_12.dll`` not found). Both
+    fall back to CPU, mirroring FasterWhisperASR; before this, the inference-time
+    failure crashed every caller (funasr_aligned, the cloud ASR timing pass).
+
+    The CPU decision is STICKY and shared with the faster_whisper provider (its
+    registry singleton's ``_force_cpu``): after one cuBLAS load failure, a second CUDA
+    inference in the same process does not raise — it hangs forever in ``encode``
+    (reproduced 2026-10-01: call 1 fell back fine, call 2 never returned). So never
+    try CUDA again once either path has seen it break."""
+    from app.providers.asr.faster_whisper import FasterWhisperASR
+    from app.providers.registry import get_asr
+
+    fw = get_asr("faster_whisper")
+    if getattr(fw, "_force_cpu", False):
+        return _faster_whisper_words_on(media, language, cpu=True)
+    try:
+        return _faster_whisper_words_on(media, language, cpu=False)
+    except Exception as exc:  # noqa: BLE001
+        if not FasterWhisperASR._is_cuda_lib_error(exc):
+            raise
+        fw._force_cpu = True
+        fw._model = None          # its cached CUDA model would hang the same way
+        _free_vram()
+        return _faster_whisper_words_on(media, language, cpu=True)
+
+
+def _faster_whisper_words_on(media: Path, language: str, *,
+                             cpu: bool) -> list[tuple[str, float, float]]:
     from faster_whisper import WhisperModel
 
     size = settings.whisper_model or "large-v3"
-    try:
-        model = WhisperModel(size, device="cuda", compute_type="float16")
-    except Exception:  # noqa: BLE001 - CUDA unavailable → CPU
+    if cpu:
         model = WhisperModel(size, device="cpu", compute_type="int8")
+    else:
+        try:
+            model = WhisperModel(size, device="cuda", compute_type="float16")
+        except Exception:  # noqa: BLE001 - CUDA unavailable at construction → CPU
+            model = WhisperModel(size, device="cpu", compute_type="int8")
     try:
         segments, _info = model.transcribe(
             str(media), language=language, vad_filter=True, word_timestamps=True)

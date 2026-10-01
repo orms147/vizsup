@@ -143,9 +143,67 @@ def build_speech() -> Path:
     return out
 
 
+ZH_SPEECH_LINES = [
+    "大家好，欢迎来到我的频道。",
+    "今天给大家做一道家常红烧肉。",
+    "首先把五花肉切成小块。",
+    "冷水下锅，加入姜片和料酒。",
+    "小火慢慢炒出糖色。",
+    "然后把肉倒进去翻炒均匀。",
+    "大火烧开转小火炖四十分钟。",
+    "最后大火收汁就可以出锅了。",
+    "小王说他从来没吃过这么好吃的。",
+    "看起来是不是特别有食欲？",
+    "记得给我点个赞再走哦。",
+    "我们下期再见，拜拜！",
+]
+ZH_GAP = 0.6   # silence between lines — also what the cloud chunker cuts at
+
+
+def build_zh_speech() -> Path:
+    """Mandarin speech with a KNOWN transcript and exact cue times — the ASR fixture
+    (asr_timing_eval.py). edge-tts zh-CN voice, so it needs network once. Clean TTS
+    speech flatters every engine; it proves the plumbing and timing, while choosing
+    a model needs real Douyin audio with a hand-labeled reference."""
+    import asyncio
+
+    import edge_tts
+
+    from app.ffmpegutil import ffprobe_bin
+
+    def dur(p: Path) -> float:
+        r = subprocess.run([ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", str(p)], capture_output=True, text=True, check=True)
+        return float(r.stdout.strip())
+
+    tmp = SAMPLES / "_zh_parts"
+    tmp.mkdir(parents=True, exist_ok=True)
+    parts, cues, t = [], [], 0.0
+    for i, line in enumerate(ZH_SPEECH_LINES, 1):
+        p = tmp / f"{i:02d}.mp3"
+        asyncio.run(edge_tts.Communicate(line, "zh-CN-XiaoxiaoNeural").save(str(p)))
+        d = dur(p)
+        cues.append(Cue(index=i, start=round(t, 3), end=round(t + d, 3), text=line))
+        parts.append(p)
+        t += d + ZH_GAP
+    inputs, filt = [], []
+    for k, p in enumerate(parts):
+        inputs += ["-i", str(p)]
+        filt.append(f"[{k}:a]aresample=16000,apad=pad_dur={ZH_GAP}[a{k}]")
+    filt.append("".join(f"[a{k}]" for k in range(len(parts)))
+                + f"concat=n={len(parts)}:v=0:a=1[out]")
+    out = SAMPLES / "zh_speech.wav"
+    _run([ffmpeg_bin(), "-y", *inputs, "-filter_complex", ";".join(filt),
+          "-map", "[out]", "-ac", "1", "-ar", "16000", str(out)])
+    ref = REFS / "zh_speech.cn.ref.srt"
+    write_srt(cues, ref)
+    print(f"✓ {out.relative_to(ROOT)}  ({t:.1f}s, + ref {ref.relative_to(ROOT)})")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="build synthetic eval fixtures")
-    ap.add_argument("--only", choices=["hardsub", "speech"], help="build just one")
+    ap.add_argument("--only", choices=["hardsub", "speech", "zh_speech"], help="build just one")
     args = ap.parse_args()
 
     SAMPLES.mkdir(parents=True, exist_ok=True)
@@ -155,13 +213,17 @@ def main() -> int:
         build_hardsub()
     if args.only in (None, "speech"):
         build_speech()
+    if args.only in (None, "zh_speech"):
+        build_zh_speech()
 
     print(
         "\nTiếp theo:\n"
         "  python backend/scripts/ocr_eval.py --workdir storage/<id> "
         "--ref samples/refs/hardsub.cn.ref.srt --provider openrouter\n"
         "  python backend/scripts/duck_eval.py --source samples/speech.mp4 "
-        "--bg storage/<id>/bg.wav --range 5:15"
+        "--bg storage/<id>/bg.wav --range 5:15\n"
+        "  python backend/scripts/asr_timing_eval.py --media samples/zh_speech.wav "
+        "--ref samples/refs/zh_speech.cn.ref.srt --providers faster_whisper cloud_stt audio_llm"
     )
     return 0
 

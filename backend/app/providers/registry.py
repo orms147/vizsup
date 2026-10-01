@@ -5,6 +5,8 @@ frontend can render dropdowns and grey out engines whose key/dependency is missi
 """
 from __future__ import annotations
 
+from app.providers.asr.audio_llm import AudioLLM
+from app.providers.asr.cloud_stt import CloudSTT
 from app.providers.asr.faster_whisper import FasterWhisperASR
 from app.providers.asr.funasr_aligned import FunASRAligned
 from app.providers.asr.whisperx_funasr import WhisperXFunASR
@@ -53,6 +55,8 @@ ASR_PROVIDERS = {
         FunASRAligned(),
         WhisperXFunASR(),
         FasterWhisperASR(),
+        AudioLLM(),
+        CloudSTT(),
     )
 }
 

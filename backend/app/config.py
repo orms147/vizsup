@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     azure_speech_region: str = ""
     google_application_credentials: str = ""
 
+    # cloud speech-to-text (opt-in: these providers UPLOAD the audio). Base URL and key
+    # default to OpenRouter, so the one OpenRouter key already covers it; point them at
+    # Groq / OpenAI / SiliconFlow … to use a vendor directly.
+    stt_api_base_url: str = ""   # blank → https://openrouter.ai/api/v1
+    stt_api_key: str = ""        # blank → OPENROUTER_API_KEY when the base is OpenRouter
+    stt_api_model: str = ""      # /audio/transcriptions model (cloud_stt); blank → default
+    audio_llm_model: str = ""    # chat model that listens to audio (audio_llm); blank → default
+
     # download
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_from_browser: str = ""

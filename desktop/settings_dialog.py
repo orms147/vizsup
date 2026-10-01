@@ -38,6 +38,8 @@ KEYS = [
     ("DEEPL_API_KEY", "DeepL", "deepl_api_key", "deepl"),
     ("FPT_API_KEY", "FPT.AI (TTS)", "fpt_api_key", "fpt"),
     ("AZURE_SPEECH_KEY", "Azure Speech (TTS)", "azure_speech_key", "azure"),
+    ("STT_API_KEY", "STT / AI nghe audio — để trống = dùng key OpenRouter", "stt_api_key",
+     "cloud_stt"),
 ]
 ATTR_BY_ENV = {env: attr for env, _n, attr, _p in KEYS}
 
@@ -62,6 +64,18 @@ OPTIONS = [
      ["tiny", "base", "small", "medium", "large-v2", "large-v3"]),
     ("ZHIPU_MODEL", "Model GLM (ghi đè mặc định)", "zhipu_model",
      "text", "Bỏ trống = dùng mặc định (glm-5.2).", None),
+    ("STT_API_BASE_URL", "Máy chủ STT / AI nghe audio", "stt_api_base_url",
+     "choice", "Bỏ trống = OpenRouter (dùng luôn key OpenRouter). Hai engine này GỬI ÂM THANH "
+     "lên máy chủ — chỉ chạy khi bạn chọn chúng ở bước 1.",
+     ["", "https://openrouter.ai/api/v1", "https://api.groq.com/openai/v1",
+      "https://api.openai.com/v1", "https://api.siliconflow.cn/v1"]),
+    ("STT_API_MODEL", "Model STT (/audio/transcriptions)", "stt_api_model",
+     "choice", "Bỏ trống = openai/whisper-large-v3 (OpenRouter). Groq: whisper-large-v3.",
+     ["", "openai/whisper-large-v3", "openai/whisper-1", "whisper-large-v3"]),
+    ("AUDIO_LLM_MODEL", "Model AI nghe audio", "audio_llm_model",
+     "choice", "Bỏ trống = qwen/qwen3.8-omni-flash — nghe tiếng Phổ thông tốt nhất trong các "
+     "model đã thử (01/10/2026).",
+     ["", "qwen/qwen3.8-omni-flash", "xiaomi/mimo-v2.6-flash", "openai/gpt-audio-mini"]),
 ]
 OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
