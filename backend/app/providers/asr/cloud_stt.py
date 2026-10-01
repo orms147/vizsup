@@ -63,7 +63,10 @@ class CloudSTT(ASRProvider):
             if language == "zh":
                 kw["prompt"] = ZH_PROMPT
             if fmt == "verbose_json":
-                kw["timestamp_granularities"] = ["segment"]
+                # ask for WORDS too: they time text-only fallbacks without a second
+                # request (and with them OpenRouter's whisper-large-v3 also returns real
+                # per-sentence segments instead of 30 s windows)
+                kw["timestamp_granularities"] = ["word", "segment"]
             with path.open("rb") as fh:
                 return _cloud.client().audio.transcriptions.create(file=fh, **kw)
 
@@ -79,25 +82,35 @@ class CloudSTT(ASRProvider):
     def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
         with _cloud.chunk_files(media, spans) as paths:
-            replies = _cloud.run_chunks(lambda p: self._call(p, language), paths)
+            items = list(zip(paths, spans))
+            replies = _cloud.run_chunks(lambda it: self._call(it[0], language), items)
 
-        timed: list[Cue] = []
-        groups: list[_cloud.Group] = []
-        for (start, end), resp in zip(spans, replies):
-            segs = [s for s in (_field(resp, "segments") or [])
-                    if (_field(s, "text") or "").strip()]
-            if segs and all(float(_field(s, "end")) - float(_field(s, "start")) <= MAX_SEGMENT_SEC
-                            for s in segs):
-                for s in segs:
-                    timed.append(Cue(0, round(start + float(_field(s, "start")), 3),
-                                     round(start + float(_field(s, "end")), 3),
-                                     _field(s, "text").strip()))
-            else:
-                # no segments, or "segments" that are really 30 s windows: use the TEXT,
-                # take the timing from the local word track instead
+            timed: list[Cue] = []
+            groups: list[_cloud.Group] = []
+            words: list[_cloud.Word] = []
+            missing_words = False
+            for (start, end), resp in zip(spans, replies):
+                segs = [s for s in (_field(resp, "segments") or [])
+                        if (_field(s, "text") or "").strip()]
+                if segs and all(float(_field(s, "end")) - float(_field(s, "start"))
+                                <= MAX_SEGMENT_SEC for s in segs):
+                    for s in segs:
+                        timed.append(Cue(0, round(start + float(_field(s, "start")), 3),
+                                         round(start + float(_field(s, "end")), 3),
+                                         _field(s, "text").strip()))
+                    continue
+                # no segments, or "segments" that are really 30 s windows: keep the TEXT,
+                # take the timing from a word track
                 text = (" ".join(_field(s, "text").strip() for s in segs) if segs
                         else _field(resp, "text") or "")
                 groups.append(((start, end), _cloud.split_sentences(text)))
-        cues = timed + _cloud.time_groups(media, groups, language)
+                own = _cloud._words_of(resp, start)
+                words.extend(own)
+                missing_words = missing_words or not own
+            track: list[_cloud.Word] | None = words
+            if groups and missing_words:     # a text-only model (e.g. gpt-4o-transcribe)
+                track = (None if _cloud.local_words_available()
+                         else _cloud.cloud_words(items, language))
+        cues = timed + _cloud.time_groups(media, groups, language, words=track)
         cues.sort(key=lambda c: c.start)
         return _cloud.reindex(cues)

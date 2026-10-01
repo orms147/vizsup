@@ -169,8 +169,10 @@ class PipelineWorker(QObject):
                         self.log.emit(f"✓ Đã rà soát {n} dòng OCR")
             else:
                 self.progress.emit(0.4, "Nhận dạng giọng nói (ASR)…")
-                self.log.emit(f"ASR: {o.get('asr', 'faster_whisper')}")
-                asr.transcribe(job, provider=o.get("asr", "faster_whisper"))
+                from app.config import settings
+                asr_name = o.get("asr") or settings.vizsup_default_asr
+                self.log.emit(f"ASR: {asr_name}")
+                asr.transcribe(job, provider=asr_name)
                 translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
                 self.log.emit("✓ Nhận dạng xong")
 

@@ -147,11 +147,24 @@ def _check_ocr() -> list[Check]:
 
 def _check_asr() -> list[Check]:
     out: list[Check] = []
-    if _installed("faster_whisper"):
-        out.append(("ok", "ASR (faster-whisper)", f"model mặc định: {settings.whisper_model}"))
+    from app.providers.asr import _cloud
+
+    base, key = _cloud.endpoint()
+    if key:
+        out.append(("ok", "ASR (cloud — mặc định)",
+                    f"{settings.vizsup_default_asr} qua {base} · chữ: "
+                    f"{settings.audio_llm_model or 'qwen/qwen3.8-omni-flash'} · timing: "
+                    f"{'faster-whisper local' if _installed('faster_whisper') else _cloud.timing_model()}"))
     else:
-        out.append(("warn", "ASR (faster-whisper)",
-                    'chưa cài — cần cho video KHÔNG có phụ đề cháy sẵn: pip install -e ".[asr]"'))
+        out.append(("warn", "ASR (cloud — mặc định)",
+                    "chưa có key — đặt OPENROUTER_API_KEY (hoặc STT_API_KEY) để nhận dạng giọng "
+                    "nói cho video KHÔNG có phụ đề cháy sẵn"))
+    if _installed("faster_whisper"):
+        out.append(("ok", "ASR local (faster-whisper)", f"tùy chọn · model: {settings.whisper_model}"))
+    else:
+        out.append(("info", "ASR local (faster-whisper)",
+                    'không cài (không cần — ASR chạy trên cloud). Muốn chạy offline: '
+                    'pip install -e ".[asr]"'))
     if _installed("funasr"):
         out.append(("ok", "ASR (FunASR)", "Paraformer CN-native (chính xác tiếng Trung nhất)"))
     else:

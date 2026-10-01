@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     stt_api_key: str = ""        # blank → OPENROUTER_API_KEY when the base is OpenRouter
     stt_api_model: str = ""      # /audio/transcriptions model (cloud_stt); blank → default
     audio_llm_model: str = ""    # chat model that listens to audio (audio_llm); blank → default
+    # Word-timing track for text-only engines when local faster-whisper is NOT installed:
+    # a /audio/transcriptions model that returns word timestamps. blank → default
+    # (openai/whisper-large-v3 on OpenRouter; Groq's id is "whisper-large-v3").
+    stt_timing_model: str = ""
 
     # download
     ytdlp_cookies_file: str = ""
@@ -62,7 +66,9 @@ class Settings(BaseSettings):
     vizsup_storage_dir: Path = _ROOT / "storage"
     vizsup_default_translator: str = "deepseek"
     vizsup_default_tts: str = "edge"
-    vizsup_default_asr: str = "faster_whisper"
+    # cloud since 2026-10-01: Qwen-Omni via OpenRouter beat local Whisper by ~30 % CER on
+    # real Douyin audio and ~5x on accents (docs/providers.md); local models are optional
+    vizsup_default_asr: str = "audio_llm"
     whisper_model: str = "large-v3"  # faster-whisper model size; set WHISPER_MODEL=tiny to downsize
 
 

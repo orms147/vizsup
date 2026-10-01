@@ -101,7 +101,11 @@ class AudioLLM(ASRProvider):
     def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
         with _cloud.chunk_files(media, spans) as paths:
-            texts = _cloud.run_chunks(lambda item: self._call(item[0], item[1][1] - item[1][0]),
-                                      list(zip(paths, spans)))
+            items = list(zip(paths, spans))
+            texts = _cloud.run_chunks(lambda it: self._call(it[0], it[1][1] - it[1][0]), items)
+            # no local faster-whisper → the word-timing track comes from the cloud too,
+            # fetched while the chunk files still exist
+            words = (None if _cloud.local_words_available()
+                     else _cloud.cloud_words(items, language))
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
-        return _cloud.reindex(_cloud.time_groups(media, groups, language))
+        return _cloud.reindex(_cloud.time_groups(media, groups, language, words=words))

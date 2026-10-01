@@ -11,7 +11,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 - **download** — `yt-dlp` (cookies, domain-routed). Fallback: BBDown (Bilibili), TikTokDownloader (Douyin).
 - **hardsub-detect** — RapidOCR over ~16 sampled bottom-third crops; enough frames with recognized Chinese text ⇒ hardsubs → OCR path, else ASR ("Tự động" in the GUI, `--source auto` in the CLI; manual override always available).
 - **OCR** (hardsubs present) — RapidOCR (ONNX PP-OCRv5+) frame sampling → CN SRT with per-cue confidence (`ocr_report.json`) → optional LLM proofread (suspect lines only).
-- **ASR** (no hardsubs) — default faster-whisper; `funasr_aligned` provider fuses a FunASR Paraformer transcript with word-level timing (install `.[asr-accurate]`).
+- **ASR** (no hardsubs) — default **cloud** `audio_llm`: Qwen-Omni (OpenRouter) writes the transcript, Whisper word timestamps (cloud, or local faster-whisper if installed) time it. Local engines (`faster_whisper`, `funasr_aligned`) are optional extras and NOT installed on this machine (removed 2026-10-01). Benchmark: `docs/providers.md`.
 - **translate** — two-pass, provider-pluggable: CN-native draft → frontier refine. Strip timecodes locally; batch ~50 lines with context + glossary + video meta.
 - **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.**
 - **TTS** — provider-pluggable; default edge-tts vi-VN.

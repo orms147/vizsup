@@ -38,9 +38,9 @@ web before relying on them — don't trust memory.
 
 | id | engine | local | install | notes |
 |---|---|---|---|---|
-| `faster_whisper` | faster-whisper (large-v3) | ✓ | `.[asr]` | **default** — 1 pip package, CPU/GPU, segment timestamps; CER ~5% on Mandarin (edit gate catches errors). **Implemented + verified.** |
+| `faster_whisper` | faster-whisper (large-v3) | ✓ | `.[asr]` | optional offline engine (was the default until 2026-10-01) — CPU/GPU, segment timestamps; CER 0.185 on a real Douyin vlog vs 0.128 for `audio_llm`. Models are ~0.5–3 GB. |
 | `whisperx_funasr` | FunASR Paraformer (CN-native) | ✓ | `.[asr-accurate]` | **accuracy option** — CER ~1.7%, CPU-viable; needs `funasr` + torch. WhisperX word-alignment is a future refinement. **Implemented.** |
-| `audio_llm` | audio LLM via chat (`input_audio`) + local word timing | ✗ **uploads audio** | base deps (+ `.[asr]` for timing) | Text from a Chinese-native omni model (default `qwen/qwen3.8-omni-flash`), split into subtitle lines, snapped onto local faster-whisper **word** timestamps (`align.fuse_transcript_timing`, the funasr_aligned recipe). Without faster-whisper the times are proportional per chunk. 240 s chunks cut at silences. |
+| `audio_llm` | audio LLM via chat (`input_audio`) + word timing | ✗ **uploads audio** | base deps | **default.** Text from a Chinese-native omni model (default `qwen/qwen3.8-omni-flash`), split into subtitle lines and aligned onto a Whisper **word** track (`align.align_text_to_words`): cloud `STT_TIMING_MODEL` (default `openai/whisper-large-v3`), or local faster-whisper when installed. Cloud vs local timing on the real vlog: cue start median 0.26 s vs 0.20 s. 240 s chunks cut at silences. |
 | `cloud_stt` | `/audio/transcriptions` (Whisper-family API) | ✗ **uploads audio** | base deps | Text + segment timestamps in one call (default `openai/whisper-large-v3`). Models that reject `verbose_json` (gpt-4o-transcribe) are re-asked for `json` and get local word timing like `audio_llm`. 360 s chunks. |
 
 **Cloud ASR endpoint.** Both cloud providers default to OpenRouter and its key
@@ -72,11 +72,12 @@ empty reply over audible speech (that chunk falls back to Whisper's text), and W
 30 s pseudo-segments / unpunctuated text (re-timed from the word track). Reproduce with
 `backend/scripts/asr_timing_eval.py` (`audio_llm:<model>` / `cloud_stt:<model>`).
 
-> ASR timing ≠ accuracy (CLAUDE.md): the ideal is WhisperX word timestamps + a
-> CN-native transcript. v1 ships faster-whisper as the default for install
-> reliability on Windows, with FunASR Paraformer as the one-click accuracy upgrade
-> in the dropdown. Model weights download on first run (~75MB tiny … ~1.5GB large-v3).
-> Set `WHISPER_MODEL=tiny|base|small|medium|large-v3` in `.env` to trade speed/accuracy.
+> ASR timing ≠ accuracy (CLAUDE.md): a CN-native transcript + Whisper word timestamps.
+> Since 2026-10-01 both halves run in the cloud by default (`audio_llm`): nothing to
+> install, ~0 local CPU/GPU, and it beat local Whisper on real Douyin audio. The local
+> engines stay available as optional extras for offline use: `.[asr]` (faster-whisper;
+> `WHISPER_MODEL=tiny|base|small|medium|large-v3`, weights 75 MB … 2.9 GB on first run)
+> and `.[asr-accurate]` (FunASR Paraformer).
 
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.

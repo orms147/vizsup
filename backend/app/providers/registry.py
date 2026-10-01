@@ -52,11 +52,11 @@ TTS_PROVIDERS = {
 ASR_PROVIDERS = {
     p.name: p
     for p in (
-        FunASRAligned(),
+        AudioLLM(),           # default — first available is what the GUI pre-selects
+        CloudSTT(),
+        FunASRAligned(),      # local engines: optional extras
         WhisperXFunASR(),
         FasterWhisperASR(),
-        AudioLLM(),
-        CloudSTT(),
     )
 }
 

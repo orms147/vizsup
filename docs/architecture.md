@@ -13,7 +13,7 @@ HARDSUB DETECT  ── RapidOCR (ONNX PP-OCRv5+) detection on ~16 bottom-third c
   │
   ├── hardsubs present ─► OCR (RapidOCR frame sampling · per-cue confidence → ocr_report.json) ─► cn.srt ─► (LLM proofread, suspect lines only — opt-in)
   │
-  └── no hardsubs ──────► ASR (faster-whisper default; funasr_aligned = FunASR Paraformer + word timing) ─► cn.srt
+  └── no hardsubs ──────► ASR (cloud audio_llm default: Qwen-Omni text + Whisper word timing; local faster_whisper / funasr_aligned optional) ─► cn.srt
   │
   ▼
 TRANSLATE (two-pass, pluggable) ── strip timecodes · batch ~50 · context+glossary
@@ -68,7 +68,7 @@ Each arrow is a **resumable stage**; all state lives in the job's `work_dir`
 - **Working now (P1)**: download (yt-dlp), translate orchestrator (passthrough + LLM providers), TTS orchestrator (edge-tts), FFmpeg assemble, SRT/ASS utils, CLI (`run`/`render`/`providers`), provider registry.
 - **Working now (P3)**: async job worker (stages in a thread executor, progress pub/sub, cancel between stages); FastAPI endpoints — `/api/providers`, `POST /api/jobs`, `GET /api/jobs/{id}`, cancel, `GET/PUT /api/jobs/{id}/subtitles` (the edit gate), `POST /api/jobs/{id}/render`, artifact download, and `WS /ws/jobs/{id}` for live progress. Verified end-to-end over a live uvicorn server (job runs to the edit gate; subtitles load/save).
 - **Working now (P4 — PySide6 desktop, the primary UI)**: `desktop/` — 3 screens (Input · Subtitle Editor · Render) + Settings dialog, ported from the "Dark Editor Design", calling `app.*` directly via a `QThread` `PipelineWorker` (progress + cancel). Subtitle editor = video (`QMediaPlayer`) + editable table + custom-painted timeline (ruler/waveform/cue blocks/playhead, drag + zoom), autosaving `vi.srt`. Verified: constructs + paints headlessly with the real backend. Run: `python -m desktop.main`.
-- **Working now (P2 — ASR, no-hardsub path)**: `faster_whisper` provider (default; `pip install -e ".[asr]"`) — verified transcribe path (model load → segments → cues). `funasr_aligned` = FunASR Paraformer transcript fused with word-level timing (`.[asr-accurate]`); the legacy id `whisperx_funasr` is FunASR-only. So "paste link → auto Vietnamese subtitles" works (download → ASR → translate → edit gate), given ffmpeg + a translation key.
+- **Working now (P2 — ASR, no-hardsub path)**: `audio_llm` (default, cloud — Qwen-Omni transcript + Whisper word timing; needs only an OpenRouter key) and `cloud_stt` (`/audio/transcriptions`). Optional local: `faster_whisper` (`pip install -e ".[asr]"`). `funasr_aligned` = FunASR Paraformer transcript fused with word-level timing (`.[asr-accurate]`); the legacy id `whisperx_funasr` is FunASR-only. So "paste link → auto Vietnamese subtitles" works (download → ASR → translate → edit gate), given ffmpeg + a translation key.
 - **Working now (P5/M2 — hardsub path)**: `hardsub_detect` (RapidOCR detection over sampled bottom-third crops → auto OCR-vs-ASR routing) and `ocr` (RapidOCR frame sampling → cn.srt with per-cue confidence in `ocr_report.json`, optional suspect-only LLM proofread). Auto-detect (`--source auto`) and OCR route are wired in the CLI and desktop worker.
 - **Stubbed / parked**: WhisperX word-level alignment refinement (funasr_aligned falls back to faster-whisper timing today); TTS providers FPT/Azure/Google; VieNeu-TTS local provider (parked). No React web editor exists (parked in docs/plan/D-backlog.md).
 

@@ -188,14 +188,20 @@ def no_media(monkeypatch, tmp_path):
     monkeypatch.setattr(_cloud, "chunk_files", fake_files)
     timed: list = []
 
-    def fake_timing(media, groups, language):
+    words_seen: list = []
+
+    def fake_timing(media, groups, language, words=None):
         from app.pipeline.align import _spread
 
         timed.append(sum(len(sents) for _span, sents in groups))
+        words_seen.append(words)
         return [c for (lo, hi), sents in groups for c in _spread(sents, lo, hi)]
 
     monkeypatch.setattr(_cloud, "time_groups", fake_timing)
-    return SimpleNamespace(spans=spans, timed=timed)
+    # default: pretend local faster-whisper exists so no cloud word call is made;
+    # the cloud-word tests below flip this
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: True)
+    return SimpleNamespace(spans=spans, timed=timed, words_seen=words_seen)
 
 
 class FakeClient:
@@ -406,3 +412,77 @@ def test_a_short_reply_over_near_silence_is_left_alone(monkeypatch):
     monkeypatch.setattr(fa, "_faster_whisper_words", lambda media, lang: words)
     cues = _cloud.time_groups(Path("a.wav"), [((0.0, 30.0), ["好的。"])], "zh")
     assert [c.text for c in cues] == ["好的。"]
+
+
+# --- no local faster-whisper: the word track comes from the cloud --------------
+
+def _word_reply(words):
+    return {"text": "x", "segments": [], "words": [
+        {"word": w, "start": s, "end": e} for w, s, e in words]}
+
+
+def test_audio_llm_fetches_cloud_words_when_whisper_is_not_installed(cfg, no_media, monkeypatch):
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: False)
+    fc = FakeClient(chat=lambda kw: _chat_reply("你好。"),
+                    transcribe=lambda kw: _word_reply([("你", 1.0, 1.2), ("好", 1.2, 1.5)]))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    AudioLLM().transcribe(Path("a.wav"))
+
+    tr_calls = [c for c in fc.calls if "timestamp_granularities" in c]
+    assert len(tr_calls) == 2                                  # one per chunk
+    assert tr_calls[0]["model"] == _cloud.DEFAULT_TIMING_MODEL
+    assert "word" in tr_calls[0]["timestamp_granularities"]
+    words = no_media.words_seen[0]
+    assert words[0] == ("你", 1.0, 1.2) and words[2] == ("你", 11.0, 11.2)   # chunk offset
+
+
+def test_audio_llm_uses_local_words_when_whisper_is_installed(cfg, no_media, monkeypatch):
+    fc = FakeClient(chat=lambda kw: _chat_reply("你好。"),
+                    transcribe=lambda kw: pytest.fail("no cloud word call expected"))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    AudioLLM().transcribe(Path("a.wav"))
+    assert no_media.words_seen == [None]                      # → time_groups runs local
+
+
+def test_timing_model_is_configurable(cfg, monkeypatch):
+    assert _cloud.timing_model() == "openai/whisper-large-v3"
+    monkeypatch.setattr(settings, "stt_timing_model", "whisper-large-v3")
+    assert _cloud.timing_model() == "whisper-large-v3"
+
+
+def test_cloud_stt_reuses_its_own_words_for_long_segments(cfg, no_media, monkeypatch):
+    """One call returns text AND words: no second request to time 30 s windows."""
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: False)
+    calls = []
+
+    def tr(kw):
+        calls.append(kw)
+        return {"segments": [{"start": 0.0, "end": 30.0, "text": "大家好。"}],
+                "words": [{"word": "大家", "start": 0.5, "end": 0.9},
+                          {"word": "好", "start": 0.9, "end": 1.2}]}
+
+    fc = FakeClient(transcribe=tr)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    CloudSTT().transcribe(Path("a.wav"))
+    assert len(calls) == 2                                    # one per chunk, nothing extra
+    assert no_media.words_seen[0][0] == ("大家", 0.5, 0.9)
+    assert no_media.words_seen[0][2] == ("大家", 10.5, 10.9)
+
+
+def test_cloud_stt_text_only_model_without_whisper_fetches_cloud_words(cfg, no_media, monkeypatch):
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: False)
+    monkeypatch.setattr(settings, "stt_api_model", "openai/gpt-4o-mini-transcribe")
+
+    def tr(kw):
+        if kw["model"] == "openai/gpt-4o-mini-transcribe":
+            if kw["response_format"] == "verbose_json":
+                raise FakeErr(400, 'does not support response_format "verbose_json"')
+            return {"text": "你好。"}
+        return _word_reply([("你好", 0.2, 0.6)])            # the timing model
+
+    fc = FakeClient(transcribe=tr)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    CloudSTT().transcribe(Path("a.wav"))
+    timing_calls = [c for c in fc.calls if c["model"] == _cloud.DEFAULT_TIMING_MODEL]
+    assert len(timing_calls) == 2
+    assert no_media.words_seen[0][0] == ("你好", 0.2, 0.6)

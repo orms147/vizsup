@@ -230,23 +230,70 @@ Group = tuple[tuple[float, float], list[str]]   # (chunk span, its untimed sente
 _WORD_MARGIN = 1.5    # seconds of word track borrowed from each neighbouring chunk
 
 
-def time_groups(media: Path, groups: list[Group], language: str) -> list[Cue]:
-    """Time text-only transcripts chunk by chunk: one local faster-whisper pass for
-    the WORD track, then align_text_to_words per chunk on just that chunk's words
-    (±margin) — a bounded problem, and a chunk's mistakes cannot leak into another.
-    Without faster-whisper the sentences are spread over their chunk by length."""
+Word = tuple[str, float, float]
+DEFAULT_TIMING_MODEL = "openai/whisper-large-v3"
+
+
+def local_words_available() -> bool:
+    """Local faster-whisper is optional: with it, the word track is computed on this
+    machine; without it (the default since 2026-10-01 — it is ~3.4 GB of models), the
+    word track comes from a cloud transcription model (cloud_words)."""
+    return _installed("faster_whisper")
+
+
+def timing_model() -> str:
+    return settings.stt_timing_model.strip() or DEFAULT_TIMING_MODEL
+
+
+def _words_of(resp, offset: float) -> list[Word]:
+    out: list[Word] = []
+    for w in (resp.get("words") if isinstance(resp, dict) else getattr(resp, "words", None)) or []:
+        get = (lambda k: w.get(k)) if isinstance(w, dict) else (lambda k: getattr(w, k, None))
+        text, s, e = get("word"), get("start"), get("end")
+        if text and s is not None and e is not None:
+            out.append((str(text), offset + float(s), offset + float(e)))
+    return out
+
+
+def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str) -> list[Word]:
+    """Word timestamps for each uploaded chunk from a /audio/transcriptions model
+    (verbose_json + word granularity), shifted to absolute time. Measured 2026-10-01
+    on a real 137 s vlog: openai/whisper-large-v3 → 691 words in 4.6 s."""
+    model = timing_model()
+
+    def one(item) -> list[Word]:
+        path, (lo, _hi) = item
+
+        def send():
+            with path.open("rb") as fh:
+                return client().audio.transcriptions.create(
+                    file=fh, model=model, language=language, response_format="verbose_json",
+                    timestamp_granularities=["word", "segment"])
+        return _words_of(with_retry(send), lo)
+
+    return [w for chunk in run_chunks(one, items) for w in chunk]
+
+
+def time_groups(media: Path, groups: list[Group], language: str,
+                words: list[Word] | None = None) -> list[Cue]:
+    """Time text-only transcripts chunk by chunk against a WORD track, aligning each
+    chunk on just its own words (±margin) — a bounded problem, and a chunk's mistakes
+    cannot leak into another. ``words`` is the cloud word track when the caller fetched
+    one; otherwise local faster-whisper computes it; with neither, sentences are spread
+    over their chunk by length (rough — logged)."""
     from app.pipeline.align import _spread, align_text_to_words
 
     groups = [(span, sents) for span, sents in groups if sents]
     if not groups:
         return []
-    if not _installed("faster_whisper"):
-        log.warning("faster-whisper not installed — cloud transcript gets rough per-chunk "
-                    "timing; install .[asr] for word-accurate cue times")
-        return [c for (lo, hi), sents in groups for c in _spread(sents, lo, hi)]
-    from app.providers.asr.funasr_aligned import _faster_whisper_words
+    if words is None:
+        if not local_words_available():
+            log.warning("no word-timing track (no faster-whisper, no cloud words) — cues get "
+                        "rough per-chunk timing")
+            return [c for (lo, hi), sents in groups for c in _spread(sents, lo, hi)]
+        from app.providers.asr.funasr_aligned import _faster_whisper_words
 
-    words = _faster_whisper_words(media, language)
+        words = _faster_whisper_words(media, language)
     out: list[Cue] = []
     for (lo, hi), sents in groups:
         local = [w for w in words if lo - _WORD_MARGIN <= w[1] <= hi + _WORD_MARGIN]
