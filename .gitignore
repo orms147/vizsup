@@ -3,6 +3,8 @@
 .env.local
 *.cookies.txt
 cookies.txt
+# browser-extension exports are named e.g. www.douyin.com_cookies.txt
+*cookies*.txt
 
 # python
 __pycache__/
