@@ -6,9 +6,11 @@ accuracy"). Omni models like Qwen hear Mandarin well but return text only, so th
 is the funasr_aligned recipe with a cloud model in FunASR's seat: their text, split
 into subtitle lines, snapped onto Whisper's word timestamps.
 
-Default model web-verified 2026-10-01 on OpenRouter: qwen/qwen3.8-omni-flash —
-CER 0.000 on a 12-line Mandarin reference (Whisper family: 0.015), mp3 input, ~5 s.
-Also verified working: xiaomi/mimo-v2.6-flash, openai/gpt-audio-mini.
+Default model benchmarked 2026-10-01 on OpenRouter (docs/providers.md): qwen/qwen3.8-
+omni-flash — CER 0.128 on a real 137 s Douyin vlog vs 0.185 for local faster-whisper,
+0.016 vs 0.074 on accented speech, cue starts within 0.2 s (median), and consistent on all
+4 runs. The MiMo models sometimes hear better but loop, go empty, or answer in another
+language on some runs — the guards in _cloud.py turn those into loud errors / fallbacks.
 """
 from __future__ import annotations
 
@@ -62,7 +64,7 @@ class AudioLLM(ASRProvider):
             ]}],
         }
 
-    def _call(self, path: Path) -> str:
+    def _call(self, path: Path, seconds: float) -> str:
         from app.providers.translation.openrouter import (
             REASONING_HEADROOM,
             REASONING_MIN,
@@ -90,14 +92,16 @@ class AudioLLM(ASRProvider):
             self._mandatory_reasoning.add(self.model)
             resp = _cloud.with_retry(lambda: send(True))
         if resp.choices[0].finish_reason == "length":
-            raise RuntimeError(f"audio LLM reply truncated at max_tokens — chunk {path.name}")
-        return resp.choices[0].message.content or ""
+            raise RuntimeError(f"{self.model}: reply truncated at max_tokens (chunk {path.name}) "
+                               f"— usually a repetition loop; pick another AUDIO_LLM_MODEL")
+        text = _cloud.clean_transcript(resp.choices[0].message.content or "")
+        _cloud.check_transcript(text, seconds, model=self.model)
+        return text
 
     def transcribe(self, media: Path, *, language: str = "zh") -> list[Cue]:
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
         with _cloud.chunk_files(media, spans) as paths:
-            texts = _cloud.run_chunks(self._call, paths)
-        cues: list[Cue] = []
-        for (start, end), text in zip(spans, texts):
-            cues.extend(_cloud.proportional_cues(_cloud.split_sentences(text), start, end))
-        return _cloud.reindex(_cloud.add_word_timing(media, cues, language))
+            texts = _cloud.run_chunks(lambda item: self._call(item[0], item[1][1] - item[1][0]),
+                                      list(zip(paths, spans)))
+        groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
+        return _cloud.reindex(_cloud.time_groups(media, groups, language))

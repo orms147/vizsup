@@ -12,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import settings
-from app.models import Cue
 from app.providers.asr import _cloud, audio_llm, cloud_stt
 from app.providers.asr.audio_llm import AudioLLM
 from app.providers.asr.cloud_stt import CloudSTT
@@ -102,19 +101,43 @@ def test_long_sentences_are_halved_at_the_comma_nearest_the_middle():
     assert all(len(x) <= _cloud.MAX_SENTENCE_CHARS + 2 for x in out)
 
 
-def test_a_long_sentence_without_commas_stays_whole():
-    s = "一" * 40 + "。"
-    assert _cloud.split_sentences(s) == [s]
+def test_unpunctuated_whisper_text_is_cut_into_subtitle_sized_pieces():
+    """Whisper APIs often return Chinese with no punctuation; one 30 s run left whole
+    became one 30 s cue (median 47 s timing error on a real vlog)."""
+    s = "我们再把校服换上因为最近天气真的太热了直接把这个夏季校服给掏出来穿看到这个阳光应该能看出来有多热吧"
+    out = _cloud.split_sentences(s)
+    assert len(out) > 2 and "".join(out) == s
+    assert all(len(x) <= _cloud.MAX_SENTENCE_CHARS for x in out)
+
+
+def test_spaces_are_preferred_over_blind_halving():
+    s = "今天天气真的特别特别好啊 我们一起去公园散步然后吃个午饭吧好不好"
+    out = _cloud.split_sentences(s)
+    assert out[0] == "今天天气真的特别特别好啊"
 
 
 def test_bare_punctuation_and_quotes_are_dropped():
     assert _cloud.split_sentences("「你好。」\n……\n**") == ["你好。"]
 
 
-def test_proportional_cues_cover_the_span_by_character_count():
-    cues = _cloud.proportional_cues(["一二", "三四五六"], 10.0, 16.0)
-    assert (cues[0].start, cues[0].end) == (10.0, 12.0)
-    assert (cues[1].start, cues[1].end) == (12.0, 16.0)
+def test_time_groups_without_faster_whisper_spreads_each_chunk(monkeypatch):
+    monkeypatch.setattr(_cloud, "_installed", lambda m: False)
+    cues = _cloud.time_groups(Path("a.wav"), [((10.0, 16.0), ["一二", "三四五六"]),
+                                              ((16.0, 20.0), [])], "zh")
+    assert [(c.start, c.end) for c in cues] == [(10.0, 12.0), (12.0, 16.0)]
+
+
+def test_time_groups_aligns_each_chunk_on_its_own_words(monkeypatch):
+    """One whisper pass; each chunk sees only words inside its window (± margin)."""
+    from app.providers.asr import funasr_aligned as fa
+
+    words = [("你好", 1.0, 1.5), ("再见", 31.0, 31.6)]
+    monkeypatch.setattr(_cloud, "_installed", lambda m: True)
+    monkeypatch.setattr(fa, "_faster_whisper_words", lambda media, lang: words)
+    cues = _cloud.time_groups(Path("a.wav"), [((0.0, 30.0), ["你好。"]),
+                                              ((30.0, 60.0), ["再见。"])], "zh")
+    assert (cues[0].start, cues[0].end) == (1.0, 1.5)
+    assert (cues[1].start, cues[1].end) == (31.0, 31.6)
 
 
 # --- retry --------------------------------------------------------------------
@@ -165,11 +188,13 @@ def no_media(monkeypatch, tmp_path):
     monkeypatch.setattr(_cloud, "chunk_files", fake_files)
     timed: list = []
 
-    def fake_timing(media, cues, language):
-        timed.append(len(cues))
-        return cues
+    def fake_timing(media, groups, language):
+        from app.pipeline.align import _spread
 
-    monkeypatch.setattr(_cloud, "add_word_timing", fake_timing)
+        timed.append(sum(len(sents) for _span, sents in groups))
+        return [c for (lo, hi), sents in groups for c in _spread(sents, lo, hi)]
+
+    monkeypatch.setattr(_cloud, "time_groups", fake_timing)
     return SimpleNamespace(spans=spans, timed=timed)
 
 
@@ -201,7 +226,20 @@ def test_cloud_stt_uses_segments_with_chunk_offsets(cfg, no_media, monkeypatch):
     cues = CloudSTT().transcribe(Path("a.wav"))
     assert [(c.index, c.start, c.end, c.text) for c in cues] == [
         (1, 1.0, 2.5, "你好"), (2, 11.0, 12.5, "你好")]      # second chunk offset by 10 s
-    assert no_media.timed == []                           # had timestamps → no fusion
+    assert no_media.timed == [0]                          # had timestamps → nothing to align
+
+
+def test_cloud_stt_treats_30s_segments_as_untimed_text(cfg, no_media, monkeypatch):
+    """OpenRouter's whisper-large-v3 returned 30 s windows labelled as segments on a
+    real vlog (cue starts off by a median 10 s). Those must be re-timed from words."""
+    def tr2(kw):
+        return {"segments": [{"start": 0.0, "end": 30.0, "text": "大家好。今天做红烧肉。"}]}
+
+    fc = FakeClient(transcribe=tr2)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    cues = CloudSTT().transcribe(Path("a.wav"))
+    assert [c.text for c in cues] == ["大家好。", "今天做红烧肉。"] * 2
+    assert no_media.timed == [4]                          # went through word alignment
 
 
 def test_cloud_stt_falls_back_to_json_and_fuses_timing(cfg, no_media, monkeypatch):
@@ -274,10 +312,36 @@ def test_audio_llm_truncated_reply_fails_loudly(cfg, no_media, monkeypatch):
         AudioLLM().transcribe(Path("a.wav"))
 
 
-def test_add_word_timing_without_faster_whisper_keeps_proportional(monkeypatch):
-    monkeypatch.setattr(_cloud, "_installed", lambda m: False)
-    cues = [Cue(1, 0.0, 1.0, "你好")]
-    assert _cloud.add_word_timing(Path("a.wav"), cues, "zh") is cues
+# --- output sanity: garbage fails loudly instead of reaching the edit gate -----
+
+def test_a_translated_reply_is_rejected(cfg, no_media, monkeypatch):
+    """mimo-v2.5 answered a Chinese vlog with a KOREAN translation (2026-10-01)."""
+    fc = FakeClient(chat=lambda kw: _chat_reply("오늘은 한국에 가서 학교에 가는 날입니다."))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    with pytest.raises(RuntimeError, match="not a Chinese transcript"):
+        AudioLLM().transcribe(Path("a.wav"))
+
+
+def test_a_looping_reply_is_rejected(cfg, no_media, monkeypatch):
+    """mimo-v2.6-pro produced 4.2k hanzi for ~800 spoken (repetition loop)."""
+    fc = FakeClient(chat=lambda kw: _chat_reply("好的。" * 200))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    with pytest.raises(RuntimeError, match="looping"):
+        AudioLLM().transcribe(Path("a.wav"))           # 10 s chunks → 400 hanzi is absurd
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("0.03-12.51 | SPEAKER_00: 大家好。", "大家好。"),
+    ("[00:01 - 00:04] 你好", "你好"),
+    ("说话人1：今天吃什么", "今天吃什么"),
+    ("大家好，2024年我们见。", "大家好，2024年我们见。"),     # a year is content, not a stamp
+])
+def test_unasked_timestamps_and_speaker_labels_are_stripped(raw, clean):
+    assert _cloud.clean_transcript(raw) == clean
+
+
+def test_a_little_english_inside_chinese_is_fine():
+    _cloud.check_transcript("今天我们去 Costco 买 iPhone 和 vlog 素材。", 10.0, model="m")
 
 
 # --- word timing survives an incomplete CUDA install --------------------------
@@ -320,3 +384,25 @@ def test_word_timing_does_not_mask_unrelated_errors(monkeypatch):
     monkeypatch.setattr(fa, "_faster_whisper_words_on", fake_on)
     with pytest.raises(ValueError, match="bad audio"):
         fa._faster_whisper_words(Path("a.wav"), "zh")
+
+
+def test_an_empty_reply_over_heard_speech_falls_back_to_whisper_text(monkeypatch):
+    """mimo-v2.5 returned nothing for a noisy real vlog: the chunk's speech must not
+    vanish — whisper's own text (timed by itself) stands in for it."""
+    from app.providers.asr import funasr_aligned as fa
+
+    words = [(ch, i * 0.3, i * 0.3 + 0.3) for i, ch in enumerate("今天我们去学校上课然后去便利店买了柠檬水和红茶")]
+    monkeypatch.setattr(_cloud, "_installed", lambda m: True)
+    monkeypatch.setattr(fa, "_faster_whisper_words", lambda media, lang: words)
+    cues = _cloud.time_groups(Path("a.wav"), [((0.0, 30.0), ["嗯。"])], "zh")
+    assert "".join(c.text for c in cues).startswith("今天我们去学校")
+
+
+def test_a_short_reply_over_near_silence_is_left_alone(monkeypatch):
+    from app.providers.asr import funasr_aligned as fa
+
+    words = [("嗯", 1.0, 1.2), ("好", 2.0, 2.2)]
+    monkeypatch.setattr(_cloud, "_installed", lambda m: True)
+    monkeypatch.setattr(fa, "_faster_whisper_words", lambda media, lang: words)
+    cues = _cloud.time_groups(Path("a.wav"), [((0.0, 30.0), ["好的。"])], "zh")
+    assert [c.text for c in cues] == ["好的。"]

@@ -70,12 +70,14 @@ OPTIONS = [
      ["", "https://openrouter.ai/api/v1", "https://api.groq.com/openai/v1",
       "https://api.openai.com/v1", "https://api.siliconflow.cn/v1"]),
     ("STT_API_MODEL", "Model STT (/audio/transcriptions)", "stt_api_model",
-     "choice", "Bỏ trống = openai/whisper-large-v3 (OpenRouter). Groq: whisper-large-v3.",
-     ["", "openai/whisper-large-v3", "openai/whisper-1", "whisper-large-v3"]),
+     "choice", "Bỏ trống = openai/whisper-large-v3 (OpenRouter). Trên vlog Douyin thật nó không "
+     "hơn faster-whisper local — nên dùng 'AI nghe audio'. Groq: whisper-large-v3.",
+     ["", "openai/whisper-large-v3", "openai/gpt-4o-mini-transcribe", "whisper-large-v3"]),
     ("AUDIO_LLM_MODEL", "Model AI nghe audio", "audio_llm_model",
-     "choice", "Bỏ trống = qwen/qwen3.8-omni-flash — nghe tiếng Phổ thông tốt nhất trong các "
-     "model đã thử (01/10/2026).",
-     ["", "qwen/qwen3.8-omni-flash", "xiaomi/mimo-v2.6-flash", "openai/gpt-audio-mini"]),
+     "choice", "Bỏ trống = qwen/qwen3.8-omni-flash — chính xác nhất và ỔN ĐỊNH nhất trên vlog "
+     "Douyin thật (01/10/2026). MiMo đôi khi nghe tốt hơn nhưng hay lặp vòng / trả rỗng / "
+     "dịch sang tiếng khác — chỉ để thử.",
+     ["", "qwen/qwen3.8-omni-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-flash"]),
 ]
 OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"

@@ -46,14 +46,31 @@ web before relying on them — don't trust memory.
 **Cloud ASR endpoint.** Both cloud providers default to OpenRouter and its key
 (`STT_API_BASE_URL` / `STT_API_KEY` blank). Set them to use a vendor directly (Groq,
 OpenAI, SiliconFlow …); the OpenRouter key is never sent to another host. Models:
-`STT_API_MODEL`, `AUDIO_LLM_MODEL`. Measured 2026-10-01 on a 12-line Mandarin TTS
-reference (clean speech — real Douyin audio will separate them more):
+`STT_API_MODEL`, `AUDIO_LLM_MODEL`.
 
-| engine | CER | timestamps |
-|---|---|---|
-| qwen/qwen3.8-omni-flash, xiaomi/mimo-v2.6-flash, openai/gpt-audio-mini (chat) | 0.000 | no → local word timing |
-| openai/whisper-large-v3, openai/whisper-1 (`/audio/transcriptions`) | 0.015 | yes |
-| local faster-whisper small / large-v3 | 0.015 | yes |
+**Benchmark, 2026-10-01** (all via OpenRouter except local; no Gemini — cost). Three clips:
+a real 137 s Douyin vlog (fast speech, music; reference = its OCR'd hardsubs, cleaned
+mechanically — residual OCR noise is shared by every engine, so the *ranking* holds), the
+same with pink noise, and 53 s of synthetic accents (Northeast, Shaanxi, Taiwan, fast male,
+slang). CER lower is better; Δstart = |cue start − reference|, median / p95.
+
+| engine | vlog CER | noisy CER | accents CER | vlog Δstart | stability |
+|---|---|---|---|---|---|
+| **audio_llm · qwen/qwen3.8-omni-flash** (default) | **0.128** | **0.122** | **0.016** | 0.20 s / 1.8 s | 4/4 runs consistent |
+| audio_llm · xiaomi/mimo-v2.6-pro | loop ✗ | 0.108 | 0.016 | — | fails some runs |
+| audio_llm · xiaomi/mimo-v2.6-flash | 0.118 / loop ✗ | 0.124 | 0.016 | 0.23 s / 2.5 s | fails some runs |
+| audio_llm · xiaomi/mimo-v2.5 | Korean / empty / loop ✗ | | | | unusable |
+| cloud_stt · openai/gpt-4o-mini-transcribe | 0.148–0.229 | 0.161 | 0.053 | 0.20 s / 1.8 s | varies run to run |
+| cloud_stt · openai/whisper-large-v3 | 0.181 | 0.185 | 0.080 | 0.50 s / 3.0 s | — |
+| local faster-whisper small | 0.185 | 0.198 | 0.074 | **0.14 s / 0.8 s** | — |
+
+Takeaways: Chinese omni models hear Mandarin ~30 % better than the Whisper family on a real
+vlog and ~5× better on accents; Qwen-Omni is the only one that was reliable on every run.
+The Whisper API adds nothing over local faster-whisper. Failure modes seen and now guarded
+in `_cloud.py`: a reply in another language (rejected), a repetition loop (rejected), an
+empty reply over audible speech (that chunk falls back to Whisper's text), and Whisper's
+30 s pseudo-segments / unpunctuated text (re-timed from the word track). Reproduce with
+`backend/scripts/asr_timing_eval.py` (`audio_llm:<model>` / `cloud_stt:<model>`).
 
 > ASR timing ≠ accuracy (CLAUDE.md): the ideal is WhisperX word timestamps + a
 > CN-native transcript. v1 ships faster-whisper as the default for install

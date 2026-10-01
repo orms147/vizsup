@@ -10,9 +10,9 @@ Google-Lens OCR mode. Pieces here:
   argue for chunks; 48 kbps mono mp3 is ~2.2 MB for 6 minutes.
 - text-only engines (audio LLMs, gpt-4o-transcribe) return no timestamps: their
   text is split into subtitle-sized sentences, given proportional fallback times
-  inside the chunk, then snapped onto local faster-whisper WORD timestamps by the
-  existing ``pipeline.align.fuse_transcript_timing`` — text from the engine that
-  hears Mandarin best, timing from Whisper (the funasr_aligned recipe).
+  aligned chunk by chunk onto local faster-whisper WORD timestamps by
+  ``pipeline.align.align_text_to_words`` (global alignment + interpolation between
+  anchors) — text from the engine that hears Mandarin best, timing from Whisper.
 """
 from __future__ import annotations
 
@@ -176,31 +176,42 @@ def chunk_files(media: Path, spans: list[tuple[float, float]]):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def run_chunks(fn: Callable[[Path], object], paths: list[Path]) -> list:
+def run_chunks(fn: Callable, items: list) -> list:
     """Apply ``fn`` to every chunk, results in order. The FIRST chunk runs alone:
     it is the probe that fills the providers' memos (text-only model, mandatory
     reasoning) and fails fast on a bad key/model — instead of N parallel uploads
     each discovering the same thing. The rest then fan out ≤PARALLEL_CHUNKS wide."""
-    if not paths:
+    if not items:
         return []
-    first = fn(paths[0])
-    if len(paths) == 1:
+    first = fn(items[0])
+    if len(items) == 1:
         return [first]
     with ThreadPoolExecutor(max_workers=PARALLEL_CHUNKS) as ex:
-        return [first, *ex.map(fn, paths[1:])]
+        return [first, *ex.map(fn, items[1:])]
 
 
 # --- text-only engines: sentences + timing --------------------------------------
 
 def _split_long(s: str) -> list[str]:
+    """Halve an over-long sentence at the comma nearest its middle; failing that at a
+    space; failing that at the middle itself. Whisper APIs often return Chinese with
+    NO punctuation at all — leaving such a run whole made one 30 s cue per segment
+    (cue starts off by a median 47 s on a real vlog). Cut pieces are timed by the word
+    alignment afterwards, so a cut needs no linguistic boundary to land well."""
     if len(s) <= MAX_SENTENCE_CHARS:
         return [s]
     mid = len(s) // 2
-    cut = max((i for i, ch in enumerate(s) if ch in _SOFT and i < len(s) - 1),
-              key=lambda i: -abs(i - mid), default=None)
-    if cut is None:
-        return [s]                         # no comma to cut at — leave it whole
-    return _split_long(s[:cut + 1].strip()) + _split_long(s[cut + 1:].strip())
+    for seps in (_SOFT, " "):
+        cut = min((i for i, ch in enumerate(s) if ch in seps and 0 < i < len(s) - 1),
+                  key=lambda i: abs(i - mid), default=None)
+        if cut is not None:
+            break
+    else:
+        cut = mid - 1                      # no separator at all: plain halving
+    left, right = s[:cut + 1].strip(), s[cut + 1:].strip()
+    if not left or not right:
+        return [s]
+    return _split_long(left) + _split_long(right)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -215,33 +226,78 @@ def split_sentences(text: str) -> list[str]:
     return out
 
 
-def proportional_cues(sentences: list[str], start: float, end: float) -> list[Cue]:
-    """Spread sentences over [start, end] by character count. Only a FALLBACK —
-    fusion replaces these wherever it finds anchor words."""
-    weights = [max(1, len(s)) for s in sentences]
-    total = sum(weights) or 1
-    span = max(0.0, end - start)
-    cues, t = [], start
-    for s, w in zip(sentences, weights):
-        d = span * w / total
-        cues.append(Cue(index=0, start=round(t, 3), end=round(t + d, 3), text=s))
-        t += d
-    return cues
+Group = tuple[tuple[float, float], list[str]]   # (chunk span, its untimed sentences)
+_WORD_MARGIN = 1.5    # seconds of word track borrowed from each neighbouring chunk
 
 
-def add_word_timing(media: Path, cues: list[Cue], language: str) -> list[Cue]:
-    """Snap text-only cues onto local faster-whisper word timestamps. Without
-    faster-whisper installed, the proportional times stand (logged)."""
-    if not cues:
-        return cues
+def time_groups(media: Path, groups: list[Group], language: str) -> list[Cue]:
+    """Time text-only transcripts chunk by chunk: one local faster-whisper pass for
+    the WORD track, then align_text_to_words per chunk on just that chunk's words
+    (±margin) — a bounded problem, and a chunk's mistakes cannot leak into another.
+    Without faster-whisper the sentences are spread over their chunk by length."""
+    from app.pipeline.align import _spread, align_text_to_words
+
+    groups = [(span, sents) for span, sents in groups if sents]
+    if not groups:
+        return []
     if not _installed("faster_whisper"):
-        log.warning("faster-whisper not installed — cloud transcript keeps rough proportional "
+        log.warning("faster-whisper not installed — cloud transcript gets rough per-chunk "
                     "timing; install .[asr] for word-accurate cue times")
-        return cues
-    from app.pipeline.align import fuse_transcript_timing
+        return [c for (lo, hi), sents in groups for c in _spread(sents, lo, hi)]
     from app.providers.asr.funasr_aligned import _faster_whisper_words
 
-    return fuse_transcript_timing(cues, _faster_whisper_words(media, language))
+    words = _faster_whisper_words(media, language)
+    out: list[Cue] = []
+    for (lo, hi), sents in groups:
+        local = [w for w in words if lo - _WORD_MARGIN <= w[1] <= hi + _WORD_MARGIN]
+        heard = sum(len(_CJK_CHARS.findall(w[0])) for w in local if lo <= w[1] <= hi)
+        got = sum(len(_CJK_CHARS.findall(s)) for s in sents)
+        if heard >= _DROPOUT_MIN_HEARD and got < _DROPOUT_RATIO * heard:
+            # The engine returned (almost) nothing for speech Whisper clearly heard —
+            # mimo-v2.5 did exactly that on a noisy real vlog (2026-10-01). Keep the
+            # chunk's content with Whisper's own text rather than silently losing it.
+            log.warning("cloud transcript for %.0f-%.0fs has %d hanzi where whisper heard %d — "
+                        "using whisper's text for this chunk", lo, hi, got, heard)
+            sents = split_sentences("".join(w[0] for w in local if lo <= w[1] <= hi))
+        out.extend(align_text_to_words(sents, local, (lo, hi)))
+    return out
+
+
+_CJK_CHARS = re.compile(r"[一-鿿]")
+_DROPOUT_MIN_HEARD = 20     # below this, near-silence/music — an empty reply is plausible
+_DROPOUT_RATIO = 0.3
+
+
+# --- output sanity for audio LLMs ---------------------------------------------
+# Measured on a real Douyin vlog (2026-10-01): mimo-v2.5 answered with a KOREAN
+# translation prefixed "0.03-12.51 | SPEAKER_00:", and mimo-v2.6-pro looped to 4.2k
+# chars for ~800 spoken. Garbage must fail loudly here, not surface at the edit gate.
+_ANNOTATION = re.compile(
+    r"^\s*(?:\[?\d{1,2}(?::\d{2}){0,2}(?:[.,]\d+)?\s*[-–~>]+\s*\d{1,2}(?::\d{2}){0,2}"
+    r"(?:[.,]\d+)?\]?\s*\|?\s*)?(?:(?:SPEAKER_?\d+|说话人\s*\d+|Speaker\s*\d+)\s*[:：]\s*)?",
+    re.M)
+MAX_CHARS_PER_SEC = 12.0   # Mandarin speech runs 4–6 hanzi/s, fast ~8
+
+
+def clean_transcript(text: str) -> str:
+    """Strip per-line timestamp / speaker prefixes some models add unasked."""
+    return _ANNOTATION.sub("", text or "").strip()
+
+
+def check_transcript(text: str, seconds: float, *, model: str) -> None:
+    # One hanzi is a word; one Latin letter is not — so Latin counts per WORD (a Douyin
+    # line full of "Costco / iPhone / vlog" is still Chinese), other scripts (Hangul,
+    # kana, …) per character, which is what a translated reply is made of.
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    latin_words = len(re.findall(r"[A-Za-z]+", text))
+    other = sum(1 for ch in text if ch.isalpha() and not ch.isascii()
+                and not "一" <= ch <= "鿿")
+    if (latin_words + other) and cjk < latin_words + other:
+        raise RuntimeError(f"{model}: reply is not a Chinese transcript (translated or wrong "
+                           f"language?) — pick another AUDIO_LLM_MODEL")
+    if cjk > MAX_CHARS_PER_SEC * max(seconds, 5.0):
+        raise RuntimeError(f"{model}: {cjk} hanzi for {seconds:.0f}s of audio — the model is "
+                           f"looping/hallucinating; pick another AUDIO_LLM_MODEL")
 
 
 def reindex(cues: list[Cue]) -> list[Cue]:

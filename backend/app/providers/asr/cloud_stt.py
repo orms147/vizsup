@@ -4,7 +4,8 @@ Whisper-family APIs (OpenRouter, OpenAI, Groq, SiliconFlow, …). UPLOADS the au
 Asks for ``verbose_json`` segments, so text and timing come back in one call.
 Models that only return plain text (gpt-4o-transcribe answers 400 to
 verbose_json) are detected once, re-asked for ``json``, and get their timing
-from local faster-whisper words (see _cloud.add_word_timing).
+from local faster-whisper words (see _cloud.time_groups). So do "segments" longer
+than MAX_SEGMENT_SEC, which some routes return as 30 s windows.
 
 Default model web-verified 2026-10-01 on OpenRouter: openai/whisper-large-v3
 returns segments for zh (CER 0.015 on a 12-line Mandarin reference, same as local
@@ -22,6 +23,10 @@ from app.providers.base import ASRProvider, _installed
 
 DEFAULT_MODEL = "openai/whisper-large-v3"
 CHUNK_SEC = 360.0
+# A real subtitle segment is a sentence or two. OpenRouter's whisper-large-v3 returned
+# 30 s windows labelled as segments on a real vlog (cue starts off by a median 10 s), so
+# anything longer is treated as untimed text and re-timed from the local word track.
+MAX_SEGMENT_SEC = 12.0
 # The classic Whisper trick: a Simplified-Chinese, punctuated prompt pulls the output
 # toward Simplified hanzi WITH punctuation (it otherwise drifts to Traditional / none).
 ZH_PROMPT = "以下是普通话的句子，使用简体中文，并带有标点符号。"
@@ -76,20 +81,23 @@ class CloudSTT(ASRProvider):
         with _cloud.chunk_files(media, spans) as paths:
             replies = _cloud.run_chunks(lambda p: self._call(p, language), paths)
 
-        cues: list[Cue] = []
-        needs_timing = False
+        timed: list[Cue] = []
+        groups: list[_cloud.Group] = []
         for (start, end), resp in zip(spans, replies):
-            segs = _field(resp, "segments")
-            if segs:
+            segs = [s for s in (_field(resp, "segments") or [])
+                    if (_field(s, "text") or "").strip()]
+            if segs and all(float(_field(s, "end")) - float(_field(s, "start")) <= MAX_SEGMENT_SEC
+                            for s in segs):
                 for s in segs:
-                    text = (_field(s, "text") or "").strip()
-                    if text:
-                        cues.append(Cue(0, round(start + float(_field(s, "start")), 3),
-                                        round(start + float(_field(s, "end")), 3), text))
+                    timed.append(Cue(0, round(start + float(_field(s, "start")), 3),
+                                     round(start + float(_field(s, "end")), 3),
+                                     _field(s, "text").strip()))
             else:
-                needs_timing = True
-                sentences = _cloud.split_sentences(_field(resp, "text") or "")
-                cues.extend(_cloud.proportional_cues(sentences, start, end))
-        if needs_timing:
-            cues = _cloud.add_word_timing(media, cues, language)
+                # no segments, or "segments" that are really 30 s windows: use the TEXT,
+                # take the timing from the local word track instead
+                text = (" ".join(_field(s, "text").strip() for s in segs) if segs
+                        else _field(resp, "text") or "")
+                groups.append(((start, end), _cloud.split_sentences(text)))
+        cues = timed + _cloud.time_groups(media, groups, language)
+        cues.sort(key=lambda c: c.start)
         return _cloud.reindex(cues)
