@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from desktop import cuemodel
 from desktop.cuemodel import EditorCue
 from desktop.theme import C
+from desktop.ui_thread import connect_on_ui
 from desktop.widgets.style_panel import StylePanel
 from desktop.widgets.subtitle_table import SubtitleTable
 from desktop.widgets.timeline import Timeline
@@ -530,9 +531,9 @@ class EditorView(QWidget):
         self._tasks.append(pair)
         task.moveToThread(thread)
         thread.started.connect(task.run)
-        task.done.connect(on_done)
+        connect_on_ui(task.done, on_done, self)     # closures touch widgets → GUI thread
         if on_fail:
-            task.failed.connect(on_fail)
+            connect_on_ui(task.failed, on_fail, self)
         task.done.connect(thread.quit)
         task.failed.connect(thread.quit)
         thread.finished.connect(task.deleteLater)

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from desktop import paths  # noqa: F401
 from desktop import store
+from desktop.ui_thread import connect_on_ui
 from desktop.settings_dialog import SettingsDialog
 from desktop.theme import C, load_fonts, qss
 from desktop.views.editor_view import EditorView
@@ -302,13 +303,23 @@ class MainWindow(QMainWindow):
     # --- worker plumbing -----------------------------------------------------
     def _run(self, method: str, opts: dict, connections: dict) -> None:
         """Build worker+thread, connect ALL signals BEFORE start (no emit races),
-        then start. One run at a time (callers guard with _busy())."""
+        then start. One run at a time (callers guard with _busy()).
+
+        Every slot goes through a UiCall (desktop/ui_thread.py) that LIVES ON THE GUI
+        THREAD. A worker signal
+        connected straight to a lambda runs that lambda on the WORKER thread (Qt has no
+        receiver object to queue to), and the lambda then touched a QWidget — that
+        corrupted memory and killed the app at random later points (an access
+        violation inside subprocess for ffmpeg, or in pathlib), 2026-10-01. With the
+        relay, bound methods and lambdas alike are queued onto the GUI thread."""
         self._thread = QThread()
         self._worker = PipelineWorker(self.job, opts)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(getattr(self._worker, method))
-        for name, slot in connections.items():
-            getattr(self._worker, name).connect(slot)
+        for relay in getattr(self, "_ui_calls", []):   # drop the previous run's relays
+            relay.deleteLater()
+        self._ui_calls = [connect_on_ui(getattr(self._worker, name), slot, self)
+                          for name, slot in connections.items()]
         self._worker.finished.connect(self._on_finished)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)

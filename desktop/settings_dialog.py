@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from desktop import paths  # noqa: F401
 from desktop.theme import C
+from desktop.ui_thread import connect_on_ui
 from app.config import settings  # noqa: E402
 from app.providers.registry import find_provider  # noqa: E402
 
@@ -287,7 +288,7 @@ class SettingsDialog(QDialog):
         pair = (th, wk)
         self._jobs.append(pair)  # CRUCIAL: keep BOTH referenced or the worker is GC'd → crash
         th.started.connect(wk.run)
-        wk.done.connect(on_done)
+        connect_on_ui(wk.done, on_done, self)   # GUI thread — on_done touches widgets
         wk.done.connect(th.quit)
         th.finished.connect(wk.deleteLater)
         th.finished.connect(th.deleteLater)
