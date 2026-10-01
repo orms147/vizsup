@@ -220,7 +220,7 @@ class OpenAICompatTranslator(TranslationProvider):
         if not texts:
             return []
         cap = _completion_cap(len(texts))
-        resp = self._client().chat.completions.create(
+        resp = self._chat(
             model=self.model,
             temperature=0.3,
             max_tokens=cap,
@@ -236,7 +236,7 @@ class OpenAICompatTranslator(TranslationProvider):
         if not vi_texts:
             return []
         cap = _completion_cap(len(vi_texts))
-        resp = self._client().chat.completions.create(
+        resp = self._chat(
             model=self.model,
             temperature=0.3,
             max_tokens=cap,
@@ -254,7 +254,7 @@ class OpenAICompatTranslator(TranslationProvider):
         if not texts:
             return []
         cap = _completion_cap(len(texts))
-        resp = self._client().chat.completions.create(
+        resp = self._chat(
             model=self.model,
             temperature=0.2,
             max_tokens=cap,
@@ -267,10 +267,16 @@ class OpenAICompatTranslator(TranslationProvider):
         # fallback is the original OCR text, so a parse miss keeps it (never blanks a line)
         return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
 
+    def _chat(self, **kw):
+        """The ONE place a chat completion is sent. Subclasses override this to add
+        endpoint-specific request shaping (OpenRouter: reasoning control + model
+        fallback) without touching the four prompt builders that call it."""
+        return self._client().chat.completions.create(**kw)
+
     def rewrite(self, text: str, instruction: str, *, max_tokens: int = 300) -> str:
         """Single-shot rewrite (e.g. shorten a VI line to fit the dub slot).
         ``max_tokens`` lets a batched caller (API-5) size the cap to its chunk."""
-        resp = self._client().chat.completions.create(
+        resp = self._chat(
             model=self.model,
             temperature=0.4,
             max_tokens=max_tokens,

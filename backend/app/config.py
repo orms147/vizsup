@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     deepl_api_key: str = ""
     openrouter_api_key: str = ""
     openrouter_model: str = ""  # e.g. "deepseek/deepseek-chat-v3"; pick via Settings → Fetch models
+    # Time-boxed model (e.g. a free "stealth" model) used INSTEAD of openrouter_model
+    # until it expires; from that date on the app falls back on its own. The date is
+    # the first day it is NOT used — same meaning as OpenRouter's `expiration_date`.
+    openrouter_promo_model: str = ""
+    openrouter_promo_expires: str = ""  # YYYY-MM-DD; blank = no expiry
 
     # tts provider keys (edge-tts needs none)
     fpt_api_key: str = ""

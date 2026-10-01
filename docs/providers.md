@@ -9,7 +9,7 @@ web before relying on them — don't trust memory.
 | id | engine | key (env) | local | notes |
 |---|---|---|---|---|
 | `passthrough` | none (keeps CN) | — | ✓ | default; offline smoke-test only |
-| `openrouter` | **OpenRouter** (any model) | `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` | | one key → 340+ models. Pick the model in **Settings → Tải danh sách model** (live `/models` fetch, public). **Test kết nối** verifies the key. |
+| `openrouter` | **OpenRouter** (any model) | `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` (+ optional `OPENROUTER_PROMO_MODEL` / `OPENROUTER_PROMO_EXPIRES`) | | one key → 460+ models. Pick the model in **Settings → Tải danh sách model** (live `/models` fetch, public). **Test kết nối** verifies the key. Reasoning is switched off per request — see below. |
 | `deepseek` | DeepSeek-V4 Flash | `DEEPSEEK_API_KEY` | | `deepseek-v4-flash` ~$0.14/$0.28; best $/quality draft |
 | `deepseek-pro` | DeepSeek-V4 Pro | `DEEPSEEK_API_KEY` | | `deepseek-v4-pro` ~$0.435/$0.87; hard lines |
 | `claude` | Claude Sonnet 4.6 | `ANTHROPIC_API_KEY` | | `claude-sonnet-4-6`; best VI register → refine pass |
@@ -56,3 +56,22 @@ Claude + Gemini. The Settings dialog runs these on a background thread (no UI fr
 ## Adding a provider
 See the `/add-provider` skill: one file in `providers/{translation,tts,asr}/` + one line in `registry.py`.
 Optionally implement `list_models()` / `test_connection()` for the Settings dialog.
+
+## OpenRouter: reasoning models and time-boxed promo models
+
+**Reasoning is switched off on every OpenRouter request** (`reasoning: {effort: "none"}`).
+Many current models reason by default (deepseek-v4.1-flash does), and on OpenRouter those
+hidden tokens count against `max_tokens` — while `_completion_cap` budgets ~60 tokens per line
+of *visible* text. Measured 2026-10-01, 50-line batch, cap 3000: deepseek-v4.1-flash with no
+param was cut off at line 34; with `effort: "none"` it used 968 tokens and ran 2× faster.
+Endpoints that refuse (`400 Reasoning is mandatory`, e.g. `stealth/space-bunny-alpha`) are
+retried once with `effort: "minimal"` plus 2048 tokens of headroom, and remembered. Non-reasoning
+models ignore the param. The shaping lives in `OpenRouter._chat()`; the DeepSeek/Qwen direct
+providers do not send it (it is an OpenRouter extension).
+
+**Promo model.** `OPENROUTER_PROMO_MODEL` is used *instead of* `OPENROUTER_MODEL` until
+`OPENROUTER_PROMO_EXPIRES` (YYYY-MM-DD — the first day it is NOT used, same meaning as
+OpenRouter's `expiration_date` in `/models`). From that date the app falls back on its own; it also
+falls back, for the rest of the process, if the promo model answers "not found / no endpoints"
+early. A malformed date disables the promo rather than running it indefinitely.
+
