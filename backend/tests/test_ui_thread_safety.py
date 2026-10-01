@@ -97,12 +97,12 @@ def test_settings_background_callback_runs_on_the_gui_thread(qapp, tmp_path, mon
     """'Test kết nối' passes a lambda that updates a QLabel."""
     sd = pytest.importorskip("desktop.settings_dialog")
     monkeypatch.setattr(sd, "_ENV_PATH", tmp_path / ".env")
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     gui = threading.get_ident()
     seen: list = []
     dlg._bg(lambda: (True, "ok"), lambda res: seen.append((res, threading.get_ident())))
     _pump(qapp, lambda: bool(seen))
-    dlg.close()
+    dlg.shutdown()
 
     assert seen and seen[0][0] == (True, "ok") and seen[0][1] == gui
 

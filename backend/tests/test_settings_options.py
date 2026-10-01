@@ -68,7 +68,7 @@ def _set(dlg, env_name: str, value: str) -> None:
 # --- the fields exist ---------------------------------------------------------
 
 def test_every_documented_option_is_on_the_dialog(qapp, env):
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     assert set(dlg._opts) == {e for e, *_ in sd.OPTIONS}
     for name in ("YTDLP_COOKIES_FROM_BROWSER", "YTDLP_COOKIES_FILE", "VIZSUP_STORAGE_DIR",
                  "FFMPEG_PATH", "BBDOWN_PATH", "WHISPER_MODEL", "ZHIPU_MODEL"):
@@ -84,7 +84,7 @@ def test_every_option_maps_to_a_real_settings_attr(qapp, env):
 def test_fields_are_prefilled_from_current_settings(qapp, env, monkeypatch):
     monkeypatch.setattr(settings, "whisper_model", "small")
     monkeypatch.setattr(settings, "bbdown_path", "C:/tools/BBDown.exe")
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     assert dlg._opt_value("WHISPER_MODEL") == "small"
     assert dlg._opt_value("BBDOWN_PATH") == "C:/tools/BBDown.exe"
 
@@ -92,7 +92,7 @@ def test_fields_are_prefilled_from_current_settings(qapp, env, monkeypatch):
 # --- round-trip ---------------------------------------------------------------
 
 def test_options_round_trip_to_env_and_to_settings(qapp, env):
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     _set(dlg, "YTDLP_COOKIES_FROM_BROWSER", "edge")
     _set(dlg, "FFMPEG_PATH", "C:/ffmpeg/bin")
     _set(dlg, "WHISPER_MODEL", "medium")
@@ -114,7 +114,7 @@ def test_clearing_an_option_actually_clears_it(qapp, env, monkeypatch):
     """Blanking the cookie browser must mean 'no cookie browser'. Unlike API keys,
     an empty option is a real instruction, not an 'I left it alone'."""
     monkeypatch.setattr(settings, "ytdlp_cookies_from_browser", "chrome")
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     _set(dlg, "YTDLP_COOKIES_FROM_BROWSER", "")
     dlg._save()
 
@@ -125,7 +125,7 @@ def test_clearing_an_option_actually_clears_it(qapp, env, monkeypatch):
 def test_storage_dir_stays_a_path_object(qapp, env, tmp_path):
     """vizsup_storage_dir is typed Path — a str would break every `/` use of it."""
     target = tmp_path / "kho"
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     _set(dlg, "VIZSUP_STORAGE_DIR", str(target))
     dlg._save()
 
@@ -137,7 +137,7 @@ def test_storage_dir_stays_a_path_object(qapp, env, tmp_path):
 def test_blank_storage_dir_keeps_the_previous_one(qapp, env):
     """There is no sane 'no storage dir' — an empty box must not produce Path('')."""
     before = settings.vizsup_storage_dir
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     _set(dlg, "VIZSUP_STORAGE_DIR", "")
     dlg._save()
     assert settings.vizsup_storage_dir == before
@@ -145,7 +145,7 @@ def test_blank_storage_dir_keeps_the_previous_one(qapp, env):
 
 def test_saving_options_does_not_wipe_unrelated_env_lines(qapp, env):
     env.write_text("OPENROUTER_API_KEY=sk-keep-me\n# a comment\n", encoding="utf-8")
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     _set(dlg, "WHISPER_MODEL", "tiny")
     dlg._save()
 
@@ -159,7 +159,34 @@ def test_an_empty_api_key_does_not_erase_the_stored_one(qapp, env):
     """Keys keep the old behaviour: a blank field means 'unchanged', because the
     dialog shows them masked and a stray clear would lose the user's key."""
     env.write_text("DEEPSEEK_API_KEY=sk-secret\n", encoding="utf-8")
-    dlg = sd.SettingsDialog()
+    dlg = sd.SettingsView()
     dlg._fields["DEEPSEEK_API_KEY"].setText("")
     dlg._save()
     assert "DEEPSEEK_API_KEY=sk-secret" in env.read_text(encoding="utf-8")
+
+
+def test_promo_state_follows_the_translator_expiry_rule(qapp, env, monkeypatch):
+    """Unused FROM the expiry day on; a malformed date disables the promo."""
+    from datetime import date, timedelta
+
+    monkeypatch.setattr(settings, "openrouter_promo_model", "stealth/x")
+    view = sd.SettingsView()
+    _set(view, "OPENROUTER_PROMO_EXPIRES", date.today().isoformat())
+    view._mark_dirty()
+    assert "hết hạn" in view.promo_state.text()
+    _set(view, "OPENROUTER_PROMO_EXPIRES", (date.today() + timedelta(days=3)).isoformat())
+    view._mark_dirty()
+    assert view.promo_state.text().startswith("Đang dùng stealth/x")
+    _set(view, "OPENROUTER_PROMO_EXPIRES", "5/10")
+    view._mark_dirty()
+    assert "KHÔNG" in view.promo_state.text()
+
+
+def test_cancel_changes_restores_the_saved_values(qapp, env, monkeypatch):
+    monkeypatch.setattr(settings, "bbdown_path", "C:/a.exe")
+    view = sd.SettingsView()
+    _set(view, "BBDOWN_PATH", "C:/b.exe")
+    view._mark_dirty()
+    assert view.is_dirty()
+    view.cancel_btn.click()
+    assert view._opt_value("BBDOWN_PATH") == "C:/a.exe" and not view.is_dirty()

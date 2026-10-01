@@ -23,7 +23,7 @@ from desktop import paths  # noqa: F401
 from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.ui_thread import connect_on_ui
-from desktop.settings_dialog import SettingsDialog
+from desktop.settings_dialog import SettingsView
 from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
@@ -35,7 +35,7 @@ from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 from app.providers.registry import get_tts, list_providers  # noqa: E402
 
-INPUT, EDITOR, RENDER = 0, 1, 2
+INPUT, EDITOR, RENDER, SETTINGS = 0, 1, 2, 3
 
 
 class MainWindow(QMainWindow):
@@ -64,6 +64,9 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.input)
         self.stack.addWidget(self.editor)
         self.stack.addWidget(self.render)
+        self.settings_view = SettingsView()
+        self.stack.addWidget(self.settings_view)
+        self._before_settings = INPUT
         v.addWidget(self.stack, 1)
         v.addWidget(self.status)
 
@@ -85,6 +88,9 @@ class MainWindow(QMainWindow):
         self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
         self.input.settingsRequested.connect(self._open_settings)
+        self.settings_view.saved.connect(self._on_settings_saved)
+        self.settings_view.closed.connect(
+            lambda: self.stack.setCurrentIndex(self._before_settings))
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -104,7 +110,8 @@ class MainWindow(QMainWindow):
         ShortcutsDialog(self).exec()
 
     def _on_page(self, idx: int) -> None:
-        self.steps.set_active(idx)
+        if idx != SETTINGS:
+            self.steps.set_active(idx)
         self.nav.set_primary("Duyệt và dựng" if idx == EDITOR else None)
         self.nav.set_saved("saved" if idx == EDITOR else None)
         self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
@@ -410,6 +417,7 @@ class MainWindow(QMainWindow):
             self.editor.shutdown()  # join any preview/shorten task threads
             self.input.shutdown()   # recent-project summaries (thumbnails)
             self.render.shutdown()  # voice sample synthesis
+            self.settings_view.shutdown()  # connection tests / model list
         except Exception:  # noqa: BLE001
             pass
         e.accept()
@@ -428,12 +436,18 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.status.setText("● Đã lưu bảng thuật ngữ")
 
-    def _open_settings(self) -> None:
-        dlg = SettingsDialog(self)
-        if dlg.exec():
-            self.providers = list_providers()
-            self.input.refresh_providers(self.providers)  # newly-keyed providers become selectable
-            self.status.setText("● Đã lưu cài đặt")
+    def _open_settings(self, group: str = "keys") -> None:
+        if self.stack.currentIndex() == SETTINGS:
+            return
+        self._before_settings = self.stack.currentIndex()
+        self.settings_view.load_values()
+        self.settings_view.show_group(group if isinstance(group, str) else "keys")
+        self.stack.setCurrentIndex(SETTINGS)
+
+    def _on_settings_saved(self) -> None:
+        self.providers = list_providers()
+        self.input.refresh_providers(self.providers)  # newly-keyed providers become selectable
+        self.status.set_status("Đã lưu cài đặt", "ok")
 
 
 def _install_excepthook() -> None:
