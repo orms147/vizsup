@@ -84,3 +84,32 @@ def test_render_view_lock_toggles_controls(qapp):
     assert rv.render_btn.isEnabled()
     assert rv.back_btn.isEnabled()
     assert not rv.cancel_btn.isVisibleTo(rv)
+
+
+def test_render_view_locked_until_the_current_revision_is_approved(qapp):
+    """v2: an edit after approval re-locks Dựng video — the primary button asks for
+    approval instead of rendering (the worker would refuse anyway)."""
+    from desktop.views.render_view import RenderView
+
+    rv = RenderView()
+    renders, approvals = [], []
+    rv.renderRequested.connect(renders.append)
+    rv.approveRequested.connect(lambda: approvals.append(1))
+    rv.set_approved(False)
+    rv.render_btn.click()
+    assert approvals == [1] and renders == []
+    rv.set_approved(True)
+    rv.render_btn.click()
+    assert len(renders) == 1
+    assert renders[0]["audio_mode"] == "replace"
+
+
+def test_render_view_reopens_a_finished_project_on_its_result(qapp, tmp_path):
+    from app.models import Job
+    from desktop.views.render_view import RenderView
+
+    job = Job(id="done", work_dir=tmp_path / "done")
+    job.output_video.write_bytes(b"x")
+    rv = RenderView()
+    rv.set_job(job, cues=3)
+    assert rv._right_stack.currentIndex() == 2 and rv.render_btn.text() == "Dựng lại"

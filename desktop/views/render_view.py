@@ -1,250 +1,716 @@
-"""Screen 3 — Render / Export: voice + audio mix (replace / mix / duck) with
-volume control, then render → download. Subtitle styling now lives on Screen 2.
+"""Screen 3 — Dựng video (v2, appdesign/v2 "v2 — Dựng video"). Left: voice card,
+speaking speed, four audio-mode cards, volumes, Chinese-hardsub cover, and the
+sticky Dựng video button. Right: the source preview → a progress card while
+rendering → the finished Vietnamese video with Mở thư mục / Xuất .srt / .ass.
 
-Emits renderRequested(opts). The subtitle style/font/size are injected by
-MainWindow from the editor when the render starts.
+Rendering is locked until the CURRENT subtitle revision is approved (the worker
+re-checks; this only makes the state visible). Emits renderRequested(opts); the
+subtitle style/font/size are injected by MainWindow from the editor.
 """
 from __future__ import annotations
 
 import os
+import shutil
+import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QRadioButton,
+    QScrollArea,
+    QSlider,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.cuemodel import fmt_time
+from desktop.icons import icon, pixmap
+from desktop.theme import V2
+from desktop.ui_thread import BgRunner
+from desktop.widgets.chrome import ProjectBar, badge, button, icon_label, label
 from desktop.widgets.video_panel import VideoPanel
 
+try:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
-def _section(t: str) -> QLabel:
-    lb = QLabel(t.upper())
-    lb.setObjectName("section")
-    return lb
+    _HAVE_MM = True
+except Exception:  # noqa: BLE001
+    _HAVE_MM = False
+
+MODES = (("replace", "Mic", "Thay giọng gốc", "Chỉ nghe giọng Việt"),
+         ("mix", "Volume2", "Trộn hai giọng", "Giữ tiếng gốc nhẹ"),
+         ("duck", "SlidersHorizontal", "Giảm nền tự động", "Nền nhỏ khi có lời"),
+         ("keep_music", "Music2", "Giữ nhạc nền", "AI tách lời gốc"))
+COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
+          ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
+          ("Không che", "off"))
+SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của bạn."
+
+
+def _voice_name(v: str) -> str:
+    """vi-VN-HoaiMyNeural → Hoài My (edge ids), anything else unchanged."""
+    known = {"HoaiMy": "Hoài My", "NamMinh": "Nam Minh"}
+    core = v.replace("vi-VN-", "").replace("Neural", "")
+    return known.get(core, core or v)
+
+
+class ModeCard(QPushButton):
+    """A checkable card: icon · title · one-line description."""
+
+    def __init__(self, ic: str, title: str, desc: str) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("modeCard")
+        self.setMinimumHeight(54)
+        self.setStyleSheet(
+            f"QPushButton#modeCard{{text-align:left;background:{V2['panel']};"
+            f"border:1px solid {V2['line']};border-radius:7px;padding:0;min-height:54px;}}"
+            f"QPushButton#modeCard:hover{{border-color:#525161;}}"
+            f"QPushButton#modeCard:checked{{background:{V2['purple_soft']};"
+            f"border-color:{V2['purple_line']};}}")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(12, 8, 10, 8)
+        h.setSpacing(10)
+        self._ic = QLabel()
+        self._ic.setStyleSheet("background:transparent;")
+        self._icon_name = ic
+        h.addWidget(self._ic)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        self._title = QLabel(title)
+        self._desc = QLabel(desc)
+        for w in (self._title, self._desc):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        col.addWidget(self._title)
+        col.addWidget(self._desc)
+        h.addLayout(col, 1)
+        self._ic.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.toggled.connect(self._paint_state)
+        self._paint_state(False)
+
+    def _paint_state(self, on: bool) -> None:
+        c = V2["purple_bright"] if on else V2["secondary"]
+        self._ic.setPixmap(pixmap(self._icon_name, c, 16))
+        self._title.setStyleSheet(f"background:transparent;color:{c if on else V2['text']};"
+                                  f"font-size:12px;")
+        self._desc.setStyleSheet(f"background:transparent;color:{V2['muted']};font-size:10px;")
+
+
+class _StageRow(QWidget):
+    def __init__(self, num: int, name: str) -> None:
+        super().__init__()
+        self._num = num
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 4, 0, 4)
+        h.setSpacing(12)
+        self.dot = QLabel(str(num))
+        self.dot.setFixedSize(26, 26)
+        self.dot.setAlignment(Qt.AlignCenter)
+        h.addWidget(self.dot, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.name = label(name)
+        self.detail = label("Chờ đến lượt", "small")
+        col.addWidget(self.name)
+        col.addWidget(self.detail)
+        h.addLayout(col, 1)
+        self.set_state("wait")
+
+    def set_state(self, state: str, detail: str | None = None) -> None:
+        self.state = state
+        bg, line = {"done": (V2["green_soft"], V2["green"]),
+                    "active": (V2["purple_soft"], V2["purple"]),
+                    "error": (V2["red_soft"], V2["red"])}.get(state, (V2["raised"], V2["line"]))
+        self.dot.setStyleSheet(f"background:{bg};border:1px solid {line};border-radius:13px;"
+                               f"color:{V2['muted']};font-size:11px;")
+        ic = {"done": ("Check", V2["green"]), "active": ("LoaderCircle", V2["purple_bright"]),
+              "error": ("X", V2["red"])}.get(state)
+        if ic:
+            self.dot.setPixmap(pixmap(ic[0], ic[1], 13))
+        else:
+            self.dot.clear()
+            self.dot.setText(str(self._num))
+        self.name.setStyleSheet(f"color:{V2['muted'] if state == 'wait' else V2['text']};")
+        if detail is not None:
+            self.detail.setText(detail)
 
 
 class RenderView(QWidget):
     renderRequested = Signal(dict)
     backRequested = Signal()
     cancelRequested = Signal()
+    approveRequested = Signal()        # locked state → re-approve
 
     def __init__(self) -> None:
         super().__init__()
         self._out: str | None = None
+        self._job = None
         self._has_real_voices = False
-        root = QHBoxLayout(self)
+        self._tts = "edge"             # provider key (registry)
+        self._approved = True          # MainWindow sets the real state; worker re-checks
+        self._rendering = False
+        self._cues = 0
+        self._t0 = 0.0
+        self._bg = BgRunner(self)
+        self._tick = QTimer(self)
+        self._tick.setInterval(1000)
+        self._tick.timeout.connect(self._on_tick)
+        self._player = self._audio = None
+        if _HAVE_MM:
+            self._player = QMediaPlayer()
+            self._audio = QAudioOutput()
+            self._player.setAudioOutput(self._audio)
+
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        left = QWidget()
-        left.setObjectName("rail")
-        left.setFixedWidth(380)
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(22, 20, 18, 16)
-        ll.setSpacing(11)
-
-        self.back_btn = QPushButton("←  Quay lại sửa phụ đề")
-        self.back_btn.setObjectName("ghost")
+        self.project = ProjectBar()
+        self.approved_badge = badge("Phụ đề đã duyệt", "ok")
+        self.project.add_action(self.approved_badge)
+        self.back_btn = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         self.back_btn.clicked.connect(self.backRequested)
-        ll.addWidget(self.back_btn)
+        self.project.add_action(self.back_btn)
+        root.addWidget(self.project)
 
-        # --- voice ---
-        ll.addWidget(_section("Giọng lồng tiếng"))
+        body = QHBoxLayout()
+        body.setContentsMargins(18, 4, 18, 14)
+        body.setSpacing(14)
+        body.addWidget(self._left(), 0)
+        body.addWidget(self._right(), 1)
+        root.addLayout(body, 1)
+        self._update_lock()
+
+    # --- left: options ---------------------------------------------------------
+    def _left(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        panel.setFixedWidth(440)
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        inner = QWidget()
+        ll = QVBoxLayout(inner)
+        ll.setContentsMargins(16, 14, 16, 14)
+        ll.setSpacing(10)
+
+        ll.addWidget(label("Giọng lồng tiếng", "h3"))
+        card = QFrame()
+        card.setObjectName("inset")
+        ch = QHBoxLayout(card)
+        ch.setContentsMargins(10, 10, 10, 10)
+        ch.setSpacing(10)
+        mic = QLabel()
+        mic.setFixedSize(34, 34)
+        mic.setAlignment(Qt.AlignCenter)
+        mic.setPixmap(pixmap("Mic", V2["purple_bright"], 16))
+        mic.setStyleSheet(f"background:{V2['purple_soft']};border-radius:17px;")
+        ch.addWidget(mic)
+        vc = QVBoxLayout()
+        vc.setSpacing(3)
         self.voice = QComboBox()
-        ll.addLayout(self._row("Giọng", self.voice))
-        self.speed = QSlider_h(70, 140, 100)
-        self.speed_lbl = QLabel("1.00×")
-        self.speed_lbl.setObjectName("mono")
-        self.speed.valueChanged.connect(lambda v: self.speed_lbl.setText(f"{v/100:.2f}×"))
-        ll.addLayout(self._slider_row("Tốc độ nói", self.speed, self.speed_lbl))
+        self.voice_sub = label("Tiếng Việt", "small")
+        vc.addWidget(self.voice)
+        vc.addWidget(self.voice_sub)
+        ch.addLayout(vc, 1)
+        self.listen_btn = QPushButton()
+        self.listen_btn.setObjectName("icon")
+        self.listen_btn.setIcon(icon("Play", V2["secondary"], 16))
+        self.listen_btn.setIconSize(QSize(16, 16))
+        self.listen_btn.setFixedSize(34, 34)
+        self.listen_btn.setToolTip("Nghe thử giọng này (một câu mẫu)")
+        self.listen_btn.clicked.connect(self._listen)
+        ch.addWidget(self.listen_btn)
+        ll.addWidget(card)
+        self.speed, self.speed_lbl = self._slider(ll, "Tốc độ nói", 70, 140, 100,
+                                                  lambda v: f"{v / 100:.2f}×")
 
-        # --- audio mix ---
-        ll.addSpacing(6)
-        ll.addWidget(_section("Xử lý âm thanh"))
+        ll.addWidget(_hline())
+        ll.addWidget(label("Âm thanh bạn muốn nghe", "h3"))
+        grid = QGridLayout()
+        grid.setSpacing(8)
         self.audio_group = QButtonGroup(self)
-        self.rb_replace = QRadioButton("  Thay giọng gốc")
-        self.rb_mix = QRadioButton("  Trộn cùng giọng gốc")
-        self.rb_duck = QRadioButton("  Giảm nền tự động (duck)")
-        self.rb_keep_music = QRadioButton("  Thay lời + giữ nhạc (Demucs)")
-        self.rb_keep_music.setToolTip(
-            "Tách lời khỏi nhạc nền bằng Demucs, thay lời bằng bản lồng tiếng nhưng GIỮ nhạc/"
-            "hiệu ứng. Cần cài Demucs (.[audio]); nếu chưa tách được sẽ tự chuyển sang trộn.")
-        self.rb_replace.setChecked(True)
-        for rb in (self.rb_replace, self.rb_mix, self.rb_duck, self.rb_keep_music):
-            self.audio_group.addButton(rb)
-            ll.addWidget(rb)
-        self.rb_replace.toggled.connect(self._sync_audio_enabled)
-
-        self.orig_vol = QSlider_h(0, 150, 100)
-        self.orig_vol_lbl = QLabel("100%")
-        self.orig_vol_lbl.setObjectName("mono")
-        self.orig_vol.valueChanged.connect(lambda v: self.orig_vol_lbl.setText(f"{v}%"))
-        ll.addLayout(self._slider_row("Âm lượng gốc", self.orig_vol, self.orig_vol_lbl))
-
-        self.dub_vol = QSlider_h(50, 150, 100)
-        self.dub_vol_lbl = QLabel("100%")
-        self.dub_vol_lbl.setObjectName("mono")
-        self.dub_vol.valueChanged.connect(lambda v: self.dub_vol_lbl.setText(f"{v}%"))
-        ll.addLayout(self._slider_row("Âm lượng lồng tiếng", self.dub_vol, self.dub_vol_lbl))
+        self.audio_group.setExclusive(True)
+        self.mode_cards: dict[str, ModeCard] = {}
+        for i, (key, ic, title, desc) in enumerate(MODES):
+            mc = ModeCard(ic, title, desc)
+            if key == "keep_music":
+                mc.setToolTip("Tách lời khỏi nhạc nền bằng Demucs, thay lời bằng bản lồng tiếng "
+                              "nhưng GIỮ nhạc / hiệu ứng. Cần cài Demucs (.[audio]); nếu chưa tách "
+                              "được sẽ tự chuyển sang trộn.")
+            self.audio_group.addButton(mc)
+            self.mode_cards[key] = mc
+            grid.addWidget(mc, i // 2, i % 2)
+        self.mode_cards["replace"].setChecked(True)
+        self.audio_group.buttonToggled.connect(lambda *_: self._sync_audio_enabled())
+        ll.addLayout(grid)
+        self.orig_vol, self.orig_vol_lbl = self._slider(ll, "Âm lượng gốc", 0, 150, 100,
+                                                        lambda v: f"{v}%")
+        self.dub_vol, self.dub_vol_lbl = self._slider(ll, "Giọng tiếng Việt", 50, 150, 100,
+                                                      lambda v: f"{v}%")
         self._sync_audio_enabled()
 
-        # cover the original CN hardsubs (previously only reachable from the CLI)
-        ll.addSpacing(6)
+        ll.addWidget(_hline())
+        ll.addWidget(label("Che phụ đề Trung trên video gốc", "h3"))
         self.cover = QComboBox()
-        for label, key in (("Không che", "off"),
-                           ("Hộp mờ dưới phụ đề (che chắc)", "box"),
-                           ("Làm mờ dải dưới video (nhẹ nhàng)", "blur")):
-            self.cover.addItem(label, key)
-        ll.addLayout(self._row("Che phụ đề tiếng Trung gốc", self.cover))
-
+        for text, key in COVERS:
+            self.cover.addItem(text, key)
+        ll.addWidget(self.cover)
+        ll.addWidget(label("Xuất đúng kích thước video gốc. Kiểu chữ lấy từ màn Sửa phụ đề.",
+                           "small", wrap=True))
         ll.addStretch(1)
-        self.render_btn = QPushButton("⧉  Dựng video")
-        self.render_btn.setObjectName("primary")
-        self.render_btn.setFixedHeight(44)
-        self.render_btn.clicked.connect(self._emit_render)
-        ll.addWidget(self.render_btn)
-        # cancel is only visible while a render runs (see set_rendering); TTS stops
-        # between cues, a started ffmpeg pass runs to completion
-        self.cancel_btn = QPushButton("✕  Hủy dựng")
-        self.cancel_btn.setObjectName("danger")
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.clicked.connect(self.cancelRequested)
-        ll.addWidget(self.cancel_btn)
 
-        self.status = QLabel("Sẵn sàng dựng")
-        self.status.setObjectName("muted")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        v.addWidget(scroll, 1)
+
+        foot = QFrame()
+        foot.setObjectName("panelHead")
+        foot.setStyleSheet(f"QFrame#panelHead{{border-bottom:none;border-top:1px solid "
+                           f"{V2['line_soft']};}}")
+        fl = QVBoxLayout(foot)
+        fl.setContentsMargins(16, 12, 16, 12)
+        fl.setSpacing(8)
+        srow = QHBoxLayout()
+        self.gate_icon = icon_label("ShieldCheck", V2["secondary"], 15)
+        srow.addWidget(self.gate_icon)
+        self.gate_lbl = label("", "small")
+        self.gate_lbl.setWordWrap(True)
+        srow.addWidget(self.gate_lbl, 1)
+        fl.addLayout(srow)
+        self.render_btn = button("Dựng video", "MonitorPlay", variant="primary")
+        self.render_btn.setStyleSheet("QPushButton{min-height:40px;}")
+        self.render_btn.clicked.connect(self._on_primary)
+        fl.addWidget(self.render_btn)
+        self.again_lbl = label("Lần dựng sau chỉ tạo lại giọng cho câu đã sửa.", "small")
+        self.again_lbl.setVisible(False)
+        fl.addWidget(self.again_lbl)
+        v.addWidget(foot)
+        return panel
+
+    def _slider(self, parent: QVBoxLayout, title: str, lo: int, hi: int, val: int, fmt):
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        cap = label(title, "secondary")
+        cap.setFixedWidth(116)
+        s = QSlider(Qt.Horizontal)
+        s.setRange(lo, hi)
+        s.setValue(val)
+        lbl = label(fmt(val), "mono")
+        lbl.setFixedWidth(46)
+        lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        s.valueChanged.connect(lambda v: lbl.setText(fmt(v)))
+        row.addWidget(cap)
+        row.addWidget(s, 1)
+        row.addWidget(lbl)
+        parent.addLayout(row)
+        return s, lbl
+
+    # --- right: preview | progress | result ------------------------------------------
+    def _right(self) -> QWidget:
+        w = QWidget()
+        self._right_stack = QStackedLayout(w)
+
+        # 0 — preview of the source with the export-styled subtitle
+        prev = QWidget()
+        pv = QVBoxLayout(prev)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        self.preview = VideoPanel("Video nguồn")
+        pv.addWidget(self.preview, 1)
+        self._right_stack.addWidget(prev)
+
+        # 1 — progress card
+        prog = QFrame()
+        prog.setObjectName("panel")
+        pl = QVBoxLayout(prog)
+        pl.setContentsMargins(0, 0, 0, 0)
+        head = QFrame()
+        head.setObjectName("panelHead")
+        hh = QHBoxLayout(head)
+        hh.setContentsMargins(14, 9, 10, 9)
+        hh.addWidget(label("Tiến độ dựng video", "h3"))
+        hh.addStretch(1)
+        hh.addWidget(badge("Có thể hủy", "purple"))
+        pl.addWidget(head)
+        center = QHBoxLayout()
+        center.addStretch(1)
+        card = QFrame()
+        card.setObjectName("raised")
+        card.setFixedWidth(420)
+        card.setStyleSheet(f"QFrame#raised{{background:{V2['panel']};border:1px solid "
+                           f"{V2['line']};border-radius:10px;}}")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(22, 20, 22, 18)
+        cv.setSpacing(10)
+        th = QHBoxLayout()
+        self.p_title = label("Đang chuẩn bị…", "h2")
+        self.p_badge = badge("0%", "purple")
+        th.addWidget(self.p_title, 1)
+        th.addWidget(self.p_badge, 0, Qt.AlignTop)
+        cv.addLayout(th)
+        self.p_detail = label("", "small")
+        self.p_detail.setWordWrap(True)
+        cv.addWidget(self.p_detail)
         self.bar = QProgressBar()
-        self.bar.setVisible(False)
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        cv.addWidget(self.bar)
+        self.stage_rows = {"separate": _StageRow(1, "Tách nhạc nền"),
+                           "tts": _StageRow(2, "Lồng tiếng"),
+                           "assemble": _StageRow(3, "Dựng MP4")}
+        for r in self.stage_rows.values():
+            cv.addWidget(r)
         self.log = QPlainTextEdit()
         self.log.setObjectName("mono")
         self.log.setReadOnly(True)
-        self.log.setFixedHeight(120)
+        self.log.setFixedHeight(110)
         self.log.setVisible(False)
-        self.open_btn = QPushButton("📂  Mở thư mục chứa video")
-        self.open_btn.setObjectName("ghost")
-        self.open_btn.setVisible(False)
+        cv.addWidget(self.log)
+        fr = QHBoxLayout()
+        self.elapsed = label("Đã chạy 00:00", "mono")
+        fr.addWidget(self.elapsed)
+        log_btn = button("Chi tiết", "ChevronDown", variant="ghost", small=True, checkable=True)
+        log_btn.toggled.connect(self.log.setVisible)
+        fr.addWidget(log_btn)
+        fr.addStretch(1)
+        # cancel is only visible while a render runs (see set_rendering); TTS stops
+        # between cues, a started ffmpeg pass runs to completion
+        self.cancel_btn = button("Hủy", "X")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancelRequested)
+        fr.addWidget(self.cancel_btn)
+        cv.addLayout(fr)
+        center.addWidget(card)
+        center.addStretch(1)
+        mid = QVBoxLayout()
+        mid.addStretch(1)
+        mid.addLayout(center)
+        mid.addStretch(1)
+        pl.addLayout(mid, 1)
+        self.status = label("Kết quả sẽ được lưu vào thư mục của dự án.", "small")
+        st = QFrame()
+        st.setObjectName("panelHead")
+        st.setStyleSheet(f"QFrame#panelHead{{border-bottom:none;border-top:1px solid "
+                         f"{V2['line_soft']};}}")
+        sl = QHBoxLayout(st)
+        sl.setContentsMargins(14, 10, 14, 10)
+        sl.addWidget(self.status, 1)
+        pl.addWidget(st)
+        self._right_stack.addWidget(prog)
+
+        # 2 — result
+        res = QWidget()
+        rv = QVBoxLayout(res)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
+        ok = QFrame()
+        ok.setObjectName("successCard")
+        ok.setStyleSheet(f"QFrame#successCard{{background:{V2['green_soft']};border:1px solid "
+                         f"#2e5244;border-bottom-left-radius:0;border-bottom-right-radius:0;}}")
+        oh = QHBoxLayout(ok)
+        oh.setContentsMargins(14, 10, 14, 10)
+        oh.setSpacing(10)
+        oh.addWidget(icon_label("CircleCheck", V2["green"], 18))
+        oc = QVBoxLayout()
+        oc.setSpacing(1)
+        t = label("Video tiếng Việt đã sẵn sàng", "h3")
+        t.setStyleSheet(f"color:{V2['green']};background:transparent;")
+        self.out_meta = label("", "mono")
+        oc.addWidget(t)
+        oc.addWidget(self.out_meta)
+        oh.addLayout(oc, 1)
+        saved = label("Đã lưu", "small")
+        saved.setStyleSheet(f"color:{V2['green']};background:transparent;")
+        oh.addWidget(saved)
+        rv.addWidget(ok)
+        self.result = VideoPanel("Bản tiếng Việt")
+        rv.addWidget(self.result, 1)
+        acts = QFrame()
+        acts.setObjectName("panel")
+        al = QHBoxLayout(acts)
+        al.setContentsMargins(14, 10, 14, 10)
+        al.setSpacing(8)
+        self.open_btn = button("Mở thư mục", "FolderOpen", variant="primary")
         self.open_btn.clicked.connect(self._open_folder)
-        for w in (self.status, self.bar, self.log, self.open_btn):
-            ll.addWidget(w)
+        srt = button("Xuất .srt", "Download")
+        srt.clicked.connect(lambda: self._export("srt"))
+        ass = button("Xuất .ass", "Download")
+        ass.clicked.connect(lambda: self._export("ass"))
+        back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
+        back.clicked.connect(self.backRequested)
+        for b in (self.open_btn, srt, ass, back):
+            al.addWidget(b)
+        al.addStretch(1)
+        rv.addSpacing(8)
+        rv.addWidget(acts)
+        self._right_stack.addWidget(res)
+        return w
 
-        # right preview
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(20, 20, 20, 20)
-        rl.addWidget(_section("Xem trước"))
-        self.preview = VideoPanel()
-        rl.addWidget(self.preview, 1)
+    # --- state ---------------------------------------------------------------------
+    def set_project(self, title: str, meta: str) -> None:
+        self.project.set_project(title, meta)
 
-        root.addWidget(left)
-        root.addWidget(right, 1)
+    def set_job(self, job, *, cues: int, tts: str = "") -> None:
+        if job is not self._job:
+            self._out = None
+            out = getattr(job, "output_video", None)
+            if out is not None and Path(out).exists():
+                self._out = str(out)
+                self.result.load(Path(out))
+            self.again_lbl.setVisible(bool(self._out))
+            self._right_stack.setCurrentIndex(2 if self._out else 0)
+        self._job = job
+        self._cues = cues
+        if tts:
+            self._tts = tts
+            self.voice_sub.setText(f"Tiếng Việt · {tts}")
+        self._update_lock()
 
-    # --- layout helpers ------------------------------------------------------
-    def _row(self, label: str, w: QWidget) -> QVBoxLayout:
-        box = QVBoxLayout()
-        box.setSpacing(3)
-        box.addWidget(QLabel(label))
-        box.addWidget(w)
-        return box
+    def set_approved(self, on: bool) -> None:
+        self._approved = on
+        self._update_lock()
 
-    def _slider_row(self, label: str, slider, value_lbl: QLabel) -> QVBoxLayout:
-        head = QHBoxLayout()
-        head.addWidget(QLabel(label))
-        head.addStretch(1)
-        head.addWidget(value_lbl)
-        box = QVBoxLayout()
-        box.setSpacing(3)
-        box.addLayout(head)
-        box.addWidget(slider)
-        return box
+    def _update_lock(self) -> None:
+        ok = self._approved
+        self.approved_badge.setText("Phụ đề đã duyệt" if ok else "Chưa duyệt bản mới nhất")
+        self.approved_badge.setObjectName("badgeOk" if ok else "badgeWarn")
+        self.approved_badge.style().unpolish(self.approved_badge)
+        self.approved_badge.style().polish(self.approved_badge)
+        n = f"{self._cues} câu" if self._cues else "phụ đề"
+        self.gate_lbl.setText(f"Đã duyệt {n} · giọng được lưu để dùng lại" if ok else
+                              "Phụ đề đã sửa sau khi duyệt — duyệt lại trước khi tạo giọng.")
+        self.gate_icon.setPixmap(pixmap("ShieldCheck" if ok else "LockKeyhole",
+                                        V2["secondary"] if ok else V2["amber"], 15))
+        if not self._rendering:
+            self.render_btn.setText(("Dựng lại" if self._out else "Dựng video") if ok else
+                                    "Duyệt phụ đề")
+            self.render_btn.setIcon(icon("MonitorPlay" if ok else "ShieldCheck", "#ffffff", 16))
+        self.listen_btn.setEnabled(ok)
+        self.listen_btn.setToolTip("Nghe thử giọng này (một câu mẫu)" if ok else
+                                   "Duyệt phụ đề trước khi tạo giọng")
 
     def _sync_audio_enabled(self) -> None:
-        keep = not self.rb_replace.isChecked()
+        keep = self._audio_mode() != "replace"
         self.orig_vol.setEnabled(keep)
         self.orig_vol_lbl.setEnabled(keep)
 
     def _audio_mode(self) -> str:
-        if self.rb_mix.isChecked():
-            return "mix"
-        if self.rb_duck.isChecked():
-            return "duck"
-        if self.rb_keep_music.isChecked():
-            return "keep_music"
+        for key, card in self.mode_cards.items():
+            if card.isChecked():
+                return key
         return "replace"
 
-    # --- public API ----------------------------------------------------------
     def set_voices(self, voices: list[str]) -> None:
         self.voice.clear()
         self._has_real_voices = bool(voices)
-        self.voice.addItems(voices or ["(mặc định)"])
+        for v in voices or ["(mặc định)"]:
+            self.voice.addItem(_voice_name(v) if voices else v, v)
 
     def set_rendering(self, on: bool) -> None:
         """Lock/unlock this screen around a render run. Every exit path (done,
         failed, cancelled) unlocks via MainWindow._on_finished — one point, so
         the app can't soft-lock."""
+        self._rendering = on
         self.render_btn.setEnabled(not on)
         self.back_btn.setEnabled(not on)
         self.cancel_btn.setVisible(on)
         self.cancel_btn.setEnabled(on)
+        if on:
+            self._right_stack.setCurrentIndex(1)
+            self.render_btn.setText("Đang xử lý…")
+            self.render_btn.setIcon(icon("LoaderCircle", "#ffffff", 16))
+        else:
+            self._tick.stop()
+            self._update_lock()
 
     def set_preview(self, video_path: Path, cues: list | None = None) -> None:
         self.preview.load(video_path)
         if cues is not None:
             self.preview.set_cues(cues)
+        if self._right_stack.currentIndex() == 1:
+            return
+        self._right_stack.setCurrentIndex(2 if self._out and Path(self._out).exists() else 0)
+
+    def set_style(self, style: dict, size_px: int, font: str) -> None:
+        self.preview.set_style(style, size_px, font)
+
+    def _on_primary(self) -> None:
+        if not self._approved:
+            self.approveRequested.emit()
+            return
+        self._emit_render()
 
     def _emit_render(self) -> None:
         speed = self.speed.value() / 100.0
         opts = {
             # the "(mặc định)" placeholder is UI text, not a voice id — sending it
             # to edge-tts as a literal voice name broke every render without voices()
-            "voice": self.voice.currentText() if self._has_real_voices else None,
+            "voice": self.voice.currentData() if self._has_real_voices else None,
             "rate": f"{int(round((speed - 1) * 100)):+d}%",
             "audio_mode": self._audio_mode(),
             "orig_volume": self.orig_vol.value() / 100.0,
             "dub_volume": self.dub_vol.value() / 100.0,
             "cover_mode": self.cover.currentData(),
         }
-        self.bar.setVisible(True)
-        self.log.setVisible(True)
-        self.render_btn.setEnabled(False)
+        self._start_progress(opts)
         self.renderRequested.emit(opts)
 
-    # --- progress API --------------------------------------------------------
+    def _start_progress(self, opts: dict) -> None:
+        self.log.clear()
+        self.preview.pause()
+        self.result.pause()
+        self._t0 = time.monotonic()
+        self._tick.start()
+        self.bar.setValue(0)
+        self.p_badge.setText("0%")
+        self.p_title.setText("Đang chuẩn bị…")
+        self.p_detail.setText("")
+        keep = opts.get("audio_mode") == "keep_music"
+        self.stage_rows["separate"].setVisible(keep)
+        self.stage_rows["tts"]._num = 2 if keep else 1
+        self.stage_rows["assemble"]._num = 3 if keep else 2
+        for r in self.stage_rows.values():
+            r.set_state("wait", "Chờ đến lượt")
+        self.status.setText("Kết quả sẽ được lưu vào thư mục của dự án.")
+        self._right_stack.setCurrentIndex(1)
+        if keep:
+            self.stage_rows["separate"].set_state("active", "Đang tách nhạc nền (Demucs)…")
+
+    # --- progress API (driven by MainWindow) --------------------------------------
+    def set_stage(self, key: str) -> None:
+        order = ["separate", "tts", "assemble"]
+        if key not in order:
+            return
+        for k in order[:order.index(key)]:
+            r = self.stage_rows[k]
+            if r.state in ("active", "wait") and r.isVisibleTo(self):
+                r.set_state("done", "Hoàn tất")
+        voice = self.voice.currentText()
+        if key == "tts":
+            self.p_title.setText("Đang tạo giọng tiếng Việt")
+            self.stage_rows["tts"].set_state("active", f"{self._cues or '…'} câu · {voice}")
+            self.stage_rows["assemble"].set_state("wait", "Chờ tạo giọng xong")
+        elif key == "assemble":
+            self.p_title.setText("Đang dựng MP4")
+            self.stage_rows["tts"].set_state("done", "Hoàn tất")
+            self.stage_rows["assemble"].set_state("active", "Ghép giọng, phụ đề và video")
+
     def set_progress(self, frac: float, msg: str) -> None:
-        self.bar.setValue(int(frac * 100))
-        self.status.setText(msg)
+        pct = int(frac * 100)
+        self.bar.setValue(pct)
+        self.p_badge.setText(f"{pct}%")
+        self.p_detail.setText(msg)
 
     def append_log(self, line: str) -> None:
         self.log.appendPlainText(line)
+        if line.startswith("↷"):
+            self.p_detail.setText(line.lstrip("↷ ").strip())
+
+    def set_cancelling(self) -> None:
+        self.status.setText("Đang hủy… (TTS dừng giữa câu; ffmpeg đã chạy thì chạy nốt)")
+        self.cancel_btn.setEnabled(False)
+        self.append_log("⏳ Đang hủy…")
 
     def show_done(self, path: str) -> None:
         self._out = path
-        self.status.setText(f"✓ Hoàn tất: {Path(path).name}")
-        self.open_btn.setVisible(True)
+        self._tick.stop()
+        size = ""
+        try:
+            size = f"{os.path.getsize(path) / 1e6:.1f} MB".replace(".", ",")
+        except OSError:
+            pass
+        dur = fmt_time(self.preview.duration(), 0) if self.preview.duration() else ""
+        self.out_meta.setText(" · ".join(p for p in (Path(path).name, dur, size) if p))
+        self.result.load(Path(path))
+        self._right_stack.setCurrentIndex(2)
+        self.again_lbl.setVisible(True)
         self.render_btn.setEnabled(True)
-        self.set_preview(Path(path))
+        self._update_lock()
 
     def show_error(self, msg: str) -> None:
-        self.status.setText(f"Lỗi: {msg}")
+        self._tick.stop()
+        cancelled = msg.strip().startswith("Đã hủy")
+        for r in self.stage_rows.values():
+            if r.state == "active":
+                r.set_state("wait" if cancelled else "error",
+                            "Đã dừng — bấm Dựng video để tiếp tục" if cancelled else "Lỗi ở bước này")
+        self.p_title.setText("Đã dừng" if cancelled else "Chưa dựng được video")
+        self.p_badge.setText("Đã dừng" if cancelled else "Lỗi")
+        self.p_detail.setText("Giọng đã tạo được giữ lại." if cancelled else msg)
+        self.status.setText("Các câu đã tạo giọng được giữ lại cho lần dựng sau.")
         self.append_log(f"✕ {msg}")
         self.render_btn.setEnabled(True)
+
+    def _on_tick(self) -> None:
+        self.elapsed.setText(f"Đã chạy {fmt_time(time.monotonic() - self._t0, 0)}")
+
+    # --- actions ------------------------------------------------------------------
+    def _listen(self) -> None:
+        if self._player is None or not self._approved:
+            return
+        from app.providers.registry import get_tts
+
+        voice = self.voice.currentData() if self._has_real_voices else None
+        rate = f"{int(round((self.speed.value() / 100 - 1) * 100)):+d}%"
+        tts = self._tts
+        out = Path(self._job.work_dir if self._job else ".") / "_voice_sample.mp3"
+        self.listen_btn.setEnabled(False)
+
+        def work():
+            get_tts(tts).synthesize(SAMPLE, out, voice=voice, rate=rate)
+            return str(out)
+
+        def done(p):
+            from PySide6.QtCore import QUrl
+
+            self.listen_btn.setEnabled(True)
+            self._player.setSource(QUrl.fromLocalFile(p))
+            self._player.play()
+
+        def fail(msg):
+            self.listen_btn.setEnabled(True)
+            self.status.setText(f"Không nghe thử được: {msg}")
+
+        self._bg.run(work, done, fail)
+
+    def _export(self, kind: str) -> None:
+        if self._job is None:
+            return
+        src = self._job.vi_srt if kind == "srt" else self._job.subs_ass
+        if not src.exists():
+            self.status.setText("Chưa có tệp .ass — dựng video trước.")
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, f"Xuất .{kind}", str(Path.home() / f"vi.{kind}"),
+                                            f"*.{kind}")
+        if fn:
+            shutil.copyfile(src, fn)
 
     def _open_folder(self) -> None:
         if self._out and os.path.exists(self._out):
             os.startfile(os.path.dirname(self._out))  # noqa: S606 (Windows)
 
+    def shutdown(self) -> None:
+        self._bg.shutdown()
 
-def QSlider_h(lo: int, hi: int, val: int):
-    from PySide6.QtWidgets import QSlider
-    s = QSlider(Qt.Horizontal)
-    s.setRange(lo, hi)
-    s.setValue(val)
-    return s
+
+def _hline() -> QFrame:
+    f = QFrame()
+    f.setFixedHeight(1)
+    f.setStyleSheet(f"background:{V2['line_soft']};")
+    return f

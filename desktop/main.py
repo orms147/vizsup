@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self.render.renderRequested.connect(self._start_render)
         self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
+        self.render.approveRequested.connect(self._approve)
         self.editor.previewStyleRequested.connect(self._preview_style)
         self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
@@ -108,6 +109,13 @@ class MainWindow(QMainWindow):
         self.nav.set_saved("saved" if idx == EDITOR else None)
         self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
                               if idx == EDITOR else [])
+        if idx != EDITOR:
+            self.editor.video.pause()
+        if idx != RENDER:
+            self.render.preview.pause()
+            self.render.result.pause()
+        elif self.job is not None:
+            self._sync_render_page()   # an edit after approval re-locks Dựng video
 
     # --- gate run ------------------------------------------------------------
     def _start_gate(self, opts: dict) -> None:
@@ -224,10 +232,29 @@ class MainWindow(QMainWindow):
                 self.editor.refresh_approval()
                 self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
             self.render.set_voices(voices)
+            self._sync_render_page()
             self.render.set_preview(self.job.source_video, self.editor.cues)  # show VI caption bar in step 3
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    def _sync_render_page(self) -> None:
+        """Render page mirrors the editor's project + the backend approval state."""
+        from app.pipeline import approval
+
+        if self.job is None:
+            return
+        self.render.set_project(self.editor.project.title.toolTip() or self.job.id,
+                                self.editor.project.meta.text())
+        self.render.set_job(self.job, cues=len(self.editor.cues),
+                            tts=self.opts.get("tts") or settings.vizsup_default_tts)
+        self.render.set_approved(approval.is_approved(self.job))
+        self.render.set_style(self.editor.get_style(), self.editor.get_size_px(),
+                              self.editor.get_font())
+
+    def _on_render_stage(self, s: str) -> None:
+        self.render.append_log(f"• {s}")
+        self.render.set_stage(s)
 
     def _preview_style(self) -> None:
         """Burn the editor's chosen style onto one frame (off the UI thread) and
@@ -293,7 +320,7 @@ class MainWindow(QMainWindow):
         }
         self._set_render_locked(True)
         self._run("run_render", merged, {
-            "stage_started": lambda s: self.render.append_log(f"• {s}"),
+            "stage_started": self._on_render_stage,
             "progress": self.render.set_progress,
             "log": self.render.append_log,
             "failed": self.render.show_error,
@@ -310,8 +337,7 @@ class MainWindow(QMainWindow):
     def _cancel_render(self) -> None:
         if self._busy() and self._worker:
             self._worker.cancel()
-            self.render.status.setText("Đang hủy… (TTS dừng giữa câu; ffmpeg đã chạy thì chạy nốt)")
-            self.render.append_log("⏳ Đang hủy…")
+            self.render.set_cancelling()
 
     # --- worker plumbing -----------------------------------------------------
     def _run(self, method: str, opts: dict, connections: dict) -> None:
@@ -383,6 +409,7 @@ class MainWindow(QMainWindow):
         try:
             self.editor.shutdown()  # join any preview/shorten task threads
             self.input.shutdown()   # recent-project summaries (thumbnails)
+            self.render.shutdown()  # voice sample synthesis
         except Exception:  # noqa: BLE001
             pass
         e.accept()
