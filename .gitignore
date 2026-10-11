@@ -36,6 +36,12 @@ storage/
 # backend/scripts/make_fixtures.py.
 samples/*
 !samples/.gitkeep
+# Design mock-ups: frames cut from real (copyrighted) Douyin videos stay local —
+# regenerate with appdesign/v2/build_assets.py. Only the frame-free Settings shots
+# are committed.
+appdesign/v2/assets/*.jpg
+appdesign/v2/screenshots/*
+!appdesign/v2/screenshots/*-settings.jpg
 !samples/refs/
 samples/refs/*
 !samples/refs/*.srt
