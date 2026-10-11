@@ -70,6 +70,7 @@ class CueInspector(QFrame):
     timeTyped = Signal(str, float)
     lockToggled = Signal(bool)
     lineBreakRequested = Signal()
+    autoSnapRequested = Signal()       # "Tự canh" — snap this cue's edges to the voice
     shortenRequested = Signal()
     listenRequested = Signal()
     glossaryRequested = Signal()
@@ -209,7 +210,9 @@ class CueInspector(QFrame):
         lay.addLayout(grid)
 
         cap = QHBoxLayout()
-        cap.addWidget(label("Canh nhanh ±50 / 200 ms", "small"))
+        self.snap_btn = button("Tự canh   A", "Sparkles", variant="ghost", small=True)
+        self.snap_btn.clicked.connect(self.autoSnapRequested)
+        cap.addWidget(self.snap_btn)
         cap.addStretch(1)
         self.play_lbl = label("Đang phát 00:00.00", "small")
         cap.addWidget(self.play_lbl)
@@ -400,7 +403,18 @@ class CueInspector(QFrame):
         self._apply_lock(on)
         self.lockToggled.emit(on)
 
+    def set_snap_available(self, on: bool, why: str = "") -> None:
+        """Voice spans loaded? (EditorView, after app.pipeline.vad)"""
+        self._snap_ok, self._snap_why = on, why
+        self._apply_lock(self.lock_cb.isChecked())
+
     def _apply_lock(self, on: bool) -> None:
+        ok = getattr(self, "_snap_ok", False)
+        self.snap_btn.setEnabled(ok and not on)
+        self.snap_btn.setToolTip(
+            "Câu đang khóa timing" if on and ok else
+            "Dời đầu / cuối câu tới chỗ giọng nói bắt đầu / dừng (tối đa ~1 s) — phím A"
+            if ok else (getattr(self, "_snap_why", "") or "Đang phân tích giọng nói…"))
         for b in self.nudge_btns:
             b.setEnabled(not on)
         for b in self.edge_btns.values():

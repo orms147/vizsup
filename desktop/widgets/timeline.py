@@ -44,6 +44,7 @@ class Timeline(QWidget):
         self._cues: list[EditorCue] = []
         self._issues: list[list[str]] = []
         self._peaks: list[float] = []
+        self._speech: list[tuple[float, float]] = []   # VAD spans (green band)
         self._per_sec = 50
         self._video_dur = 0.0
         self._dur = 1.0
@@ -66,6 +67,11 @@ class Timeline(QWidget):
 
     def set_peaks(self, peaks: list[float], per_sec: int = 50) -> None:
         self._peaks, self._per_sec = peaks or [], per_sec
+        self.update()
+
+    def set_speech(self, spans: list[tuple[float, float]] | None) -> None:
+        """Where the voice is (app.pipeline.vad) — drawn under the waveform."""
+        self._speech = list(spans or [])
         self.update()
 
     def set_duration(self, seconds: float) -> None:
@@ -119,6 +125,7 @@ class Timeline(QWidget):
         p.fillRect(clip, _c(V2["panel"]))
         self._paint_ruler(p, clip)
         self._paint_wave(p, clip)
+        self._paint_speech(p, clip)
         self._paint_blocks(p, clip)
         self._paint_playhead(p)
 
@@ -160,6 +167,18 @@ class Timeline(QWidget):
             p.setBrush(_c("#8d8ea3") if x <= played_x else _c("#4b4c5c"))
             p.drawRoundedRect(QRectF(x, mid - h, bw, h * 2), 1, 1)
             x += step
+
+    def _paint_speech(self, p: QPainter, clip) -> None:
+        if not self._speech:
+            return
+        y = RULER_H + WAVE_H - 2
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(V2["green"], 150))
+        for a, b in self._speech:
+            x0, x1 = a * self._pps, b * self._pps
+            if x1 < clip.left() or x0 > clip.right():
+                continue
+            p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0), 3), 1.5, 1.5)
 
     def _peak_at(self, t: float, span: float) -> float | None:
         if not self._peaks:
@@ -290,6 +309,7 @@ class TimelinePanel(QFrame):
     Timeline. Keeps the playhead in view while playing ("follow")."""
 
     fitRequested = Signal()
+    snapAllRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -310,6 +330,12 @@ class TimelinePanel(QFrame):
                               tip="Phóng vừa câu đang chọn")
         self.fit_btn.clicked.connect(self.fitRequested)
         h.addWidget(self.fit_btn)
+        self.snap_all_btn = button("Tự canh tất cả", "Sparkles", variant="ghost", small=True,
+                                   tip="Canh đầu / cuối mọi câu theo giọng nói (Shift+A) — "
+                                       "vạch xanh dưới sóng âm là chỗ có giọng")
+        self.snap_all_btn.setEnabled(False)
+        self.snap_all_btn.clicked.connect(self.snapAllRequested)
+        h.addWidget(self.snap_all_btn)
         zo = icon_button("Minimize2", "Thu nhỏ (Ctrl + cuộn)")
         self.zoom = QSlider(Qt.Horizontal)
         self.zoom.setRange(0, 100)

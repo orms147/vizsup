@@ -354,7 +354,12 @@ class InputView(QWidget):
         self.ocr_proofread = QCheckBox("AI sửa lỗi OCR")
         self.ocr_proofread.setToolTip("Một lượt sửa lỗi nhận dạng cho chữ Trung (chỉ gửi chữ, "
                                       "không gửi hình). Tốn thêm API.")
-        g.addWidget(self.auto_context, 5, 0, 1, 2)
+        self.auto_snap = QCheckBox("Tự canh lời theo giọng nói")
+        self.auto_snap.setToolTip(
+            "Sau khi có phụ đề tiếng Trung, dời đầu / cuối mỗi câu tới chỗ giọng nói bắt đầu / "
+            "dừng (tối đa ~1 s). Chạy trên máy (Silero VAD), không gửi âm thanh đi đâu.")
+        g.addWidget(self.auto_context, 5, 0)
+        g.addWidget(self.auto_snap, 5, 1)
         g.addWidget(self.extract_terms, 6, 0)
         g.addWidget(self.ocr_proofread, 6, 1)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
@@ -385,6 +390,7 @@ class InputView(QWidget):
         self.ocr_proofread.setChecked(bool(st.get("ocr_proofread")))
         self.extract_terms.setChecked(bool(st.get("extract_terms")))
         self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
+        self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -460,6 +466,7 @@ class InputView(QWidget):
             "ocr_proofread": self.ocr_proofread.isChecked(),
             "extract_terms": self.extract_terms.isChecked(),
             "auto_context": self.auto_context.isChecked(),
+            "auto_snap": self.auto_snap.isChecked(),
         }
         note = self.context_note.toPlainText().strip()
         if note:

@@ -76,6 +76,7 @@ class EditorView(QWidget):
         self.cues: list[EditorCue] = []
         self.issues: list[list[str]] = []
         self._spans: tuple[list, list] = ([], [])   # (ocr, glossary) flag spans
+        self._speech: list | None = None   # voice spans (app.pipeline.vad) for "Tự canh"
         self._ctx: dict = {}          # tts/voice/translator context from step 1
         self._sel: int = -1           # selected cue index
         self._following = False       # selection driven by playback, not the user
@@ -159,6 +160,7 @@ class EditorView(QWidget):
         cl.mergeRequested.connect(self._merge)
         cl.addRequested.connect(self._add)
         cl.deleteRequested.connect(self._delete)
+        cl.snapAllRequested.connect(self._auto_snap_all)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -173,6 +175,7 @@ class EditorView(QWidget):
         ins.timeTyped.connect(self._type_time)
         ins.lockToggled.connect(self._on_lock)
         ins.lineBreakRequested.connect(self._line_break)
+        ins.autoSnapRequested.connect(self._auto_snap_selected)
         ins.shortenRequested.connect(self._shorten)
         ins.listenRequested.connect(self._preview_dub)
         ins.glossaryRequested.connect(self.glossaryRequested)
@@ -186,6 +189,7 @@ class EditorView(QWidget):
         tl.cueChanged.connect(self._on_cue_dragged)
         tl.dragFinished.connect(lambda _i: self._refresh_issues())
         self.timeline_panel.fitRequested.connect(self._fit_selection)
+        self.timeline_panel.snapAllRequested.connect(self._auto_snap_all)
 
         vid.positionChanged.connect(self._on_position)
         vid.durationChanged.connect(self._on_duration)
@@ -226,6 +230,8 @@ class EditorView(QWidget):
         sc("]", lambda: self._set_edge("end"))
         sc("S", self._split)
         sc("M", self._merge)
+        sc("A", self._auto_snap_selected)
+        sc("Shift+A", self._auto_snap_all)
         sc("F8", lambda: self._goto_pending(+1))
         sc("Shift+F8", lambda: self._goto_pending(-1))
         sc("Ctrl+Return", self.approveRequested.emit)
@@ -491,6 +497,86 @@ class EditorView(QWidget):
         if 0 <= self._sel < len(self.cues):
             self.inspector.refresh_timing(self.cues[self._sel])
 
+    # --- tự canh lời (snap to the voice) ----------------------------------------
+    def _set_speech(self, spans: list | None, why: str = "") -> None:
+        self._speech = spans or None
+        self.timeline.set_speech(spans or [])
+        ok = bool(spans)
+        self.inspector.set_snap_available(ok, why)
+        self.timeline_panel.snap_all_btn.setEnabled(ok)
+        if not ok and why:
+            self.timeline_panel.snap_all_btn.setToolTip(why)
+
+    def _load_speech(self, job) -> None:
+        from app.pipeline import vad
+
+        self._set_speech(None, "Đang phân tích giọng nói…")
+        if not vad.model_ready():
+            self.message.emit("Đang tải bộ nhận diện giọng nói (một lần, ~2 MB)…", "busy")
+        notes: list[str] = []          # written on the worker thread, read in done()
+
+        def done(spans):
+            if self.job is not job:
+                return
+            if spans:
+                self._set_speech(spans)
+                return
+            why = notes[-1].lstrip("⚠ ") if notes else "Không thấy giọng nói trong video."
+            self._set_speech(None, why)
+            if notes:
+                self.message.emit(f"Tự canh lời chưa dùng được: {why}", "warn")
+
+        self._run_async(lambda: vad.speech_spans(job, log=notes.append), done,
+                        lambda m: self._set_speech(None, m))
+
+    def _auto_snap_selected(self) -> None:
+        """Snap the selected cue's edges to the nearest voice start / stop (≤ ~1 s);
+        neighbours stay fixed. One undo step."""
+        from app.pipeline import snap
+
+        i = self._sel
+        if not self._speech or not (0 <= i < len(self.cues)):
+            return
+        if self.cues[i].locked:
+            self.message.emit("Câu đang khóa timing — bỏ khóa để canh.", "warn")
+            return
+        times, rep = snap.plan(self.cues, self._speech, duration=self._duration(), only={i})
+        if i in rep.no_voice:
+            self.message.emit("Không thấy giọng nói trong câu này — giữ nguyên.", "warn")
+            return
+        if i not in rep.changed:
+            self.message.emit("Câu này đã khớp giọng nói.", "ok")
+            return
+
+        def apply(c) -> bool:
+            c.start, c.end = times[i]
+            return True
+
+        self._timing_edit(apply)
+        self.message.emit(f"Đã canh câu {i + 1} theo giọng nói — Ctrl+Z để hoàn tác.", "ok")
+
+    def _auto_snap_all(self) -> None:
+        """Snap every unlocked cue at once — one undo step."""
+        from app.pipeline import snap
+
+        if not self._speech or not self.cues:
+            return
+        times, rep = snap.plan(self.cues, self._speech, duration=self._duration())
+        if not rep.changed:
+            self.message.emit("Mọi câu đã khớp giọng nói (hoặc không thấy giọng) — không đổi gì.",
+                              "ok")
+            return
+        self._snapshot()
+        for k in rep.changed:
+            self.cues[k].start, self.cues[k].end = times[k]
+        self._reload()
+        parts = [f"Đã canh {len(rep.changed)} câu theo giọng nói"]
+        if rep.locked:
+            parts.append(f"bỏ qua {len(rep.locked)} câu khóa")
+        if rep.no_voice:
+            parts.append(f"{len(rep.no_voice)} câu không thấy giọng")
+        self.message.emit(" · ".join(parts) + " — Ctrl+Z để hoàn tác.", "ok")
+
     def _fit_selection(self) -> None:
         if 0 <= self._sel < len(self.cues):
             c = self.cues[self._sel]
@@ -663,6 +749,7 @@ class EditorView(QWidget):
         if self.cues:
             self.cue_list.selectRow(0)
         self._load_waveform(job)
+        self._load_speech(job)
 
     def _load_waveform(self, job) -> None:
         from app.pipeline import waveform

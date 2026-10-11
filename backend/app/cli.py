@@ -115,6 +115,14 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr)
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
+        # 2.3) snap the fresh cues to the voice (local Silero VAD) before translating
+        if not getattr(args, "no_snap", False):
+            from app.pipeline import snap
+
+            try:
+                snap.snap_srt(job, job.cn_srt, log=lambda m: print(f"[run] {m}"))
+            except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+                print(f"[run] voice snap skipped ({exc})")
 
     # 2.4) optional: per-video brief (AI skim and/or your own note) for the translator
     note = (getattr(args, "context", None) or "").strip()
@@ -231,6 +239,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="your own context note for this video; the AI expands it into a brief "
                         "and treats it as authoritative (implies a brief even without --auto-context)")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
+    r.add_argument("--no-snap", action="store_true",
+                   help="keep ASR/OCR cue times as-is (default: snap each cue edge to the nearest "
+                        "voice start/stop within 1 s, local Silero VAD)")
     r.add_argument("--workdir", help="explicit working directory")
     r.set_defaults(func=cmd_run)
 

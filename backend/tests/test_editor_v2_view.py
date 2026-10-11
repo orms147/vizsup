@@ -124,3 +124,65 @@ def test_split_needs_the_playhead_inside_the_cue(view, monkeypatch):
     view._split()
     assert len(view.cues) == 5
     assert (view.cues[0].end, view.cues[1].start) == (1.0, 1.0)
+
+
+# --- tự canh lời (A / Shift+A) ----------------------------------------------------
+
+def test_snap_buttons_wait_for_voice_data(view):
+    assert not view.inspector.snap_btn.isEnabled()
+    assert not view.timeline_panel.snap_all_btn.isEnabled()
+    view._set_speech([(0.0, 1.5)])
+    assert view.inspector.snap_btn.isEnabled() and view.timeline_panel.snap_all_btn.isEnabled()
+
+
+def test_snap_selected_is_one_undo_step(view):
+    view._set_speech([(0.3, 1.6), (2.0, 2.3), (4.0, 5.5), (6.0, 6.4)])
+    view.cue_list.selectRow(0)
+    depth = len(view._undo_stack)
+    view._auto_snap_selected()
+    assert (view.cues[0].start, view.cues[0].end) == (0.22, 1.75)
+    assert len(view._undo_stack) == depth + 1
+    view._undo_action()
+    assert (view.cues[0].start, view.cues[0].end) == (0.0, 2.0)
+
+
+def test_snap_selected_refuses_a_locked_cue(view):
+    view._set_speech([(0.1, 1.6)])
+    view.cues[0].locked = True
+    msgs = []
+    view.message.connect(lambda t, k: msgs.append(k))
+    depth = len(view._undo_stack)
+    view._auto_snap_selected()
+    assert (view.cues[0].start, view.cues[0].end) == (0.0, 2.0)
+    assert len(view._undo_stack) == depth and msgs == ["warn"]
+
+
+def test_snap_all_is_one_undo_step_and_skips_locked(view):
+    view._set_speech([(0.3, 1.6), (4.0, 5.5)])
+    view.cues[2].locked = True
+    msgs = []
+    view.message.connect(lambda t, k: msgs.append(t))
+    depth = len(view._undo_stack)
+    view._auto_snap_all()
+    assert len(view._undo_stack) == depth + 1
+    assert (view.cues[0].start, view.cues[0].end) == (0.22, 1.75)
+    assert (view.cues[2].start, view.cues[2].end) == (4.0, 6.0)   # locked
+    assert "Đã canh" in msgs[-1] and "khóa" in msgs[-1]
+    view._undo_action()
+    assert (view.cues[0].start, view.cues[0].end) == (0.0, 2.0)
+
+
+def test_worker_snap_failure_is_logged_not_raised(qapp, tmp_path, monkeypatch):
+    from app.models import Job
+    from app.pipeline import snap
+    from desktop.worker import PipelineWorker
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no audio")
+
+    monkeypatch.setattr(snap, "snap_srt", boom)
+    w = PipelineWorker(Job(id="w", work_dir=tmp_path / "w"), {})
+    logs = []
+    w.log.connect(logs.append)
+    w._snap_to_voice(w.job)
+    assert logs and logs[-1].startswith("⚠ Bỏ qua bước tự canh lời")

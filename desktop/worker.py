@@ -45,6 +45,16 @@ class PipelineWorker(QObject):
         if self._cancel:
             raise _Cancelled()
 
+    def _snap_to_voice(self, job: Job) -> None:
+        """Optional aid: a VAD/snap failure is logged, never fatal."""
+        from app.pipeline import snap
+
+        try:
+            snap.snap_srt(job, job.cn_srt, log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"auto-snap failed: {type(exc).__name__}: {exc}")
+            self.log.emit(f"⚠ Bỏ qua bước tự canh lời ({type(exc).__name__}: {exc})")
+
     def _preflight_translators(self, o: dict) -> None:
         """Validate the translator choice up front so the user isn't told 'missing
         key' only after a long download/OCR/ASR run — and isn't silently handed
@@ -182,6 +192,12 @@ class PipelineWorker(QObject):
                 self.log.emit("✓ Nhận dạng xong")
 
             store.debug("subtitle stage ok")
+            # 2.3) snap fresh Chinese cues to the voice (local Silero VAD) BEFORE
+            # translation, so vi.srt inherits the times. Never fails the run.
+            if src != "existing" and o.get("auto_snap", True):
+                self._check()
+                self.progress.emit(0.65, "Canh lời theo giọng nói…")
+                self._snap_to_voice(job)
             # 2.4) per-video brief: the AI skims the video (auto) and/or expands the
             # user's own note into a context sheet the translator reads with every
             # batch. Only when translate will actually run — a kept vi.srt needs none.
