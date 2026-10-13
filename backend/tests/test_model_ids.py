@@ -11,7 +11,7 @@ _DEPRECATED = ("deepseek-chat", "deepseek-reasoner")
 
 def test_openrouter_default_not_legacy():
     assert not any(bad in DEFAULT_MODEL for bad in _DEPRECATED), DEFAULT_MODEL
-    assert DEFAULT_MODEL == "qwen/qwen3.7-plus"   # benchmarked + listed on OpenRouter 2026-10-13
+    assert DEFAULT_MODEL == "deepseek/deepseek-v4.1-flash"   # draft role; judged 2026-10-13
 
 
 def test_no_role_default_uses_deprecated_ids():

@@ -15,7 +15,7 @@ from app.providers.translation._common import OpenAICompatTranslator
 log = logging.getLogger(__name__)
 
 # The draft role's default (2026-10-13 benchmark; see app/providers/roles.py).
-DEFAULT_MODEL = "qwen/qwen3.7-plus"
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 
 # Subtitle translation needs no chain-of-thought — and on OpenRouter, reasoning
 # tokens count against max_tokens, while _completion_cap budgets ~60 tokens/line

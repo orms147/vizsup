@@ -48,16 +48,29 @@ not yet by E-3's blind judge, so treat as preliminary):
 
 Even the best model costs ≈ $0.01 per 40 lines (draft + refine), so quality decides.
 
-| Role | Default (proposed) | Why / alternative |
-|---|---|---|
-| ASR transcript (audio in) | `qwen/qwen3.8-omni-flash` (0.15/0.47) | benchmarked 2026-10-01 (`docs/providers.md`); keep |
-| Draft translation | `qwen/qwen3.7-plus` | ≈ best quality, 2× faster than V4 Pro |
-| Refine (2nd pass) | `deepseek/deepseek-v4-pro-0813` | best meaning + pronouns; alt `moonshotai/kimi-k3` |
-| Brief / terms / shorten / "Dịch lại" | `qwen/qwen3.7-plus` | cheap, good Chinese comprehension |
-| QA judge (E-5) | `deepseek/deepseek-v4-pro-0813` | it must catch what the draft missed — use the strongest |
-| Vision (frames, opt-in) | `qwen/qwen3.7-flash` (0.03/0.13, image in) | alt `inclusionai/ling-3.0-flash-vl` — benchmark both |
+**Blind judge (E-3, `z-ai/glm-5.3-prime`, 40 lines each)** — scores /10:
 
-Confirm these with E-3's blind judge on a third, *spoken* (ASR) job before switching defaults.
+| Model | Talking vlog (ASR, fea1d38fb4d7) | Sung cover (2dc712c162d7) | Avg |
+|---|---|---|---|
+| `moonshotai/kimi-k3` | **8.68** | 8.15 | **8.42** |
+| `qwen/qwen3.8-flash` | 8.40 | 8.20 | 8.30 |
+| `deepseek/deepseek-v4.1-flash` | 8.47 | 8.07 | 8.27 |
+| `qwen/qwen3.7-plus` | 8.05 | **8.35** | 8.20 |
+| `deepseek/deepseek-v4-pro-0813` | 8.38 | 7.90 | 8.14 (53 s / 40 lines) |
+
+Judge notes: Kimi "chuẩn nghĩa, tự nhiên, xưng hô nhất quán"; Qwen3.7 Plus rendered a name in
+Hán-Việt ("Cát Tường Nữ"); V4 Pro one wrong pronoun. The spread is small — the reading-based
+table above and the judge disagree on V4 Pro — so defaults put the strongest model where it
+fixes the FINAL text and keep the first pass fast:
+
+| Role | Default (shipped in `app/providers/roles.py`) |
+|---|---|
+| ASR transcript (audio in) | `qwen/qwen3.8-omni-flash` (unchanged, `AUDIO_LLM_MODEL`) |
+| Draft · OCR proofread · terms | `deepseek/deepseek-v4.1-flash` (4–6 s / 40 lines) |
+| Refine · brief · shorten / Dịch lại | `moonshotai/kimi-k3` |
+| QA reviewer (E-5) | `deepseek/deepseek-v4-pro-0813` — another vendor than the refiner |
+| Vision (opt-in frames) | `qwen/qwen3.7-flash` — not benchmarked yet |
+
 
 ---
 
@@ -119,7 +132,7 @@ first and last characters to different repetitions → a 76 s cue.
 240 s chunk → no two cues share a start, none longer than the cap; real job re-timed from cached
 words: cues 33–39 spread over 236–244 s voice.
 
-### E-2 [S] Role-based model settings
+### ✅ E-2 [S] Role-based model settings — DONE 2026-10-13 (`cb10cf8`)
 
 Settings → "AI và mô hình" gets one row per role (combo of OpenRouter ids + "mặc định"), stored as
 `MODEL_<ROLE>` in `.env`, read through one helper `app.providers.roles.model_for(role)`. Roles:
@@ -131,7 +144,10 @@ table above. `OPENROUTER_MODEL` stays as the fallback for every text role (back-
 
 ## P1 — translation quality
 
-### E-3 [S] Commit the translation benchmark + a judge
+### ✅ E-3 [S] Commit the translation benchmark + a judge — DONE 2026-10-13
+
+Shipped `backend/scripts/translation_bench.py` (blind letters, judge JSON, `storage/_bench/<stamp>/report.html`); results in the table above. Original spec:
+
 
 `backend/scripts/translation_bench.py` (the 2026-10-13 run, see table): same draft prompt as the
 app (brief + glossary + numbered lines) across N models on N jobs → JSON + an HTML side-by-side.
@@ -152,7 +168,10 @@ the single biggest naturalness lever, and the brief today only sees text.
   still wins. Translator + refiner already read the brief.
 **Verify:** brief contains the section; pronoun consistency judged in E-3 improves on the vlog job.
 
-### E-5 [M] "AI soát" — a QA pass that feeds the review queue
+### ✅ E-5 [M] "AI soát" — a QA pass that feeds the review queue — DONE 2026-10-13
+
+Shipped `app/pipeline/qa.py` → `qa_report.json` (time + the VI text it judged, so an edit clears it), review issue `ai`, inspector note + "Dùng gợi ý", GUI option "AI soát bản dịch" / CLI `--no-qa`. Original spec:
+
 
 After translate (before the gate), a cheap model reads CN/VI pairs in batches and returns JSON
 (`structured_outputs`) `[{i, kind: meaning|pronoun|name|omission|unnatural|too_long, note, fix}]`.
