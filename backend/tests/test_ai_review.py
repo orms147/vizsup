@@ -80,3 +80,37 @@ def test_the_flag_follows_the_line_and_disappears_once_edited(job):
     assert "ai" not in review.cue_issues(cues, qa_findings=findings)[0]
     (job.work_dir / "qa_report.json").write_text(json.dumps(findings), encoding="utf-8")
     assert qa.load(job) == findings
+
+
+# --- E-6: "Dịch lại" ---------------------------------------------------------------
+
+def test_alternatives_send_context_and_parse_three_options(monkeypatch):
+    from app.pipeline import translate
+
+    fake = FakeQA("1| Bao lời hứa chưa kịp thực hiện\n2| Còn bao lời hứa dang dở\n3| Lời hứa còn dở")
+    monkeypatch.setattr(translate, "get_translator", lambda name: fake)
+    opts = translate.alternatives("有好多的话还来不及兑现", "Bao nhiêu lời chưa kịp nói",
+                                  before=[("你越走越远", "Bạn đi càng xa")], request="trang trọng hơn",
+                                  brief="Bài hát chia tay")
+    assert opts == ["Bao lời hứa chưa kịp thực hiện", "Còn bao lời hứa dang dở", "Lời hứa còn dở"]
+    body, role = fake.calls[0]
+    assert role == "shorten" and "DÒNG CẦN DỊCH LẠI" in body and "Bạn đi càng xa" in body
+    assert "trang trọng hơn" in body and "Bài hát chia tay" in body
+
+
+def test_retranslate_dialog_returns_the_picked_option():
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from desktop.widgets.dialogs import RetranslateDialog
+
+    d = RetranslateDialog(None, index=3, zh="你好", vi="xin chào")
+    assert not d.use_btn.isEnabled()
+    d.set_options(["chào bạn", "chào cậu nha", "chào"])
+    assert d.choice() == "chào cậu nha"                 # "Tự nhiên" preselected
+    d.radios[2].setChecked(True)
+    assert d.choice() == "chào" and d.use_btn.isEnabled()

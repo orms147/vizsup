@@ -18,6 +18,7 @@ SHORTCUTS = [
     ("Ctrl+Alt+← / →", "Dịch cuối câu 50 ms"),
     ("Giữ thêm Shift", "Dịch 200 ms"),
     ("A / Shift+A", "Tự canh câu / tất cả câu theo giọng nói"),
+    ("Alt+R", "Dịch lại câu đang chọn (3 phương án)"),
     ("S", "Tách câu tại vị trí phát"),
     ("M", "Gộp với câu sau"),
     ("Ctrl+Z / Ctrl+Y", "Hoàn tác / làm lại"),

@@ -72,6 +72,7 @@ class CueInspector(QFrame):
     lineBreakRequested = Signal()
     autoSnapRequested = Signal()       # "Tự canh" — snap this cue's edges to the voice
     applyFixRequested = Signal(str)    # "Dùng gợi ý" from the AI review (E-5)
+    retranslateRequested = Signal()    # "Dịch lại" (E-6, Alt+R)
     shortenRequested = Signal()
     listenRequested = Signal()
     glossaryRequested = Signal()
@@ -147,6 +148,10 @@ class CueInspector(QFrame):
         head.addWidget(self.sel_lbl)
         head.addStretch(1)
         head.addWidget(self.dur_lbl)
+        self.btn_retranslate = button("Dịch lại", "Sparkles", variant="ghost", small=True,
+                                      tip="3 phương án dịch cho câu này (Alt+R)")
+        self.btn_retranslate.clicked.connect(self.retranslateRequested)
+        head.addWidget(self.btn_retranslate)
         head.addWidget(self.btn_shorten)
         lay.addLayout(head)
 

@@ -180,6 +180,7 @@ class EditorView(QWidget):
         ins.lineBreakRequested.connect(self._line_break)
         ins.autoSnapRequested.connect(self._auto_snap_selected)
         ins.applyFixRequested.connect(self._apply_ai_fix)
+        ins.retranslateRequested.connect(self._retranslate)
         ins.shortenRequested.connect(self._shorten)
         ins.listenRequested.connect(self._preview_dub)
         ins.glossaryRequested.connect(self.glossaryRequested)
@@ -234,6 +235,7 @@ class EditorView(QWidget):
         sc("]", lambda: self._set_edge("end"))
         sc("S", self._split)
         sc("M", self._merge)
+        sc("Alt+R", self._retranslate)
         sc("A", self._auto_snap_selected)
         sc("Shift+A", self._auto_snap_all)
         sc("F8", lambda: self._goto_pending(+1))
@@ -386,6 +388,42 @@ class EditorView(QWidget):
 
         found = qa.findings_for(self.cues[i], self._qa) if 0 <= i < len(self.cues) else []
         self.inspector.set_ai_finding(found[0] if found else None)
+
+    def _retranslate(self) -> None:
+        """E-6: three AI renderings of the selected line; the chosen one replaces it
+        (one undo step)."""
+        from app.pipeline import brief as brief_mod
+        from app.pipeline import translate
+        from desktop.widgets.dialogs import RetranslateDialog
+
+        i = self._sel
+        if not (0 <= i < len(self.cues)):
+            return
+        c = self.cues[i]
+        before = [(x.zh, x.vi) for x in self.cues[max(0, i - 2):i]]
+        after = [(x.zh, x.vi) for x in self.cues[i + 1:i + 3]]
+        brief = (brief_mod.load_brief(self.job) or "") if self.job is not None else ""
+        provider = self._ctx.get("refine") or self._ctx.get("translator") or "openrouter"
+        dlg = RetranslateDialog(self, index=i, zh=c.zh, vi=c.vi)
+
+        def ask(request: str) -> None:
+            self._run_async(
+                lambda: translate.alternatives(c.zh, c.vi, before=before, after=after,
+                                               request=request, brief=brief, provider=provider),
+                lambda opts: dlg.set_options(opts) if dlg.isVisible() else None,
+                lambda m: dlg.set_error(m) if dlg.isVisible() else None)
+
+        dlg.regenerate.connect(ask)
+        self.video.pause()
+        ask("")
+        if dlg.exec() and dlg.choice() and dlg.choice() != c.vi and 0 <= i < len(self.cues):
+            self._snapshot()
+            self.cues[i].vi = dlg.choice()
+            self.cue_list.refresh_row(i)
+            self.video.set_cues(self.cues)
+            self._refresh_issues()
+            self._update_cue_panel(i)
+            self._mark_dirty()
 
     def _apply_ai_fix(self, text: str) -> None:
         i = self._sel

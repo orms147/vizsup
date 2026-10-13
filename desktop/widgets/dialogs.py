@@ -90,3 +90,70 @@ class ShortenDialog(VzDialog):
 
     def text(self) -> str:
         return self.edit.toPlainText().strip()
+
+
+class RetranslateDialog(VzDialog):
+    """E-6 "Dịch lại": three AI renderings of one line + an optional request.
+    The editor fills the options asynchronously (``set_options`` / ``set_error``)."""
+
+    from PySide6.QtCore import Signal as _Signal
+
+    regenerate = _Signal(str)
+
+    def __init__(self, parent, *, index: int, zh: str, vi: str) -> None:
+        from PySide6.QtWidgets import QButtonGroup, QLineEdit, QRadioButton
+
+        super().__init__(f"Dịch lại câu {index + 1}", parent, width=560)
+        zh_lbl = label(zh, "secondary", wrap=True)
+        zh_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.body.addWidget(zh_lbl)
+        self.body.addWidget(label(f"Hiện tại: {vi}", "small", wrap=True))
+        self.status = label("AI đang viết 3 phương án…", "small")
+        self.body.addWidget(self.status)
+        self.group = QButtonGroup(self)
+        self.radios: list[QRadioButton] = []
+        for k, style in enumerate(("Sát nghĩa", "Tự nhiên", "Ngắn gọn")):
+            rb = QRadioButton("")
+            rb.setToolTip(style)
+            rb.setVisible(False)
+            self.group.addButton(rb, k)
+            self.radios.append(rb)
+            self.body.addWidget(rb)
+        row = QHBoxLayout()
+        self.request = QLineEdit()
+        self.request.setPlaceholderText("Yêu cầu thêm (tùy chọn): trang trọng hơn, giữ chơi chữ…")
+        again = button("Tạo lại", "RefreshCw", small=True)
+        again.clicked.connect(self._again)
+        self.request.returnPressed.connect(self._again)
+        row.addWidget(self.request, 1)
+        row.addWidget(again)
+        self.body.addLayout(row)
+        self.add_button("Giữ nguyên")
+        self.use_btn = self.add_button("Dùng phương án này", icon_name="Check", primary=True,
+                                       accept=True)
+        self.use_btn.setEnabled(False)
+
+    def _again(self) -> None:
+        self.status.setText("AI đang viết lại…")
+        self.use_btn.setEnabled(False)
+        self.regenerate.emit(self.request.text().strip())
+
+    def set_options(self, options: list[str]) -> None:
+        styles = ("Sát nghĩa", "Tự nhiên", "Ngắn gọn")
+        for k, rb in enumerate(self.radios):
+            ok = k < len(options)
+            rb.setVisible(ok)
+            if ok:
+                rb.setText(f"{styles[k]} — {options[k]}")
+                rb.setProperty("text_value", options[k])
+        if self.radios and options:
+            self.radios[min(1, len(options) - 1)].setChecked(True)
+        self.status.setText("Chọn một phương án (hoặc nhập yêu cầu rồi “Tạo lại”).")
+        self.use_btn.setEnabled(bool(options))
+
+    def set_error(self, msg: str) -> None:
+        self.status.setText(f"Không dịch lại được: {msg}")
+
+    def choice(self) -> str:
+        b = self.group.checkedButton()
+        return (b.property("text_value") or "") if b else ""

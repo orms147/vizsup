@@ -427,6 +427,42 @@ def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7)
     return out or text
 
 
+ALT_STYLES = ("Sát nghĩa", "Tự nhiên", "Ngắn gọn")
+ALT_INSTRUCTION = (
+    "Bạn là biên tập viên phụ đề Trung → Việt. Cho DÒNG CẦN DỊCH LẠI (tiếng Trung + bản "
+    "tiếng Việt hiện tại) cùng vài dòng xung quanh làm ngữ cảnh, hãy viết đúng 3 phương án "
+    "tiếng Việt cho riêng dòng đó, mỗi dòng một phương án theo dạng `n| <câu>`:\n"
+    "1| sát nghĩa nhất với câu gốc\n"
+    "2| tự nhiên nhất khi nói (giữ đúng xưng hô của video)\n"
+    "3| ngắn gọn nhất mà vẫn đủ ý (để lồng tiếng vừa thời lượng)\n"
+    "Không giải thích, không thêm dòng nào khác."
+)
+
+
+def alternatives(zh: str, vi: str, *, before: list[tuple[str, str]] = (),
+                 after: list[tuple[str, str]] = (), request: str = "", brief: str = "",
+                 provider: str = "openrouter") -> list[str]:
+    """E-6 "Dịch lại": three renderings of one line (sát nghĩa / tự nhiên / ngắn gọn)
+    with neighbouring (zh, vi) lines as context and an optional user request. Uses
+    the "shorten" role model. Raises when the provider can't do it."""
+    prov = get_translator(provider)
+    if not hasattr(prov, "rewrite"):
+        raise RuntimeError(f"Bộ dịch '{provider}' không hỗ trợ dịch lại câu.")
+    if not prov.available():
+        raise RuntimeError(f"Bộ dịch '{provider}' chưa sẵn sàng (thiếu API key).")
+    parts = []
+    if brief.strip():
+        parts.append(f"Ngữ cảnh video:\n{brief.strip()}")
+    ctx = [f"ZH: {z}\nVI: {v}" for z, v in before]
+    ctx.append(f">>> DÒNG CẦN DỊCH LẠI\nZH: {zh}\nVI hiện tại: {vi}")
+    ctx += [f"ZH: {z}\nVI: {v}" for z, v in after]
+    parts.append("\n\n".join(ctx))
+    if request.strip():
+        parts.append(f"Yêu cầu thêm của người dùng (ưu tiên): {request.strip()}")
+    reply = prov.rewrite("\n\n".join(parts), ALT_INSTRUCTION, max_tokens=400, role="shorten")
+    out = [s.strip().strip('"').strip() for s in parse_numbered(reply or "", 3, ["", "", ""])]
+    return [s for s in out if s] or [vi]
+
 def clear_ocr_provenance(job: Job) -> None:
     """Remove a leftover ``ocr_report.json`` when cn.srt is (re)generated from a
     NON-OCR source (provided SRT / ASR). Otherwise a re-run of the same job dir

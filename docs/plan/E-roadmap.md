@@ -186,7 +186,10 @@ Each becomes review issue `"ai"` with the note; the inspector shows the note + *
 (one undo step). Default on; ~1 call per 50 lines.
 **Invariants:** never edits vi.srt itself; failure → no flags + log line.
 
-### E-6 [M] "Dịch lại" in the editor (Alt+R)
+### ✅ E-6 [M] "Dịch lại" in the editor (Alt+R) — DONE 2026-10-13
+
+Shipped `translate.alternatives` (shorten role, ±2 lines + brief + optional request) and `RetranslateDialog`; inspector button "Dịch lại", Alt+R; the pick is one undo step. Real call: 3 options in 3.7 s.
+
 
 Selected cue → 3 alternatives from the refine model with ±3 neighbouring lines as context:
 *sát nghĩa / tự nhiên / ngắn gọn (vừa thời lượng)*. Pick one → replaces text (undo). Free-text
