@@ -9,7 +9,9 @@ cover, an ASR'd talking vlog, an OCR'd vlog): a blind judge (z-ai/glm-5.3-prime)
 moonshotai/kimi-k3 on top (8.42 avg; best on speech, consistent xưng hô) with the rest
 within 0.3; Qwen3.7 Plus rendered a name in Hán-Việt, V4 Pro is slow (53 s / 40 lines).
 So: the strongest model where it fixes the final text (refine / brief / shorten), the
-fastest solid one for the first draft, a different vendor for the QA reviewer.
+fastest solid one for the first draft, a different vendor for the QA reviewer. QA was
+compared separately on the same 39 pairs: V4 Pro (reasoning off) found nothing,
+Kimi / GLM-prime found 1 real omission, qwen3.8-flash 3 incl. a real meaning error.
 Re-run backend/scripts/translation_bench.py when a new model ships and update this
 table — never pick ids from memory.
 """
@@ -42,8 +44,8 @@ ROLES: dict[str, Role] = {r.key: r for r in (
          "Gợi ý tên riêng / thương hiệu lặp lại."),
     Role("shorten", "model_shorten", "moonshotai/kimi-k3", "Rút gọn / dịch lại câu",
          "Rút gọn câu quá dài, phương án dịch lại trong editor."),
-    Role("qa", "model_qa", "deepseek/deepseek-v4-pro-0813", "Soát bản dịch",
-         "Đọc lại cặp Trung–Việt, đánh dấu câu nghi sai. Khác hãng với lượt tinh chỉnh."),
+    Role("qa", "model_qa", "qwen/qwen3.8-flash", "Soát bản dịch",
+         "Đọc lại cặp Trung–Việt, đánh dấu câu nghi sai. Khác hãng với nháp và tinh chỉnh."),
     Role("vision", "model_vision", "qwen/qwen3.7-flash", "Xem khung hình (tùy chọn)",
          "Chỉ dùng khi bật “AI xem khung hình” — gửi vài ảnh của video."),
 )}

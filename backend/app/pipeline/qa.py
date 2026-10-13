@@ -43,16 +43,27 @@ def _norm(s: str) -> str:
 
 
 def _pairs(job: Job) -> list[tuple[float, float, str, str]]:
-    """(start, end, zh, vi) for each Vietnamese line; zh = the Chinese lines that
-    overlap it in time (robust to translate's dedupe)."""
+    """(start, end, zh, vi) for each Vietnamese line, paired like the editor does:
+    the editor's own ``zh_ref.json`` (kept through splits/merges), else line order when
+    the counts match, else the Chinese lines overlapping in time. (Time-only pairing
+    gave stacked ASR cues several sources each → false "omission" findings.)"""
     from app.pipeline.srt import parse_srt
 
     cn = parse_srt(job.cn_srt) if job.cn_srt.exists() else []
-    out = []
-    for v in parse_srt(job.vi_srt):
-        zh = " ".join(c.text for c in cn if c.start < v.end - 0.05 and c.end > v.start + 0.05)
-        out.append((v.start, v.end, zh, v.text))
-    return out
+    vi = parse_srt(job.vi_srt)
+    zh: list[str] | None = None
+    try:
+        ref = json.loads((job.work_dir / "zh_ref.json").read_text(encoding="utf-8"))
+        if isinstance(ref, list) and len(ref) == len(vi):
+            zh = [str(x) for x in ref]
+    except (OSError, ValueError):
+        pass
+    if zh is None and len(cn) == len(vi):
+        zh = [c.text for c in cn]
+    if zh is None:
+        zh = [" ".join(c.text for c in cn if c.start < v.end - 0.05 and c.end > v.start + 0.05)
+              for v in vi]
+    return [(v.start, v.end, z, v.text) for v, z in zip(vi, zh)]
 
 
 def parse_issues(reply: str, n: int) -> list[dict]:

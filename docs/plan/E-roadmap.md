@@ -68,7 +68,7 @@ fixes the FINAL text and keep the first pass fast:
 | ASR transcript (audio in) | `qwen/qwen3.8-omni-flash` (unchanged, `AUDIO_LLM_MODEL`) |
 | Draft · OCR proofread · terms | `deepseek/deepseek-v4.1-flash` (4–6 s / 40 lines) |
 | Refine · brief · shorten / Dịch lại | `moonshotai/kimi-k3` |
-| QA reviewer (E-5) | `deepseek/deepseek-v4-pro-0813` — another vendor than the refiner |
+| QA reviewer (E-5) | `qwen/qwen3.8-flash` — QA bench on 39 real pairs: found 3 real issues; V4 Pro (reasoning off) 0, Kimi / GLM-prime 1 |
 | Vision (opt-in frames) | `qwen/qwen3.7-flash` — not benchmarked yet |
 
 
