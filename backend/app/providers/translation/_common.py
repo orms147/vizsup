@@ -70,12 +70,25 @@ _BRIEF_HEADER = (
 )
 
 
+LYRICS_HINT = (
+    "\nTHIS VIDEO IS MOSTLY SUNG. Lines that are song lyrics must read as natural, singable\n"
+    "Vietnamese lyrics: keep the imagery and each line's rhythm, keep repeated lines (the\n"
+    "chorus) worded identically every time, no explanations, no added words. Spoken\n"
+    "comments between songs stay conversational.\n"
+)
+
+
 def system_prompt_for(base: str, context: dict | None) -> str:
-    """``base`` plus the per-video brief when one rides in ``context['_brief']``."""
-    brief = (context or {}).get("_brief")
-    if not brief or not str(brief).strip():
-        return base
-    return base + _BRIEF_HEADER + str(brief).strip() + "\n"
+    """``base`` plus the per-video brief when one rides in ``context['_brief']``, plus
+    the lyrics rule when ``context['_lyrics']`` (E-8: the listening model heard singing)."""
+    ctx = context or {}
+    out = base
+    if ctx.get("_lyrics"):
+        out += LYRICS_HINT
+    brief = ctx.get("_brief")
+    if brief and str(brief).strip():
+        out += _BRIEF_HEADER + str(brief).strip() + "\n"
+    return out
 
 PROOFREAD_SYSTEM_PROMPT = (
     "You are correcting OCR errors in Chinese subtitle lines read off a video.\n"

@@ -201,7 +201,14 @@ On approval, diff machine VI vs approved VI per cue:
   ≤10 short rules (e.g. "người hát xưng em", "không dịch 'bảo bối' thành 'bảo bối'"); shown and
   editable in Settings; appended to the translator system prompt.
 
-### E-8 [S] Songs & singing
+### ✅ E-8 [S] Songs & singing — DONE 2026-10-13
+
+Shipped: the E-4 audio question ends with `HÁT: có / xen kẽ / không` (`speakers.singing`);
+sung → `context["_lyrics"]` adds `LYRICS_HINT` to the translator system prompt (singable,
+rhythm kept, chorus worded identically). Render page: 5th audio mode "Giữ giọng gốc" (no TTS,
+original audio, subtitles only), preselected once per job when the video is mostly sung.
+Per-line mixing (dub talk, keep singing) stays manual via per-line mute. Original spec:
+
 
 Today's test job is a sung cover: lyrics get prose translations and the dub talks over singing.
 - When the speaker sheet (E-4) / brief says *bài hát* or lines are tagged sung: lyric-style

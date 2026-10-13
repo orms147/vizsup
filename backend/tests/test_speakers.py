@@ -52,3 +52,42 @@ def test_the_brief_request_carries_observations_and_rebuilds_on_them(job):
     req = brief.build_request(job, ["我说再喝一碗"], None, "Nghe âm thanh: cô gái hát")
     assert "OBSERVED" in req and "cô gái hát" in req
     assert brief._inputs_key(["a"], None) != brief._inputs_key(["a"], None, "Nghe: nữ")
+
+
+# --- E-8: songs ---------------------------------------------------------------------
+
+def test_singing_verdict_is_parsed_from_the_last_line():
+    assert speakers.parse_singing("Một nam hát…\nHÁT: có") == "yes"
+    assert speakers.parse_singing("…\nHÁT: xen kẽ") == "mixed"
+    assert speakers.parse_singing("…\nhát: không") == "no"
+    assert speakers.parse_singing("không có dòng kết") is None
+
+
+def test_a_sung_video_gets_the_lyrics_rule():
+    from app.providers.translation._common import LYRICS_HINT, system_prompt_for
+
+    assert LYRICS_HINT in system_prompt_for("BASE", {"_lyrics": True, "_brief": "b"})
+    assert LYRICS_HINT not in system_prompt_for("BASE", {"_brief": "b"})
+
+
+def test_render_original_mode_is_preselected_for_songs(qt_render_view):
+    rv = qt_render_view
+    rv.suggest_original("yes")
+    assert rv._audio_mode() == "original" and not rv.voice.isEnabled()
+    rv.mode_cards["duck"].setChecked(True)
+    rv.suggest_original("yes")                     # the user's own choice is kept
+    assert rv._audio_mode() == "duck"
+
+
+@pytest.fixture()
+def qt_render_view():
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from desktop.views.render_view import RenderView
+
+    return RenderView()

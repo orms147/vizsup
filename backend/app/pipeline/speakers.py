@@ -30,8 +30,11 @@ AUDIO_QUESTION = (
     "plain text: how many people speak or sing; for each one their likely gender and age "
     "group (trẻ em / thanh niên / trung niên / lớn tuổi); whether they mostly SING or TALK; "
     "who they address (khán giả, bạn bè, người yêu, gia đình, đồng nghiệp…) and their "
-    "relationship if it is audible. Write 'không rõ' when unsure. Never invent names."
+    "relationship if it is audible. Write 'không rõ' when unsure. Never invent names. "
+    "End with one last line exactly in the form 'HÁT: có' (mostly singing), 'HÁT: xen kẽ' "
+    "(singing and talking) or 'HÁT: không' (talking)."
 )
+_SINGING = {"có": "yes", "xen kẽ": "mixed", "không": "no"}
 FRAMES_QUESTION = (
     "These are frames from one Chinese short video, in order. Answer in Vietnamese, at most "
     "80 words, plain text: who is on screen (number of people, likely gender and age "
@@ -134,6 +137,19 @@ def _look(job: Job, say) -> str | None:
     resp = prov._chat(model=roles.model_for("vision"), temperature=0, max_tokens=500,
                       messages=[{"role": "user", "content": content}])
     return (resp.choices[0].message.content or "").strip() or None
+
+
+def parse_singing(text: str | None) -> str | None:
+    """'yes' / 'mixed' / 'no' from the audio answer's last 'HÁT: …' line, else None."""
+    import re
+
+    m = re.search(r"HÁT\s*[:：]\s*(có|xen kẽ|không)", text or "", re.I)
+    return _SINGING.get(m.group(1).lower()) if m else None
+
+
+def singing(job: Job) -> str | None:
+    """Cached verdict for this job (E-8), or None when nothing was observed."""
+    return parse_singing(_load(job).get("audio"))
 
 
 def observe(job: Job, *, frames: bool = False, log=None) -> str | None:

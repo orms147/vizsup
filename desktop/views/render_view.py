@@ -50,7 +50,8 @@ except Exception:  # noqa: BLE001
 MODES = (("replace", "Mic", "Thay giọng gốc", "Chỉ nghe giọng Việt"),
          ("mix", "Volume2", "Trộn hai giọng", "Giữ tiếng gốc nhẹ"),
          ("duck", "SlidersHorizontal", "Giảm nền tự động", "Nền nhỏ khi có lời"),
-         ("keep_music", "Music2", "Giữ nhạc nền", "AI tách lời gốc"))
+         ("keep_music", "Music2", "Giữ nhạc nền", "AI tách lời gốc"),
+         ("original", "Captions", "Giữ giọng gốc", "Không lồng tiếng, chỉ phụ đề — hợp video hát"))
 COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
           ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
           ("Không che", "off"))
@@ -160,6 +161,7 @@ class RenderView(QWidget):
         self._tts = "edge"             # provider key (registry)
         self._approved = True          # MainWindow sets the real state; worker re-checks
         self._rendering = False
+        self._suggested = False        # "Giữ giọng gốc" already proposed for this job
         self._cues = 0
         self._t0 = 0.0
         self._bg = BgRunner(self)
@@ -251,7 +253,10 @@ class RenderView(QWidget):
                               "được sẽ tự chuyển sang trộn.")
             self.audio_group.addButton(mc)
             self.mode_cards[key] = mc
-            grid.addWidget(mc, i // 2, i % 2)
+            if key == "original":
+                grid.addWidget(mc, i // 2, 0, 1, 2)        # full-width last row
+            else:
+                grid.addWidget(mc, i // 2, i % 2)
         self.mode_cards["replace"].setChecked(True)
         self.audio_group.buttonToggled.connect(lambda *_: self._sync_audio_enabled())
         ll.addLayout(grid)
@@ -468,6 +473,7 @@ class RenderView(QWidget):
 
     def set_job(self, job, *, cues: int, tts: str = "") -> None:
         if job is not self._job:
+            self._suggested = False
             self._out = None
             out = getattr(job, "output_video", None)
             if out is not None and Path(out).exists():
@@ -506,9 +512,23 @@ class RenderView(QWidget):
                                    "Duyệt phụ đề trước khi tạo giọng")
 
     def _sync_audio_enabled(self) -> None:
-        keep = self._audio_mode() != "replace"
+        mode = self._audio_mode()
+        keep = mode not in ("replace", "original")
         self.orig_vol.setEnabled(keep)
         self.orig_vol_lbl.setEnabled(keep)
+        dub = mode != "original"
+        for w in (self.dub_vol, self.dub_vol_lbl, self.voice, self.speed, self.speed_lbl):
+            w.setEnabled(dub)
+
+    def suggest_original(self, singing: str | None) -> None:
+        """E-8: a mostly-sung video starts on "Giữ giọng gốc" (once per job; the user's
+        own choice afterwards is kept)."""
+        card = self.mode_cards["original"]
+        card.setToolTip("AI nghe thấy video chủ yếu là hát — nên giữ giọng hát gốc."
+                        if singing == "yes" else "")
+        if singing == "yes" and not self._suggested:
+            self._suggested = True
+            card.setChecked(True)
 
     def _audio_mode(self) -> str:
         for key, card in self.mode_cards.items():

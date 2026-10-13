@@ -294,12 +294,18 @@ class PipelineWorker(QObject):
                 except Exception as exc:  # noqa: BLE001 - degrade, don't abort the render
                     self.log.emit(f"⚠ Không tách được nhạc nền ({exc}) — sẽ trộn với âm gốc.")
 
-            self.stage_started.emit("tts")
-            self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
-            segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
-                                      rate=o.get("rate"), log=self.log.emit,
-                                      cancel=lambda: self._cancel)  # per-cue cancel (N-10)
-            self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
+            original = o.get("audio_mode") == "original"
+            if original:
+                # E-8: keep the original voice/singing — subtitles only, no TTS at all
+                segments = []
+                self.log.emit("Giữ giọng gốc — không lồng tiếng, chỉ đốt phụ đề")
+            else:
+                self.stage_started.emit("tts")
+                self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
+                segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
+                                          rate=o.get("rate"), log=self.log.emit,
+                                          cancel=lambda: self._cancel)  # per-cue cancel (N-10)
+                self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
 
             self._check()
             self.stage_started.emit("assemble")
@@ -309,7 +315,7 @@ class PipelineWorker(QObject):
             out = assemble.assemble(
                 job, segments,
                 burn_cues=o.get("burn_cues"),  # N-13 snapshot: subs match what TTS spoke
-                audio_mode=o.get("audio_mode", "replace"),
+                audio_mode="replace" if original else o.get("audio_mode", "replace"),
                 orig_volume=o.get("orig_volume", 1.0),
                 dub_volume=o.get("dub_volume", 1.0),
                 cover_hardsubs=o.get("cover_hardsubs", False),

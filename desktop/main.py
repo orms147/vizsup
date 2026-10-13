@@ -256,6 +256,9 @@ class MainWindow(QMainWindow):
         self.render.set_job(self.job, cues=len(self.editor.cues),
                             tts=self.opts.get("tts") or settings.vizsup_default_tts)
         self.render.set_approved(approval.is_approved(self.job))
+        from app.pipeline import speakers
+
+        self.render.suggest_original(speakers.singing(self.job))
         self.render.set_style(self.editor.get_style(), self.editor.get_size_px(),
                               self.editor.get_font())
 

@@ -522,6 +522,13 @@ def translate(
         context["_brief"] = brief
         if log:
             log("ℹ Dịch theo brief ngữ cảnh của video này")
+    # E-8: the listening model heard mostly singing → lyric-style translation
+    from app.pipeline.speakers import singing
+
+    if singing(job) in ("yes", "mixed"):
+        context["_lyrics"] = True
+        if log:
+            log("ℹ Video có hát — dịch lời hát cho tự nhiên, giữ nhịp, điệp khúc thống nhất")
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,
