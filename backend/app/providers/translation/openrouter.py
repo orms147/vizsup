@@ -1,7 +1,8 @@
 """OpenRouter — one API key, access to virtually every model. OpenAI-compatible.
-The specific model is chosen in Settings (Fetch models → pick), stored in
-settings.openrouter_model. A time-boxed promo model (settings.openrouter_promo_*)
-takes precedence until its expiry date.
+Each call names a ROLE (draft / refine / brief / …); the model per role comes from
+app.providers.roles (Settings → AI và mô hình, else the benchmarked default). A
+time-boxed promo model (settings.openrouter_promo_*) replaces the DRAFT role only,
+until its expiry date.
 """
 from __future__ import annotations
 
@@ -13,10 +14,8 @@ from app.providers.translation._common import OpenAICompatTranslator
 
 log = logging.getLogger(__name__)
 
-# Fallback when no model is picked in Settings. Web-verified 2026-07-02:
-# openrouter.ai/deepseek/deepseek-v4-flash (the old deepseek/deepseek-chat-v3
-# slug rides the legacy deepseek-chat API that deprecates 2026-07-24).
-DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
+# The draft role's default (2026-10-13 benchmark; see app/providers/roles.py).
+DEFAULT_MODEL = "qwen/qwen3.7-plus"
 
 # Subtitle translation needs no chain-of-thought — and on OpenRouter, reasoning
 # tokens count against max_tokens, while _completion_cap budgets ~60 tokens/line
@@ -102,21 +101,30 @@ class OpenRouter(OpenAICompatTranslator):
         return m
 
     def main_model(self) -> str:
-        return settings.openrouter_model or DEFAULT_MODEL
+        """The draft model without the promo (where a vanished promo falls back to)."""
+        from app.providers import roles
+
+        return roles.model_for("draft")
+
+    def model_for(self, role: str) -> str:  # type: ignore[override]
+        from app.providers import roles
+
+        if role == "draft":
+            return self.active_promo() or self.main_model()
+        return roles.model_for(role)
 
     @property
     def model(self) -> str:  # type: ignore[override]
-        return self.active_promo() or self.main_model()
+        return self.model_for("draft")
 
     @property
     def cost_note(self) -> str:  # type: ignore[override]
-        promo = self.active_promo()
-        if promo:
-            until = settings.openrouter_promo_expires.strip()
-            return f"1 key · model: {promo}" + (f" (tới {until}, sau đó {self.main_model()})"
-                                               if until else "")
-        m = settings.openrouter_model
-        return f"1 key · model: {m}" if m else "1 key · mọi model (chọn ở Cài đặt)"
+        draft, refine = self.model_for("draft"), self.model_for("refine")
+        note = f"1 key · nháp {draft.split('/')[-1]} · tinh chỉnh {refine.split('/')[-1]}"
+        until = settings.openrouter_promo_expires.strip()
+        if self.active_promo() and until:
+            note += f" (khuyến mãi tới {until}, sau đó {self.main_model().split('/')[-1]})"
+        return note
 
     # --- request shaping --------------------------------------------------
     def _chat(self, **kw):

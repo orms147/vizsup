@@ -61,7 +61,7 @@ def extract_terms(cues, provider_name: str, *, context=None) -> dict[str, str]:
     for i in range(0, len(texts), _TERM_BATCH):
         body = "\n".join(texts[i:i + _TERM_BATCH])
         try:
-            reply = prov.rewrite(body, EXTRACT_INSTRUCTION, max_tokens=1000)
+            reply = prov.rewrite(body, EXTRACT_INSTRUCTION, max_tokens=1000, role="terms")
         except Exception:  # noqa: BLE001 - optional pre-pass; never break the run
             continue
         for zh, vi in parse_terms(reply).items():

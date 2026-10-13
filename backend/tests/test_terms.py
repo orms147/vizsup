@@ -57,7 +57,7 @@ class _FakeExtractor:
     def available(self):
         return True
 
-    def rewrite(self, body, instruction, *, max_tokens=300):
+    def rewrite(self, body, instruction, *, max_tokens=300, role=None):
         self.calls += 1
         return self._reply
 

@@ -168,7 +168,7 @@ def build_brief(job: Job, provider_name: str, *, note: str | None = None,
             request = build_request(job, cn_lines, note)
             for attempt in range(_ATTEMPTS):   # an empty/transient reply is worth one retry
                 try:
-                    reply = prov.rewrite(request, BRIEF_INSTRUCTION, max_tokens=_MAX_TOKENS)
+                    reply = prov.rewrite(request, BRIEF_INSTRUCTION, max_tokens=_MAX_TOKENS, role="brief")
                     brief = (reply or "").strip() or None
                     break
                 except Exception:  # noqa: BLE001

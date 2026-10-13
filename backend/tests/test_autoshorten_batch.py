@@ -32,7 +32,7 @@ class RecordingRewriter:
     def available(self):
         return True
 
-    def rewrite(self, body, instruction, *, max_tokens=300):
+    def rewrite(self, body, instruction, *, max_tokens=300, role=None):
         self.calls.append((body, max_tokens))
         return self._reply_fn(body)
 

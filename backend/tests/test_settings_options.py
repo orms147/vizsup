@@ -190,3 +190,20 @@ def test_cancel_changes_restores_the_saved_values(qapp, env, monkeypatch):
     assert view.is_dirty()
     view.cancel_btn.click()
     assert view._opt_value("BBDOWN_PATH") == "C:/a.exe" and not view.is_dirty()
+
+
+def test_role_models_round_trip_and_blank_means_default(qapp, env, monkeypatch):
+    from app.providers import roles
+
+    for r in roles.ROLES.values():
+        monkeypatch.setattr(settings, r.attr, "")
+    monkeypatch.setattr(settings, "model_draft", "deepseek/deepseek-v4.1-flash")
+    view = sd.SettingsView()
+    assert view.role_combos["draft"].currentText() == "deepseek/deepseek-v4.1-flash"
+    view.role_combos["refine"].setEditText("moonshotai/kimi-k3")
+    view.role_combos["draft"].setEditText("")
+    view._save()
+    written = _read(env)
+    assert written["MODEL_REFINE"] == "moonshotai/kimi-k3" and written["MODEL_DRAFT"] == ""
+    assert roles.model_for("refine") == "moonshotai/kimi-k3"
+    assert roles.model_for("draft") == roles.ROLES["draft"].default

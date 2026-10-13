@@ -58,7 +58,7 @@ def prov(monkeypatch):
     monkeypatch.setattr(OpenRouter, "_mandatory_reasoning", set())
     monkeypatch.setattr(OpenRouter, "_dead_promo", set())
     monkeypatch.setattr(settings, "openrouter_api_key", "sk-test")
-    monkeypatch.setattr(settings, "openrouter_model", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setattr(settings, "model_draft", "deepseek/deepseek-v4.1-flash")   # draft role
     monkeypatch.setattr(settings, "openrouter_promo_model", "")
     monkeypatch.setattr(settings, "openrouter_promo_expires", "")
     return OpenRouter()
@@ -77,7 +77,7 @@ def test_no_promo_uses_the_main_model(prov):
 
 
 def test_falls_back_to_the_default_when_nothing_is_configured(prov, monkeypatch):
-    monkeypatch.setattr(settings, "openrouter_model", "")
+    monkeypatch.setattr(settings, "model_draft", "")
     assert prov.model == orm.DEFAULT_MODEL
 
 
@@ -108,7 +108,7 @@ def test_cost_note_tells_the_user_what_happens_after_expiry(prov, monkeypatch):
     monkeypatch.setattr(settings, "openrouter_promo_model", "stealth/x")
     monkeypatch.setattr(settings, "openrouter_promo_expires", "2999-01-01")
     note = prov.cost_note
-    assert "stealth/x" in note and "2999-01-01" in note and "deepseek/deepseek-v4.1-flash" in note
+    assert "nháp x" in note and "2999-01-01" in note and "deepseek-v4.1-flash" in note
 
 
 # --- reasoning control --------------------------------------------------------
@@ -266,3 +266,33 @@ def test_translate_ladder_retries_an_empty_reply(prov, monkeypatch):
     use(monkeypatch, prov, lambda call: next(replies))
     out = translate._retry(lambda: prov.translate_texts(["你好"]), sleep=lambda s: None)
     assert out == ["xin chào"]
+
+
+# --- E-2: one model per role ----------------------------------------------------
+
+def test_each_call_uses_its_roles_model(prov, monkeypatch):
+    from app.providers import roles
+
+    monkeypatch.setattr(settings, "model_refine", "")
+    client = use(monkeypatch, prov, lambda call: ok())
+    prov.translate_texts(["你好"])
+    prov.refine_texts(["你好"], ["xin chào"])
+    prov.rewrite("xin chào bạn", "rút gọn", role="brief")
+    assert [c["model"] for c in client.calls] == [
+        "deepseek/deepseek-v4.1-flash",              # draft: explicit MODEL_DRAFT
+        roles.ROLES["refine"].default,               # refine: benchmarked default
+        roles.ROLES["brief"].default,
+    ]
+
+
+def test_the_promo_only_replaces_the_draft(prov, monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_promo_model", "stealth/x")
+    monkeypatch.setattr(settings, "model_refine", "moonshotai/kimi-k3")
+    assert prov.model_for("draft") == "stealth/x"
+    assert prov.model_for("refine") == "moonshotai/kimi-k3"
+
+
+def test_the_legacy_single_model_setting_is_no_longer_read(prov, monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_model", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setattr(settings, "model_draft", "")
+    assert prov.model_for("draft") == orm.DEFAULT_MODEL

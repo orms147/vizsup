@@ -44,7 +44,7 @@ class FakeProvider:
     def available(self):
         return self._available
 
-    def rewrite(self, text, instruction, *, max_tokens=300):
+    def rewrite(self, text, instruction, *, max_tokens=300, role=None):
         self.calls.append((text, instruction, max_tokens))
         if self._fail:
             raise RuntimeError("boom")
@@ -261,7 +261,7 @@ def test_a_transient_failure_is_retried_once(job, monkeypatch):
     calls = {"n": 0}
 
     class Flaky(FakeProvider):
-        def rewrite(self, text, instruction, *, max_tokens=300):
+        def rewrite(self, text, instruction, *, max_tokens=300, role=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("OpenRouter returned an empty reply")

@@ -260,7 +260,7 @@ class OpenAICompatTranslator(TranslationProvider):
             return []
         cap = _completion_cap(len(texts))
         resp = self._chat(
-            model=self.model,
+            model=self.model_for("draft"),
             temperature=0.3,
             max_tokens=cap,
             messages=[
@@ -276,7 +276,7 @@ class OpenAICompatTranslator(TranslationProvider):
             return []
         cap = _completion_cap(len(vi_texts))
         resp = self._chat(
-            model=self.model,
+            model=self.model_for("refine"),
             temperature=0.3,
             max_tokens=cap,
             messages=[
@@ -294,7 +294,7 @@ class OpenAICompatTranslator(TranslationProvider):
             return []
         cap = _completion_cap(len(texts))
         resp = self._chat(
-            model=self.model,
+            model=self.model_for("proofread"),
             temperature=0.2,
             max_tokens=cap,
             messages=[
@@ -306,17 +306,24 @@ class OpenAICompatTranslator(TranslationProvider):
         # fallback is the original OCR text, so a parse miss keeps it (never blanks a line)
         return parse_numbered(resp.choices[0].message.content or "", len(texts), texts)
 
+    def model_for(self, role: str) -> str:
+        """Model for a job role (draft/refine/proofread/brief/terms/shorten/qa/vision).
+        Single-model vendors ignore the role; OpenRouter maps it (app.providers.roles)."""
+        return self.model
+
     def _chat(self, **kw):
         """The ONE place a chat completion is sent. Subclasses override this to add
         endpoint-specific request shaping (OpenRouter: reasoning control + model
         fallback) without touching the four prompt builders that call it."""
         return self._client().chat.completions.create(**kw)
 
-    def rewrite(self, text: str, instruction: str, *, max_tokens: int = 300) -> str:
+    def rewrite(self, text: str, instruction: str, *, max_tokens: int = 300,
+                role: str = "shorten") -> str:
         """Single-shot rewrite (e.g. shorten a VI line to fit the dub slot).
-        ``max_tokens`` lets a batched caller (API-5) size the cap to its chunk."""
+        ``max_tokens`` lets a batched caller (API-5) size the cap to its chunk;
+        ``role`` picks the model (brief / terms / shorten / qa …)."""
         resp = self._chat(
-            model=self.model,
+            model=self.model_for(role),
             temperature=0.4,
             max_tokens=max_tokens,
             messages=[

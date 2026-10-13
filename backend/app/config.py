@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     # the first day it is NOT used — same meaning as OpenRouter's `expiration_date`.
     openrouter_promo_model: str = ""
     openrouter_promo_expires: str = ""  # YYYY-MM-DD; blank = no expiry
+    # E-2: one OpenRouter model per ROLE (blank → the benchmarked default in
+    # app/providers/roles.py). OPENROUTER_MODEL above is legacy and no longer read.
+    model_draft: str = ""
+    model_refine: str = ""
+    model_proofread: str = ""
+    model_brief: str = ""
+    model_terms: str = ""
+    model_shorten: str = ""
+    model_qa: str = ""
+    model_vision: str = ""
 
     # tts provider keys (edge-tts needs none)
     fpt_api_key: str = ""

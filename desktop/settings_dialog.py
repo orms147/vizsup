@@ -385,20 +385,35 @@ class SettingsView(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(14, 12, 14, 12)
         cl.setSpacing(6)
-        cl.addWidget(label("Model dịch chính (OpenRouter)", "h3"))
-        row = QHBoxLayout()
-        self.or_model = QComboBox()
-        self.or_model.setEditable(True)
-        self.or_model.setMinimumWidth(280)
-        self.or_model.editTextChanged.connect(self._mark_dirty)
+        from app.providers.roles import ROLES
+
+        head = QHBoxLayout()
+        head.addWidget(label("Mô hình cho từng việc (OpenRouter)", "h3"), 1)
         fetch = button("Tải danh sách model", "RefreshCw", variant="ghost", small=True)
         fetch.clicked.connect(self._fetch_models)
         self._buttons.append(fetch)
-        row.addWidget(self.or_model, 1)
-        row.addWidget(fetch)
-        cl.addLayout(row)
-        self.model_status = label("Dùng cho bản nháp, đọc ngữ cảnh và tinh chỉnh khi chọn "
-                                  "OpenRouter.", "small")
+        head.addWidget(fetch)
+        cl.addLayout(head)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        self.role_combos: dict[str, QComboBox] = {}
+        for row, r in enumerate(ROLES.values()):
+            name = label(r.label, "secondary")
+            name.setToolTip(r.hint)
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.setMinimumWidth(280)
+            combo.lineEdit().setPlaceholderText(f"mặc định · {r.default}")
+            combo.setToolTip(r.hint + "\nĐể trống = dùng mặc định đã thử nghiệm.")
+            combo.editTextChanged.connect(self._mark_dirty)
+            self.role_combos[r.key] = combo
+            grid.addWidget(name, row, 0)
+            grid.addWidget(combo, row, 1)
+        grid.setColumnStretch(1, 1)
+        cl.addLayout(grid)
+        self.model_status = label("Để trống = mặc định chọn theo thử nghiệm 13/10/2026 (8 model "
+                                  "Trung Quốc trên 2 video thật).", "small")
         self.model_status.setWordWrap(True)
         cl.addWidget(self.model_status)
         return card
@@ -470,9 +485,12 @@ class SettingsView(QWidget):
             else:
                 w.setText(current)
             w.blockSignals(False)
-        self.or_model.blockSignals(True)
-        self.or_model.setEditText(settings.openrouter_model or "")
-        self.or_model.blockSignals(False)
+        from app.providers.roles import ROLES
+
+        for key, combo in self.role_combos.items():
+            combo.blockSignals(True)
+            combo.setEditText(getattr(settings, ROLES[key].attr, "") or "")
+            combo.blockSignals(False)
         self._update_promo_state()
         self._set_dirty(False)
 
@@ -586,13 +604,13 @@ class SettingsView(QWidget):
             self.model_status.setText(f"✗ {type(res).__name__}: {res}")
             self.model_status.setStyleSheet(f"color:{V2['red']};")
             return
-        keep = self.or_model.currentText().strip()
-        self.or_model.blockSignals(True)
-        self.or_model.clear()
-        self.or_model.addItems(res)
-        if keep:
-            self.or_model.setEditText(keep)
-        self.or_model.blockSignals(False)
+        for combo in self.role_combos.values():
+            keep = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems([""] + list(res))
+            combo.setEditText(keep)
+            combo.blockSignals(False)
         self.model_status.setText(f"✓ {len(res)} model — chọn trong danh sách")
         self.model_status.setStyleSheet(f"color:{V2['green']};")
 
@@ -601,9 +619,12 @@ class SettingsView(QWidget):
         # keys: only write non-empty ones — blanking a field must not wipe a key
         # the user still has in .env (they clear it by editing .env directly).
         updates = {env: f.text().strip() for env, f in self._fields.items() if f.text().strip()}
-        model = self.or_model.currentText().strip()
-        if model:
-            updates["OPENROUTER_MODEL"] = model
+        from app.providers.roles import ROLES
+
+        # role models: always written — a blank one means "back to the default"
+        role_models = {k: c.currentText().strip() for k, c in self.role_combos.items()}
+        for k, v in role_models.items():
+            updates[f"MODEL_{k.upper()}"] = v
         # options: always write, INCLUDING empties — clearing one is a real intent
         # ("no cookie browser", "resolve ffmpeg from PATH") and must round-trip.
         for env, _n, _a, _k, _h, _c in OPTIONS:
@@ -612,8 +633,8 @@ class SettingsView(QWidget):
 
         for env, f in self._fields.items():
             setattr(settings, ATTR_BY_ENV[env], f.text().strip())
-        if model:
-            settings.openrouter_model = model
+        for k, v in role_models.items():
+            setattr(settings, ROLES[k].attr, v)
         for env, attr in OPT_ATTR_BY_ENV.items():
             value = self._opt_value(env)
             # vizsup_storage_dir is typed Path; assigning a str breaks every "/" use
