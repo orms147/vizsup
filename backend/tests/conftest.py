@@ -3,6 +3,41 @@ from __future__ import annotations
 
 import pytest
 
+def pytest_sessionfinish(session, exitstatus):
+    """Stop and delete every live Qt media object while the QApplication still exists.
+    Left to interpreter teardown, a QMediaPlayer / QAudioOutput made the process
+    fail-fast on Windows (0xC0000409) after all tests had passed, so the exit code lied."""
+    import sys
+
+    if "PySide6.QtMultimedia" not in sys.modules:
+        return
+    import gc
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QUrl
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        w.close()
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, QMediaPlayer):
+                obj.stop()
+                obj.setSource(QUrl())
+                obj.deleteLater()
+            elif isinstance(obj, QAudioOutput):
+                obj.deleteLater()
+        except RuntimeError:          # its C++ side is already gone
+            pass
+    for w in app.topLevelWidgets():
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _no_vad_download(monkeypatch):
     """Tests never hit the network: the one-time Silero VAD model download fails fast,
