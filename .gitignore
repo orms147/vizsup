@@ -51,3 +51,6 @@ samples/refs/*
 Thumbs.db
 .idea/
 .vscode/
+
+# agent worktrees (Claude Code subagents)
+.claude/worktrees/
