@@ -292,7 +292,17 @@ Render page (after approval): "Nghe thử bản lồng tiếng" = TTS (cached, n
 existing mix, audio-only, played over the source video. The full encode then reuses the TTS cache.
 Catches pacing problems without waiting for an MP4.
 
-### E-16 [S] Export conveniences
+### ✅ E-16 [S] Export conveniences — DONE 2026-10-13
+
+Shipped: render page "Khung hình" (gốc / Dọc 9:16 TikTok 1080×1920 — fit before burning, pad
+after; remembered; CLI `--frame tiktok`); result row "Lưu video…" (copy named from the project
+title, hashtags stripped, last folder remembered) + "Xuất ▾" (.srt / .ass / **.mkv phụ đề rời**:
+`app/pipeline/export.py` remuxes source picture + rendered audio + subs.ass + attached fonts,
+0.2 s, no re-encode); "Mở thư mục" selects the file in Explorer. Quick previews write their own
+`preview.ass` so subs.ass keeps matching output.mp4. Two old burn bugs found while checking real
+frames: `WrapStyle: 2` (no wrapping → long lines ran off both edges of vertical videos) → 0, and
+the ASS `[Events]` Format line lacked `Name` → every burned line started with a stray comma.
+
 
 Output named from the project title; "Xuất cho TikTok" preset (1080×1920, pad); optional
 soft-subtitle MKV/MP4 (no burn) for re-editing elsewhere.

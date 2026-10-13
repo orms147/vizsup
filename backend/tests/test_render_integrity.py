@@ -113,3 +113,73 @@ def test_render_view_reopens_a_finished_project_on_its_result(qapp, tmp_path):
     rv = RenderView()
     rv.set_job(job, cues=3)
     assert rv._right_stack.currentIndex() == 2 and rv.render_btn.text() == "Dựng lại"
+
+
+def test_render_view_frame_choice_is_sent_and_remembered(qapp):
+    """E-16: the TikTok 9:16 frame rides in the render opts and survives a restart,
+    even after the start screen saves its own options."""
+    from desktop import store
+    from desktop.views.render_view import RenderView
+
+    rv = RenderView()
+    got: list[dict] = []
+    rv.renderRequested.connect(got.append)
+    rv._emit_render()
+    assert got[-1]["frame"] == "source"
+    rv.frame.setCurrentIndex(rv.frame.findData("tiktok"))
+    rv._emit_render(preview=True)
+    assert got[-1]["frame"] == "tiktok" and got[-1]["preview"] is True
+    store.save_ui_state({"tts": "edge"})                   # start screen overwrites its keys
+    assert store.load_ui_state()["render_frame"] == "tiktok"
+    assert RenderView().frame.currentData() == "tiktok"
+
+
+def test_render_view_saves_a_copy_named_after_the_project(qapp, tmp_path, monkeypatch):
+    from app.models import Job
+    from desktop import store
+    from desktop.views import render_view as rv_mod
+
+    job = Job(id="abc", work_dir=tmp_path / "abc")
+    job.output_video.write_bytes(b"x")
+    (job.work_dir / "preview.mp4").write_bytes(b"p")
+    rv = rv_mod.RenderView()
+    rv.set_project("爱你没差 #翻唱", "")
+    rv.set_job(job, cues=3)
+    rv.show_done(str(job.work_dir / "preview.mp4"))        # quick proof: nothing to save yet
+    assert not rv.save_btn.isEnabled() and not rv.mkv_action.isEnabled()
+    rv.show_done(str(job.output_video))
+    assert rv.save_btn.isEnabled() and rv.mkv_action.isEnabled()
+
+    asked: list[str] = []
+    dest = tmp_path / "out" / "mine.mp4"
+    dest.parent.mkdir()
+
+    def fake_dialog(_parent, _cap, default, _filt):
+        asked.append(default)
+        return str(dest), ""
+
+    monkeypatch.setattr(rv_mod.QFileDialog, "getSaveFileName", fake_dialog)
+    assert rv._ask_dest("Lưu video", ".mp4", "*.mp4") == dest
+    assert Path(asked[0]).name == "爱你没差.mp4"
+    assert store.load_ui_state()["export_dir"] == str(dest.parent)
+    rv._ask_dest("Xuất .srt", ".vi.srt", "*.srt")
+    assert Path(asked[1]) == dest.parent / "爱你没差.vi.srt"      # remembered folder
+
+
+def test_run_render_forwards_frame(qapp, tmp_path, monkeypatch):
+    job = Job(id="f", work_dir=tmp_path / "job")
+    job.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
+    from app.pipeline import approval
+
+    approval.approve(job)
+    seen: dict = {}
+
+    def fake_assemble(j, segments, **kw):
+        seen.update(kw)
+        j.output_video.write_bytes(b"o")
+        return j.output_video
+
+    monkeypatch.setattr(tts_mod, "synthesize", lambda j, **kw: [])
+    monkeypatch.setattr(assemble_mod, "assemble", fake_assemble)
+    worker_mod.PipelineWorker(job, {"tts": "edge", "frame": "tiktok"}).run_render()
+    assert seen["frame"] == "tiktok"

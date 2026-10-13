@@ -261,6 +261,13 @@ def _blur_band_filters(region: dict | None) -> tuple[str, str]:
     return "crop=iw:ih/3:0:ih*2/3", "overlay=0:main_h*2/3"
 
 
+TIKTOK_W, TIKTOK_H = 1080, 1920
+
+
+def _ass_name(preview: bool) -> str:
+    return "preview.ass" if preview else "subs.ass"
+
+
 def _build_render(
     job: Job,
     segments: list[tuple[Cue, Path]],
@@ -271,6 +278,7 @@ def _build_render(
     cover_mode: str = "off",   # "off" | "box" (opaque box in the ASS style) | "blur"
     log: Callable[[str], None] | None = None,
     preview: bool = False,     # E-15: fast low-res preview.mp4 instead of output.mp4
+    frame: str = "source",     # E-16: "source" | "tiktok" (1080x1920, fit + pad)
 ) -> list[str]:
     """Plan the timeline and build the ffmpeg command. The filter graph goes to
     ``<work_dir>/filter_complex.txt`` (+ ``-filter_complex_script``) instead of
@@ -388,6 +396,8 @@ def _build_render(
     else:
         audio_map = "0:a?"
 
+    ass = _ass_name(preview)
+    vsrc = "[0:v]"
     if cover_mode == "blur":
         # blur the hardsub band (the detected region if we have one, else the
         # bottom-third) before burning the VI subs on top — softer than the opaque
@@ -396,12 +406,20 @@ def _build_render(
         parts.append("[0:v]split[vsrc][vband]")
         parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
-        parts.append(f"[vbg]ass=subs.ass{_ass_fonts(wd)}[v]")
-    else:
-        parts.append(f"[0:v]ass=subs.ass{_ass_fonts(wd)}[v]")
+        vsrc = "[vbg]"
+    if frame == "tiktok":
+        # fit inside 1080x1920 BEFORE burning (sharper text, same layout as the source
+        # render), then pad the bars — the cover/blur band stays on the picture
+        parts.append(f"{vsrc}scale={TIKTOK_W}:{TIKTOK_H}:force_original_aspect_ratio=decrease"
+                     f":force_divisible_by=2,setsar=1[vfit]")
+        vsrc = "[vfit]"
+    parts.append(f"{vsrc}ass={ass}{_ass_fonts(wd)}[v]")
     vmap = "[v]"
+    if frame == "tiktok":
+        parts.append(f"[v]pad={TIKTOK_W}:{TIKTOK_H}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
+        vmap = "[vt]"
     if preview:                     # same graph, scaled down after the subs are burned
-        parts.append("[v]scale=-2:640[vp]")
+        parts.append(f"{vmap}scale=-2:640[vp]")
         vmap = "[vp]"
     (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
     quality = ["-crf", "30", "-preset", "ultrafast"] if preview else ["-crf", "20", "-preset",
@@ -431,13 +449,17 @@ def assemble(
     style: dict | None = None,
     log: Callable[[str], None] | None = None,
     preview: bool = False,
+    frame: str = "source",               # "source" | "tiktok"
 ) -> Path:
     mode = cover_mode or ("box" if cover_hardsubs else "off")
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
-    write_ass(cues_for_subs, job.subs_ass, font=font, size=size,
+    # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
+    # (the soft-subtitle export pairs the two)
+    write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job))
 
     cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
-                        dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview)
+                        dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
+                        frame=frame)
     subprocess.run(cmd, cwd=str(job.work_dir), check=True)
     return job.work_dir / "preview.mp4" if preview else job.output_video

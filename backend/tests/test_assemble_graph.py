@@ -166,5 +166,21 @@ def test_preview_is_the_same_graph_scaled_down_and_fast(big_job):
     graph_quick = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert quick[-1] == "preview.mp4" and final[-1] == "output.mp4"
     assert "ultrafast" in quick and "veryfast" in final
-    assert graph_quick.startswith(graph_final.rstrip("\n"))        # same mix + subs
+    # same mix + subs; its own .ass so subs.ass keeps matching output.mp4 (soft-sub export)
+    assert "preview.ass" in graph_quick and "subs.ass" not in graph_quick
+    assert graph_quick.replace("preview.ass", "subs.ass").startswith(graph_final.rstrip("\n"))
     assert "[v]scale=-2:640[vp]" in graph_quick and "[vp]" in quick
+
+
+def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
+    """E-16: 1080x1920 — scale to fit, burn the subs on the picture, then the bars."""
+    job, segments = big_job
+    cmd = _build(job, segments[:3], frame="tiktok", cover_mode="blur")
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    fit = graph.index("[vbg]scale=1080:1920:force_original_aspect_ratio=decrease")
+    burn = graph.index("[vfit]ass=subs.ass")
+    pad = graph.index("[v]pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
+    assert fit < burn < pad and "[vt]" in cmd and cmd[-1] == "output.mp4"
+    _build(job, segments[:3], frame="tiktok", preview=True)
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[0:v]scale=1080:1920" in graph and "[vt]scale=-2:640[vp]" in graph

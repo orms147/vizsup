@@ -223,6 +223,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         cover_mode=args.cover,
         font=args.font,
         log=print,  # surface the "câu QUÁ DÀI" fit warnings headless too
+        frame=args.frame,
     )
     print(f"[render] done -> {out}")
     return 0
@@ -293,6 +294,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--cover", choices=["off", "box", "blur"], default=None,
                     help="hide leftover CN hardsubs: opaque box or a blurred bottom band")
     rn.add_argument("--font", default="Be Vietnam Pro", help="subtitle font (Vietnamese-diacritic)")
+    rn.add_argument("--frame", choices=["source", "tiktok"], default="source",
+                    help="output frame: source size, or tiktok = 1080x1920 (fit + black bars)")
     rn.set_defaults(func=cmd_render)
 
     pr = sub.add_parser("providers", help="list available providers (JSON)")

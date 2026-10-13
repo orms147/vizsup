@@ -270,6 +270,14 @@ def test_keep_audio_maps_to_mix(render_stages, tmp_path):
     assert render_stages["assemble"]["audio_mode"] == "mix"
 
 
+def test_frame_flag_reaches_assemble(render_stages, tmp_path):
+    wd = str(_gated_job(tmp_path))
+    run("render", "--workdir", wd)
+    assert render_stages["assemble"]["frame"] == "source"
+    run("render", "--workdir", wd, "--frame", "tiktok")
+    assert render_stages["assemble"]["frame"] == "tiktok"
+
+
 def test_audio_mode_flag_wins_over_keep_audio(render_stages, tmp_path):
     run("render", "--workdir", str(_gated_job(tmp_path)), "--keep-audio", "--audio-mode", "duck")
     assert render_stages["assemble"]["audio_mode"] == "duck"

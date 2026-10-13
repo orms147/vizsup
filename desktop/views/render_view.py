@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.icons import icon, pixmap
 from desktop.theme import V2
@@ -52,6 +54,8 @@ MODES = (("replace", "Mic", "Thay giọng gốc", "Chỉ nghe giọng Việt"),
          ("duck", "SlidersHorizontal", "Giảm nền tự động", "Nền nhỏ khi có lời"),
          ("keep_music", "Music2", "Giữ nhạc nền", "AI tách lời gốc"),
          ("original", "Captions", "Giữ giọng gốc", "Không lồng tiếng, chỉ phụ đề — hợp video hát"))
+FRAMES = (("Giữ nguyên khung hình gốc", "source"),
+          ("Dọc 9:16 · TikTok / Reels / Shorts (1080×1920)", "tiktok"))
 COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
           ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
           ("Không che", "off"))
@@ -156,6 +160,10 @@ class RenderView(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._out: str | None = None
+        self._out_frame = "source"     # frame of the output.mp4 rendered this session
+        self._showing_quick = False    # the result pane holds preview.mp4, not output.mp4
+        self._title = ""
+        self._saved: str | None = None  # last copy saved with "Lưu video…"
         self._job = None
         self._has_real_voices = False
         self._tts = "edge"             # provider key (registry)
@@ -272,8 +280,19 @@ class RenderView(QWidget):
         for text, key in COVERS:
             self.cover.addItem(text, key)
         ll.addWidget(self.cover)
-        ll.addWidget(label("Xuất đúng kích thước video gốc. Kiểu chữ lấy từ màn Sửa phụ đề.",
-                           "small", wrap=True))
+        ll.addWidget(label("Khung hình", "h3"))
+        self.frame = QComboBox()
+        for text, key in FRAMES:
+            self.frame.addItem(text, key)
+        self.frame.setToolTip("Dọc 9:16: video được thu vừa khung 1080×1920 rồi thêm viền đen — "
+                              "đăng thẳng lên TikTok/Reels. Video Douyin vốn đã dọc thì gần như "
+                              "không có viền.")
+        i = self.frame.findData(store.load_ui_state().get("render_frame"))
+        self.frame.setCurrentIndex(max(i, 0))
+        self.frame.currentIndexChanged.connect(
+            lambda _i: store.update_ui_state(render_frame=self.frame.currentData()))
+        ll.addWidget(self.frame)
+        ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
         ll.addStretch(1)
 
         scroll = QScrollArea()
@@ -461,17 +480,27 @@ class RenderView(QWidget):
         al = QHBoxLayout(acts)
         al.setContentsMargins(14, 10, 14, 10)
         al.setSpacing(8)
-        self.open_btn = button("Mở thư mục", "FolderOpen", variant="primary")
+        self.save_btn = button("Lưu video…", "FileVideo", variant="primary",
+                               tip="Lưu một bản video, đặt tên theo tiêu đề dự án")
+        self.save_btn.clicked.connect(self._save_video)
+        self.open_btn = button("Mở thư mục", "FolderOpen")
         self.open_btn.clicked.connect(self._open_folder)
-        srt = button("Xuất .srt", "Download")
-        srt.clicked.connect(lambda: self._export("srt"))
-        ass = button("Xuất .ass", "Download")
-        ass.clicked.connect(lambda: self._export("ass"))
+        self.export_btn = button("Xuất", "Download")
+        menu = QMenu(self.export_btn)
+        menu.addAction("Phụ đề .srt", lambda: self._export("srt"))
+        menu.addAction("Phụ đề .ass (giữ kiểu chữ)", lambda: self._export("ass"))
+        self.mkv_action = menu.addAction("Video .mkv · phụ đề rời (bật/tắt được)", self._export_mkv)
+        self.mkv_action.setToolTip("Hình gốc không đốt chữ + giọng đã dựng + phụ đề kèm font — "
+                                   "để sửa tiếp trong phần mềm khác. Không mã hóa lại, vài giây.")
+        menu.setToolTipsVisible(True)
+        self.export_btn.setMenu(menu)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
-        for b in (self.open_btn, srt, ass, back):
+        for b in (self.save_btn, self.open_btn, self.export_btn, back):
             al.addWidget(b)
         al.addStretch(1)
+        self.res_status = label("", "small")
+        al.addWidget(self.res_status)
         rv.addSpacing(8)
         rv.addWidget(acts)
         self._right_stack.addWidget(res)
@@ -479,12 +508,16 @@ class RenderView(QWidget):
 
     # --- state ---------------------------------------------------------------------
     def set_project(self, title: str, meta: str) -> None:
+        self._title = title
         self.project.set_project(title, meta)
 
     def set_job(self, job, *, cues: int, tts: str = "") -> None:
         if job is not self._job:
             self._suggested = False
             self._out = None
+            self._out_frame = "source"
+            self._saved = None
+            self._show_result_kind(quick=False)
             out = getattr(job, "output_video", None)
             if out is not None and Path(out).exists():
                 self._out = str(out)
@@ -605,6 +638,7 @@ class RenderView(QWidget):
             "dub_volume": self.dub_vol.value() / 100.0,
             "cover_mode": self.cover.currentData(),
         }
+        opts["frame"] = self.frame.currentData()   # E-16
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         self._start_progress(opts)
@@ -668,10 +702,11 @@ class RenderView(QWidget):
 
     def show_done(self, path: str) -> None:
         quick = Path(path).name == "preview.mp4"
-        self._result_title.setText("Bản xem nhanh (640p) — nghe thử rồi bấm Dựng video" if quick
-                                   else "Video tiếng Việt đã sẵn sàng")
         if not quick:
             self._out = path
+            self._out_frame = self.frame.currentData()
+            self._saved = None
+        self._show_result_kind(quick=quick)
         self._tick.stop()
         size = ""
         try:
@@ -690,6 +725,19 @@ class RenderView(QWidget):
         self.again_lbl.setVisible(True)
         self.render_btn.setEnabled(True)
         self._update_lock()
+
+    def _show_result_kind(self, *, quick: bool) -> None:
+        """The result pane shows either the real output or a quick preview; saving and
+        the .mkv export only ever use the real output."""
+        self._showing_quick = quick
+        self._result_title.setText("Bản xem nhanh (640p) — nghe thử rồi bấm Dựng video" if quick
+                                   else "Video tiếng Việt đã sẵn sàng")
+        real = not quick
+        self.save_btn.setEnabled(real)
+        self.mkv_action.setEnabled(real)
+        self.save_btn.setToolTip("Lưu một bản video, đặt tên theo tiêu đề dự án" if real else
+                                 "Đây là bản xem nhanh — bấm Dựng video để có bản lưu được")
+        self.res_status.setText("")
 
     def show_error(self, msg: str) -> None:
         self._tick.stop()
@@ -737,21 +785,92 @@ class RenderView(QWidget):
 
         self._bg.run(work, done, fail)
 
+    # E-16: copies named after the project title, in the folder used last time
+    def _ask_dest(self, caption: str, suffix: str, filt: str) -> Path | None:
+        from app.pipeline.export import safe_name
+
+        start = store.load_ui_state().get("export_dir") or ""
+        if not start or not Path(start).is_dir():
+            vids = Path.home() / "Videos"
+            start = str(vids if vids.is_dir() else Path.home())
+        stem = safe_name(self._title, self._job.id if self._job else "video")
+        fn, _ = QFileDialog.getSaveFileName(self, caption, str(Path(start) / f"{stem}{suffix}"),
+                                            filt)
+        if not fn:
+            return None
+        store.update_ui_state(export_dir=str(Path(fn).parent))
+        return Path(fn)
+
+    def _save_video(self) -> None:
+        if self._showing_quick or not self._out or not Path(self._out).exists():
+            return
+        tag = " (9x16)" if self._out_frame == "tiktok" else ""
+        dest = self._ask_dest("Lưu video", f"{tag}.mp4", "Video MP4 (*.mp4)")
+        if dest is None:
+            return
+        src = self._out
+        self.save_btn.setEnabled(False)
+        self.res_status.setText("Đang lưu…")
+
+        def done(p):
+            self._saved = p
+            self.save_btn.setEnabled(True)
+            self.res_status.setText(f"Đã lưu: {Path(p).name}")
+
+        def fail(msg):
+            self.save_btn.setEnabled(True)
+            self.res_status.setText(f"Không lưu được: {msg}")
+
+        self._bg.run(lambda: str(shutil.copyfile(src, dest)), done, fail)
+
     def _export(self, kind: str) -> None:
         if self._job is None:
             return
         src = self._job.vi_srt if kind == "srt" else self._job.subs_ass
         if not src.exists():
-            self.status.setText("Chưa có tệp .ass — dựng video trước.")
+            self.res_status.setText("Chưa có tệp .ass — dựng video trước.")
             return
-        fn, _ = QFileDialog.getSaveFileName(self, f"Xuất .{kind}", str(Path.home() / f"vi.{kind}"),
-                                            f"*.{kind}")
-        if fn:
-            shutil.copyfile(src, fn)
+        dest = self._ask_dest(f"Xuất .{kind}", f".vi.{kind}", f"*.{kind}")
+        if dest is None:
+            return
+        try:
+            shutil.copyfile(src, dest)
+            self.res_status.setText(f"Đã xuất: {dest.name}")
+        except OSError as e:
+            self.res_status.setText(f"Không xuất được: {e}")
+
+    def _export_mkv(self) -> None:
+        if self._job is None or self._showing_quick or not self._out:
+            return
+        dest = self._ask_dest("Xuất video phụ đề rời", ".mkv", "Video MKV (*.mkv)")
+        if dest is None:
+            return
+        from app.pipeline import export
+
+        job = self._job
+        self.export_btn.setEnabled(False)
+        self.res_status.setText("Đang xuất .mkv…")
+
+        def done(p):
+            self._saved = p
+            self.export_btn.setEnabled(True)
+            self.res_status.setText(f"Đã xuất: {Path(p).name}")
+
+        def fail(msg):
+            self.export_btn.setEnabled(True)
+            self.res_status.setText(f"Không xuất được .mkv: {msg}")
+
+        self._bg.run(lambda: str(export.export_softsub(job, dest)), done, fail)
 
     def _open_folder(self) -> None:
-        if self._out and os.path.exists(self._out):
-            os.startfile(os.path.dirname(self._out))  # noqa: S606 (Windows)
+        """Explorer with the file selected: the last saved copy, else the result shown."""
+        import subprocess
+
+        shown = (str(Path(self._job.work_dir) / "preview.mp4") if self._showing_quick and self._job
+                 else self._out)
+        target = self._saved if self._saved and os.path.exists(self._saved) else shown
+        if target and os.path.exists(target):
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(target)])  # noqa: S603,S607
 
     def shutdown(self) -> None:
         self._bg.shutdown()

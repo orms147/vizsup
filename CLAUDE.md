@@ -17,7 +17,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 - **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.**
 - **TTS** — provider-pluggable; default edge-tts vi-VN.
 - **fit+mix** — place each VI segment at its absolute start, atempo to fit, pad silence; duck/replace original audio.
-- **render** — FFmpeg burns styled `.ass`; also export editable `.srt`/`.ass`.
+- **render** — FFmpeg burns styled `.ass` (bundled fonts via `fontsdir`); "Xem nhanh" 640p proof first; frame: source or TikTok 9:16; exports: named MP4 copy, `.srt`/`.ass`, soft-sub `.mkv` (`pipeline/export.py`).
 
 ## Hard constraints (learned from research — respect these)
 

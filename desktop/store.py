@@ -38,7 +38,25 @@ def save_ui_state(opts: dict) -> None:
     p = _storage() / "ui_state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     data = {k: opts.get(k) for k in _UI_KEYS if opts.get(k) is not None}
+    old = load_ui_state()
+    data.update({k: old[k] for k in _OTHER_UI_KEYS if k in old})   # other screens' choices
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# Preferences of other screens (render page): merged in, never cleared by the start screen.
+_OTHER_UI_KEYS = ("render_frame", "export_dir")
+
+
+def update_ui_state(**kv) -> None:
+    """Merge a few remembered choices (``_OTHER_UI_KEYS``) into ui_state.json."""
+    p = _storage() / "ui_state.json"
+    data = load_ui_state()
+    data.update({k: v for k, v in kv.items() if k in _OTHER_UI_KEYS})
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 # --- jobs ------------------------------------------------------------------
