@@ -86,14 +86,14 @@ _HEADER_PRE = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"""
 
 _HEADER_POST = """[Events]
-Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text"""
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"""
 
 # Full subtitle style. Colours are "#RRGGBB"; alpha is 0=opaque..255=transparent.
 # border_style: 1=outline+shadow, 3=opaque box (tight), 4=opaque box. alignment is

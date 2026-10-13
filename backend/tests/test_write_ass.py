@@ -32,6 +32,23 @@ def test_default_structure():
     assert "\\pos(" not in t and "\\fsp" not in t     # no inline overrides by default
 
 
+def test_long_lines_wrap_like_the_editor_preview():
+    """The editor word-wraps inside the subtitle box; WrapStyle 2 (no wrapping) made
+    long lines run off both edges of vertical videos in the burned MP4 (2026-10-13)."""
+    assert "\nWrapStyle: 0\n" in _ass()
+
+
+def test_dialogue_fields_match_the_format_line():
+    """Parsed the way libass does (split by the Format fields, Text = the rest): the
+    Format line once lacked Name, so every burned line started with a stray comma."""
+    t = _ass()
+    fmt = next(ln for ln in t.splitlines() if ln.startswith("Format: Layer"))
+    n = len(fmt.split(":", 1)[1].split(","))
+    texts = [ln.split(":", 1)[1].split(",", n - 1)[-1]
+             for ln in t.splitlines() if ln.startswith("Dialogue:")]
+    assert texts == [c.text for c in CUES]
+
+
 def test_style_colour_bold_pos_fsp():
     t = _ass(style={"primary": "#FFD400", "bold": True, "pos": [0.5, 0.7], "letter_spacing": 3})
     assert "&H0000D4FF" in _style_line(t)             # #FFD400 → &HAABBGGRR opaque
