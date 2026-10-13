@@ -63,7 +63,13 @@ Confirm these with E-3's blind judge on a third, *spoken* (ASR) job before switc
 
 ## P0 — correctness
 
-### E-0 [S] OCR keeps static overlays as subtitles
+### ✅ E-0 [S] OCR keeps static overlays as subtitles — DONE 2026-10-13
+
+Shipped `ocr.drop_overlays` (after `group_frames`): a text re-read as similar flickers ≥6 times
+with median ≤1 s → `overlay`; 豆包AI生成 / 抖音号 / @handle → `watermark`; one-frame Latin
+fragments → `blip`. Dropped lines go to `ocr_dropped.json`. On bb15cbcac86c: 78 → 44 lines
+(25 banner, 2 watermark, 7 blip); two other jobs untouched. Original spec below.
+
 
 **Symptom** (job `bb15cbcac86c`): the first 40 "subtitles" are the channel's decorative banner
 ("School life Welcome to my channel", misread as "life lcomme Lo annel", "tife elcome…") cut into

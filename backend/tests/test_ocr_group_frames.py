@@ -90,3 +90,41 @@ def test_cleanest_read_and_rep_frame_index():
 
 def test_empty_input_is_empty():
     assert group_frames([], sim=0.5, fps=2.0, min_dur=0.4) == []
+
+
+# --- E-0: static overlays / watermarks / blips -------------------------------------
+
+from app.models import Cue  # noqa: E402
+from app.pipeline.ocr import drop_overlays  # noqa: E402
+
+
+def _c(i, s, e, t):
+    return Cue(i, s, e, t)
+
+
+def test_a_flickering_banner_is_dropped_but_real_lines_stay():
+    banner = ["School life Welcome to my channel", "School life Welcome to channel muy",
+              "Welcome channel to my", "life Welcome channel to my",
+              "My School life Welcome to my channel", "School life Welcome to my channe"]
+    cues = [_c(k + 1, k * 0.5, k * 0.5 + 0.5, t) for k, t in enumerate(banner)]
+    cues += [_c(7, 4.0, 6.0, "小姐姐你知道读哪里了吗"), _c(8, 6.0, 8.0, "从我的大脑皮层划过")]
+    kept, dropped = drop_overlays(cues)
+    assert [c.text for c in kept] == ["小姐姐你知道读哪里了吗", "从我的大脑皮层划过"]
+    assert [c.index for c in kept] == [1, 2]
+    assert {d["why"] for d in dropped} == {"overlay"} and len(dropped) == 6
+
+
+def test_a_repeated_chorus_is_not_an_overlay():
+    line = "我说再喝一碗我熬的茶汤"
+    cues = [_c(k + 1, k * 20.0, k * 20.0 + 4.0, line) for k in range(6)]
+    kept, dropped = drop_overlays(cues)
+    assert len(kept) == 6 and dropped == []
+
+
+def test_watermarks_and_single_frame_latin_blips_are_dropped():
+    cues = [_c(1, 0.0, 0.5, "CAS"), _c(2, 1.0, 2.0, "豆包AI生成"), _c(3, 2.0, 3.0, "@小王同学"),
+            _c(4, 3.0, 3.5, "2900元"), _c(5, 4.0, 6.0, "Good morning everyone"),
+            _c(6, 6.0, 8.0, "早上新学期过了两个月")]
+    kept, dropped = drop_overlays(cues)
+    assert [c.text for c in kept] == ["2900元", "Good morning everyone", "早上新学期过了两个月"]
+    assert sorted(d["why"] for d in dropped) == ["blip", "watermark", "watermark"]

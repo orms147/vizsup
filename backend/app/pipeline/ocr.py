@@ -307,6 +307,12 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
 
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     kept = group_frames(per_frame, sim=sim, fps=fps, min_dur=min_dur)
+    # 2b) E-0: static banners / watermarks / one-frame Latin junk are not subtitles
+    survivors, dropped = drop_overlays([c for c, _cf, _rf in kept])
+    alive = {id(c) for c in survivors}
+    kept = [t for t in kept if id(t[0]) in alive]
+    (job.work_dir / "ocr_dropped.json").write_text(
+        json.dumps(dropped, ensure_ascii=False, indent=1), encoding="utf-8")
     cues = []
     report: list[dict] = []
     for i, (c, cf, rf) in enumerate(kept, 1):
@@ -390,3 +396,45 @@ def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=N
     if done:
         write_srt(cues, job.cn_srt)
     return done
+
+
+# --- E-0: static overlays are not subtitles ----------------------------------------
+# A channel banner ("School life Welcome to my channel") sits on screen while OCR
+# misreads it differently every frame, so it falls apart into dozens of 0.5 s "cues"
+# (job bb15cbcac86c, 2026-10-13: the first 40 lines). Real subtitles last seconds and
+# repeat a handful of times at most (a sung chorus: ~4 × 3–5 s).
+OVERLAY_MIN_REPEATS = 6       # similar reads at least this many times…
+OVERLAY_MAX_MEDIAN = 1.0      # …each flickering for about a frame or two
+_WATERMARK = re.compile(r"AI\s*生成|抖音号|抖音[iI][dD]|快手号|小红书号|^@\S+|^\s*@")
+_BLIP_LETTERS = 6             # one-frame Latin junk off the background ("CAS", "STIE")
+
+
+def drop_overlays(cues: list[Cue], *, sim: float = 0.6) -> tuple[list[Cue], list[dict]]:
+    """Split OCR cues into (kept, dropped-with-reason). Pure. Drops:
+    - ``overlay``   — a text that keeps re-appearing as short flickers (static banner)
+    - ``watermark`` — platform / AI watermarks (豆包AI生成, 抖音号…, @handle)
+    - ``blip``      — a single-frame Latin fragment with no Chinese
+    Kept cues are re-indexed 1..n."""
+    import statistics
+
+    drop: dict[int, str] = {}
+    for i, c in enumerate(cues):
+        if _WATERMARK.search(c.text):
+            drop[i] = "watermark"
+        elif (not _CJK.search(c.text) and not _NUMERIC.match(c.text) and c.duration <= 0.5
+              and len(_LATIN.findall(c.text)) <= _BLIP_LETTERS):
+            drop[i] = "blip"
+    for i, c in enumerate(cues):
+        if i in drop:
+            continue
+        group = [j for j, d in enumerate(cues) if _similar(c.text, d.text, sim)]
+        if (len(group) >= OVERLAY_MIN_REPEATS
+                and statistics.median(cues[j].duration for j in group) <= OVERLAY_MAX_MEDIAN):
+            for j in group:
+                drop.setdefault(j, "overlay")
+    kept = [c for i, c in enumerate(cues) if i not in drop]
+    for k, c in enumerate(kept, 1):
+        c.index = k
+    dropped = [{"start": cues[i].start, "end": cues[i].end, "text": cues[i].text, "why": why}
+               for i, why in sorted(drop.items())]
+    return kept, dropped
