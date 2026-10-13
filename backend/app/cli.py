@@ -150,6 +150,13 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
     else:
         print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
         translate.translate(job, draft=args.translator, refine=args.refine, force=force, log=print)
+        # 3.5) E-5: AI QA pass → qa_report.json (never edits vi.srt)
+        if not getattr(args, "no_qa", False) and args.translator != "passthrough":
+            from app.pipeline import brief, qa
+
+            qa.review(job, args.refine or args.translator,
+                      context={"_brief": brief.load_brief(job) or ""},
+                      log=lambda m: print(f"[run] {m}"))
 
     print("\n" + "=" * 64)
     print("EDIT GATE — review/fix the Vietnamese subtitles, then render:")
@@ -258,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="your own context note for this video; the AI expands it into a brief "
                         "and treats it as authoritative (implies a brief even without --auto-context)")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
+    r.add_argument("--no-qa", action="store_true",
+                   help="skip the AI review pass that flags suspect lines (qa_report.json)")
     r.add_argument("--no-snap", action="store_true",
                    help="keep ASR/OCR cue times as-is (default: snap each cue edge to the nearest "
                         "voice start/stop within 1 s, local Silero VAD)")

@@ -71,6 +71,7 @@ class CueInspector(QFrame):
     lockToggled = Signal(bool)
     lineBreakRequested = Signal()
     autoSnapRequested = Signal()       # "Tự canh" — snap this cue's edges to the voice
+    applyFixRequested = Signal(str)    # "Dùng gợi ý" from the AI review (E-5)
     shortenRequested = Signal()
     listenRequested = Signal()
     glossaryRequested = Signal()
@@ -174,6 +175,28 @@ class CueInspector(QFrame):
         fh.addWidget(self.fit_icon)
         fh.addWidget(self.fit_lbl, 1)
         lay.addWidget(self.fit)
+
+        # E-5: the AI reviewer's note + proposed line for THIS cue (hidden otherwise)
+        self.ai_box = QFrame()
+        self.ai_box.setObjectName("inset")
+        ab = QVBoxLayout(self.ai_box)
+        ab.setContentsMargins(10, 8, 10, 8)
+        ab.setSpacing(4)
+        self.ai_note = QLabel("")
+        self.ai_note.setWordWrap(True)
+        self.ai_note.setStyleSheet(f"color:{V2['secondary']};font-size:12px;background:transparent;")
+        self.ai_fix = QLabel("")
+        self.ai_fix.setWordWrap(True)
+        self.ai_fix.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.ai_fix.setStyleSheet(f"color:{V2['purple_bright']};font-size:13px;background:transparent;")
+        self.ai_apply = button("Dùng gợi ý", "Check", variant="ghost", small=True,
+                               tip="Thay câu bằng gợi ý của AI (Ctrl+Z để hoàn tác)")
+        self.ai_apply.clicked.connect(lambda: self.applyFixRequested.emit(self.ai_fix.text()))
+        ab.addWidget(self.ai_note)
+        ab.addWidget(self.ai_fix)
+        ab.addWidget(self.ai_apply, 0, Qt.AlignLeft)
+        self.ai_box.setVisible(False)
+        lay.addWidget(self.ai_box)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -343,6 +366,20 @@ class CueInspector(QFrame):
             if not f.hasFocus():
                 f.setText(fmt_time(val, 3))
         self.dur_lbl.setText(f"{c.dur:.2f} s")
+
+    def set_ai_finding(self, finding: dict | None) -> None:
+        from app.pipeline import qa
+
+        if not finding:
+            self.ai_box.setVisible(False)
+            return
+        kind = qa.KINDS.get(finding.get("kind", ""), "AI nghi sai")
+        self.ai_note.setText(f"AI soát · {kind}: {finding.get('note', '')}")
+        fix = finding.get("fix", "")
+        self.ai_fix.setText(fix)
+        self.ai_fix.setVisible(bool(fix))
+        self.ai_apply.setVisible(bool(fix))
+        self.ai_box.setVisible(True)
 
     def set_issues(self, issues: list[str]) -> None:
         ok = not issues

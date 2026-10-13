@@ -186,3 +186,18 @@ def test_worker_snap_failure_is_logged_not_raised(qapp, tmp_path, monkeypatch):
     w.log.connect(logs.append)
     w._snap_to_voice(w.job)
     assert logs and logs[-1].startswith("⚠ Bỏ qua bước tự canh lời")
+
+
+def test_ai_finding_shows_in_the_inspector_and_its_fix_is_one_undo_step(view):
+    view._qa = [{"start": 0.0, "end": 2.0, "vi": "một", "kind": "meaning",
+                 "note": "sai nghĩa", "fix": "một hai"}]
+    view._refresh_issues()
+    view.cue_list.selectRow(0)
+    view._update_cue_panel(0)
+    assert not view.inspector.ai_box.isHidden() and view.inspector.ai_fix.text() == "một hai"
+    assert "ai" in view.issues[0]
+    view.inspector.ai_apply.click()
+    assert view.cues[0].vi == "một hai" and "ai" not in view.issues[0]
+    assert view.inspector.ai_box.isHidden()
+    view._undo_action()
+    assert view.cues[0].vi == "một"

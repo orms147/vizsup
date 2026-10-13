@@ -21,7 +21,7 @@ def _storage() -> Path:
 # --- UI choices ------------------------------------------------------------
 _UI_KEYS = ("subtitle_source", "asr", "translator", "refine", "tts",
             "ocr_region", "ocr_proofread", "extract_terms", "auto_context", "options_open",
-            "auto_snap")
+            "auto_snap", "ai_review")
 
 
 def load_ui_state() -> dict:
@@ -108,6 +108,12 @@ def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:
     return out if out.exists() else None
 
 
+def _qa_load(job) -> list:
+    from app.pipeline import qa
+
+    return qa.load(job)
+
+
 def project_summary(job_id: str) -> dict:
     """Status details for the "Tiếp tục dự án" list: cue count, cues still needing
     review, approval, duration, thumbnail. Blocking (reads files, may run ffmpeg)."""
@@ -130,7 +136,8 @@ def project_summary(job_id: str) -> dict:
             cues = cuemodel.load_pair(job)
             ocr, term = review.load_flag_spans(job)
             issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term,
-                                       guess_spans=review.load_guess_spans(job))
+                                       guess_spans=review.load_guess_spans(job),
+                                       qa_findings=_qa_load(job))
             info["cues"] = len(cues)
             info["pending"] = sum(1 for c, i in zip(cues, issues, strict=False)
                                   if i and not cuemodel.is_reviewed(c))

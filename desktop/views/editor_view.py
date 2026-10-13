@@ -77,6 +77,7 @@ class EditorView(QWidget):
         self.issues: list[list[str]] = []
         self._spans: tuple[list, list] = ([], [])   # (ocr, glossary) flag spans
         self._guess: list = []                      # ASR-estimated timing (timing_report)
+        self._qa: list = []                         # AI review findings (qa_report, E-5)
         self._speech: list | None = None   # voice spans (app.pipeline.vad) for "Tự canh"
         self._ctx: dict = {}          # tts/voice/translator context from step 1
         self._sel: int = -1           # selected cue index
@@ -178,6 +179,7 @@ class EditorView(QWidget):
         ins.lockToggled.connect(self._on_lock)
         ins.lineBreakRequested.connect(self._line_break)
         ins.autoSnapRequested.connect(self._auto_snap_selected)
+        ins.applyFixRequested.connect(self._apply_ai_fix)
         ins.shortenRequested.connect(self._shorten)
         ins.listenRequested.connect(self._preview_dub)
         ins.glossaryRequested.connect(self.glossaryRequested)
@@ -376,7 +378,27 @@ class EditorView(QWidget):
             self.inspector.set_cue(-1, None, [])
             return
         self.inspector.set_cue(idx, self.cues[idx], self._issues_at(idx), lines=self._line_count(idx))
+        self._show_ai_finding(idx)
         self._update_listen()
+
+    def _show_ai_finding(self, i: int) -> None:
+        from app.pipeline import qa
+
+        found = qa.findings_for(self.cues[i], self._qa) if 0 <= i < len(self.cues) else []
+        self.inspector.set_ai_finding(found[0] if found else None)
+
+    def _apply_ai_fix(self, text: str) -> None:
+        i = self._sel
+        if not text or not (0 <= i < len(self.cues)) or self.cues[i].vi == text:
+            return
+        self._snapshot()
+        self.cues[i].vi = text
+        self.cue_list.refresh_row(i)
+        self.video.set_cues(self.cues)
+        self._refresh_issues()
+        self._update_cue_panel(i)          # the finding no longer matches → hidden
+        self._mark_dirty()
+        self.message.emit("Đã dùng gợi ý của AI — Ctrl+Z để hoàn tác.", "ok")
 
     def _issues_at(self, i: int) -> list[str]:
         return self.issues[i] if 0 <= i < len(self.issues) else []
@@ -503,7 +525,8 @@ class EditorView(QWidget):
     def _compute_issues(self) -> list[list[str]]:
         ocr, term = self._spans
         return review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term,
-                                 guess_spans=self._guess, voice=self._speech)
+                                 guess_spans=self._guess, voice=self._speech,
+                                 qa_findings=self._qa)
 
     def _set_speech(self, spans: list | None, why: str = "") -> None:
         had = self._speech
@@ -781,8 +804,11 @@ class EditorView(QWidget):
         try:
             self._spans = review.load_flag_spans(job)
             self._guess = review.load_guess_spans(job)
+            from app.pipeline import qa
+
+            self._qa = qa.load(job)
         except Exception:  # noqa: BLE001 - flags are hints; never block opening a job
-            self._spans, self._guess = ([], []), []
+            self._spans, self._guess, self._qa = ([], []), [], []
         self._meta = {"title": _job_title(job), "platform": job.metadata.get("platform") or
                       _job_field(job, "platform") or "", "dur": 0.0, "dims": (0, 0)}
         self._update_project()

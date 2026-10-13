@@ -241,6 +241,15 @@ class PipelineWorker(QObject):
                                     refine=o.get("refine"), glossary=gl or None,
                                     log=self.log.emit, cancel=lambda: self._cancel)
                 self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
+                # 3.5) E-5: a strong model points at lines worth a human look (never edits)
+                if o.get("ai_review", True) and o.get("translator", "passthrough") != "passthrough":
+                    self._check()
+                    from app.pipeline import brief, qa
+
+                    self.progress.emit(0.92, "AI soát bản dịch…")
+                    qa.review(job, o.get("refine") or o["translator"],
+                              context={"_brief": brief.load_brief(job) or ""},
+                              log=self.log.emit)
             store.debug("translate ok → emit gate_reached")
 
             self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")

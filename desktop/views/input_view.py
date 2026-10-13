@@ -360,11 +360,16 @@ class InputView(QWidget):
             "dừng (tối đa ~1 s). Chạy trên máy (Silero VAD), không gửi âm thanh đi đâu.")
         g.addWidget(self.auto_context, 5, 0)
         g.addWidget(self.auto_snap, 5, 1)
+        self.ai_review = QCheckBox("AI soát bản dịch")
+        self.ai_review.setToolTip(
+            "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
+            "(nghĩa, xưng hô, tên riêng…) kèm gợi ý sửa — vào mục “Cần xem lại”. Không tự sửa.")
+        g.addWidget(self.ai_review, 7, 0)
         g.addWidget(self.extract_terms, 6, 0)
         g.addWidget(self.ocr_proofread, 6, 1)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
-        g.addWidget(self.asr_note, 7, 0, 1, 2)
+        g.addWidget(self.asr_note, 8, 0, 1, 2)
         for w in (self.draft, self.refine, self.asr, self.tts):
             w.currentIndexChanged.connect(self._update_defaults)
         return box
@@ -391,6 +396,7 @@ class InputView(QWidget):
         self.extract_terms.setChecked(bool(st.get("extract_terms")))
         self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
         self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
+        self.ai_review.setChecked(bool(st.get("ai_review", True)))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -467,6 +473,7 @@ class InputView(QWidget):
             "extract_terms": self.extract_terms.isChecked(),
             "auto_context": self.auto_context.isChecked(),
             "auto_snap": self.auto_snap.isChecked(),
+            "ai_review": self.ai_review.isChecked(),
         }
         note = self.context_note.toPlainText().strip()
         if note:

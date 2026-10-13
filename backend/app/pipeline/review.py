@@ -11,6 +11,7 @@ Pure, UI-agnostic. A cue is flagged for any of:
 - ``guess``   — ASR timed it by estimate (no heard words anchored it; timing_report)
 - ``novoice`` — filler-only Chinese (呼呜 / 啊啊) with no voice under it: likely an
                 ASR hallucination on music
+- ``ai``      — the AI QA pass (pipeline/qa.py) flagged the line and it is unchanged since
 
 OCR and glossary reports number cues by their position in cn.srt, which no longer
 matches vi.srt once translation deduped repeats and the user split/merged lines —
@@ -34,8 +35,9 @@ LABELS = {
     "term": "Thiếu thuật ngữ",
     "guess": "Timing đoán",
     "novoice": "Không nghe thấy giọng",
+    "ai": "AI nghi sai",
 }
-ORDER = ("short", "overlap", "guess", "novoice", "long", "ocr", "term")
+ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "ocr", "term")
 _FILLER = re.compile(r"^[呼呜啊哦嗯哈呀唔嘿喔哎诶噢嗷哇咿吖啦嘛哼\s，。！？、…~～.!?,-]*$")
 
 
@@ -50,8 +52,8 @@ def _overlaps(a_start: float, a_end: float, spans: list[Span]) -> bool:
 
 
 def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
-               guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None
-               ) -> list[list[str]]:
+               guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None,
+               qa_findings: list[dict] = ()) -> list[list[str]]:
     """``cues``: objects with ``start``, ``end``, and Vietnamese text in ``vi`` (editor
     cues) or ``text`` (+ optional Chinese ``zh``). ``voice``: VAD spans, when known.
     Returns, per cue, its issue keys in ORDER."""
@@ -71,6 +73,11 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
         if (voice is not None and zh.strip() and _FILLER.match(zh)
                 and not any(s < c.end and e > c.start for s, e in voice)):
             issues.append("novoice")
+        if qa_findings:
+            from app.pipeline import qa
+
+            if qa.findings_for(c, qa_findings):
+                issues.append("ai")
         if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i)):
             issues.append("long")
         if ocr_spans and _overlaps(c.start, c.end, ocr_spans):
