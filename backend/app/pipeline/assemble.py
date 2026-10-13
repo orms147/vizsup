@@ -22,6 +22,7 @@ filename (avoids Windows drive-colon escaping headaches).
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -137,6 +138,29 @@ def _mix_chunked(labels: list[str], parts: list[str], *, group: int = 32) -> str
     return labels[0]
 
 
+# The subtitle fonts ship with the app (desktop/assets/fonts, OFL) but are not installed
+# in Windows, so libass fell back to Arial ("fontselect: (Be Vietnam Pro) -> ArialMT",
+# found 2026-10-13). Copy them next to the job and point libass at them.
+_BUNDLED_FONTS = Path(__file__).resolve().parents[3] / "desktop" / "assets" / "fonts"
+
+
+def _ass_fonts(wd: Path) -> str:
+    """``:fontsdir=fonts`` for the ass filter (cwd = job dir), or '' if none bundled."""
+    fonts = sorted(_BUNDLED_FONTS.glob("*.ttf")) if _BUNDLED_FONTS.is_dir() else []
+    if not fonts:
+        return ""
+    dst = wd / "fonts"
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in fonts:
+            target = dst / f.name
+            if not target.exists() or target.stat().st_size != f.stat().st_size:
+                shutil.copyfile(f, target)
+    except OSError:
+        return ""
+    return ":fontsdir=fonts"
+
+
 def style_preview_frame(
     job: Job,
     cues: list[Cue],
@@ -164,7 +188,8 @@ def style_preview_frame(
     # cue actually active at `at` (input-seek would reset PTS → always cue #1).
     subprocess.run(
         [ffmpeg_bin(), "-y", "-i", "source.mp4", "-ss", f"{at:.3f}",
-         "-frames:v", "1", "-vf", "ass=_preview.ass", "-q:v", "2", "_preview.png"],
+         "-frames:v", "1", "-vf", f"ass=_preview.ass{_ass_fonts(wd)}", "-q:v", "2",
+         "_preview.png"],
         cwd=str(wd), check=True, capture_output=True,
     )
     return out
@@ -245,6 +270,7 @@ def _build_render(
     dub_volume: float,
     cover_mode: str = "off",   # "off" | "box" (opaque box in the ASS style) | "blur"
     log: Callable[[str], None] | None = None,
+    preview: bool = False,     # E-15: fast low-res preview.mp4 instead of output.mp4
 ) -> list[str]:
     """Plan the timeline and build the ffmpeg command. The filter graph goes to
     ``<work_dir>/filter_complex.txt`` (+ ``-filter_complex_script``) instead of
@@ -370,16 +396,22 @@ def _build_render(
         parts.append("[0:v]split[vsrc][vband]")
         parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
-        parts.append("[vbg]ass=subs.ass[v]")
+        parts.append(f"[vbg]ass=subs.ass{_ass_fonts(wd)}[v]")
     else:
-        parts.append("[0:v]ass=subs.ass[v]")
+        parts.append(f"[0:v]ass=subs.ass{_ass_fonts(wd)}[v]")
+    vmap = "[v]"
+    if preview:                     # same graph, scaled down after the subs are burned
+        parts.append("[v]scale=-2:640[vp]")
+        vmap = "[vp]"
     (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
+    quality = ["-crf", "30", "-preset", "ultrafast"] if preview else ["-crf", "20", "-preset",
+                                                                      "veryfast"]
     cmd += [
         "-filter_complex_script", "filter_complex.txt",
-        "-map", "[v]", "-map", audio_map,
-        "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-        "output.mp4",
+        "-map", vmap, "-map", audio_map,
+        "-c:v", "libx264", *quality,
+        "-c:a", "aac", "-b:a", "128k" if preview else "192k", "-ar", "48000",
+        "preview.mp4" if preview else "output.mp4",
     ]
     return cmd
 
@@ -398,6 +430,7 @@ def assemble(
     size: int = 60,
     style: dict | None = None,
     log: Callable[[str], None] | None = None,
+    preview: bool = False,
 ) -> Path:
     mode = cover_mode or ("box" if cover_hardsubs else "off")
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
@@ -405,6 +438,6 @@ def assemble(
               cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job))
 
     cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
-                        dub_volume=dub_volume, cover_mode=mode, log=log)
+                        dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview)
     subprocess.run(cmd, cwd=str(job.work_dir), check=True)
-    return job.output_video
+    return job.work_dir / "preview.mp4" if preview else job.output_video

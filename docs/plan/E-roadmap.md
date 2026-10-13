@@ -278,7 +278,15 @@ Request OpenRouter usage accounting (`usage: {"include": true}` → `usage.cost`
 accumulate per job/role in `usage.json`; show "AI $0.004 · 1 phút 12" on recent projects and the
 render page. Makes E-3 model choices concrete.
 
-### E-15 [M] Hear the whole dub before encoding
+### ✅ E-15 [M] Hear the whole dub before encoding — DONE 2026-10-13
+
+Shipped as a fast proof instead of audio-only: "Xem nhanh" on the render page (after approval) runs
+the same TTS + mix + burn graph scaled to 640p, `-preset ultrafast -crf 30` → `preview.mp4`
+(5.5-min clip: ~20 s vs minutes for the full encode); `output.mp4` is untouched and the real render
+reuses the TTS cache. Side find: libass never saw the bundled fonts and burned every render in
+Arial — the burner now gets `fontsdir=fonts` (bundled TTFs copied into the job dir), also for the
+style-preview frame, so what you see is what's exported.
+
 
 Render page (after approval): "Nghe thử bản lồng tiếng" = TTS (cached, needed anyway) + the
 existing mix, audio-only, played over the source video. The full encode then reuses the TTS cache.

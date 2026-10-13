@@ -300,7 +300,16 @@ class RenderView(QWidget):
         self.render_btn = button("Dựng video", "MonitorPlay", variant="primary")
         self.render_btn.setStyleSheet("QPushButton{min-height:40px;}")
         self.render_btn.clicked.connect(self._on_primary)
-        fl.addWidget(self.render_btn)
+        self.quick_btn = button("Xem nhanh", "Eye", variant="ghost",
+                                tip="Dựng nhanh bản chất lượng thấp (640p) để nghe thử toàn bộ lồng "
+                                    "tiếng trước. Giọng đã tạo được giữ — dựng thật sau nhanh hơn.")
+        self.quick_btn.setStyleSheet("QPushButton{min-height:40px;}")
+        self.quick_btn.clicked.connect(self._on_quick)
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        prow.addWidget(self.quick_btn)
+        prow.addWidget(self.render_btn, 1)
+        fl.addLayout(prow)
         self.again_lbl = label("Lần dựng sau chỉ tạo lại giọng cho câu đã sửa.", "small")
         self.again_lbl.setVisible(False)
         fl.addWidget(self.again_lbl)
@@ -435,6 +444,7 @@ class RenderView(QWidget):
         oc = QVBoxLayout()
         oc.setSpacing(1)
         t = label("Video tiếng Việt đã sẵn sàng", "h3")
+        self._result_title = t
         t.setStyleSheet(f"color:{V2['green']};background:transparent;")
         self.out_meta = label("", "mono")
         oc.addWidget(t)
@@ -549,6 +559,7 @@ class RenderView(QWidget):
         self._rendering = on
         self.render_btn.setEnabled(not on)
         self.back_btn.setEnabled(not on)
+        self.quick_btn.setEnabled(not on)
         self.cancel_btn.setVisible(on)
         self.cancel_btn.setEnabled(on)
         if on:
@@ -576,7 +587,13 @@ class RenderView(QWidget):
             return
         self._emit_render()
 
-    def _emit_render(self) -> None:
+    def _on_quick(self) -> None:
+        if not self._approved:
+            self.approveRequested.emit()
+            return
+        self._emit_render(preview=True)
+
+    def _emit_render(self, preview: bool = False) -> None:
         speed = self.speed.value() / 100.0
         opts = {
             # the "(mặc định)" placeholder is UI text, not a voice id — sending it
@@ -588,6 +605,8 @@ class RenderView(QWidget):
             "dub_volume": self.dub_vol.value() / 100.0,
             "cover_mode": self.cover.currentData(),
         }
+        if preview:
+            opts["preview"] = True                 # E-15: fast 640p check, same audio
         self._start_progress(opts)
         self.renderRequested.emit(opts)
 
@@ -648,7 +667,11 @@ class RenderView(QWidget):
         self.append_log("⏳ Đang hủy…")
 
     def show_done(self, path: str) -> None:
-        self._out = path
+        quick = Path(path).name == "preview.mp4"
+        self._result_title.setText("Bản xem nhanh (640p) — nghe thử rồi bấm Dựng video" if quick
+                                   else "Video tiếng Việt đã sẵn sàng")
+        if not quick:
+            self._out = path
         self._tick.stop()
         size = ""
         try:

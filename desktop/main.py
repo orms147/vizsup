@@ -211,7 +211,9 @@ class MainWindow(QMainWindow):
         from pathlib import Path
 
         self.render.show_done(path)
-        self._notify("Đã dựng xong video", Path(path).name)
+        quick = Path(path).name == "preview.mp4"
+        self._notify("Bản xem nhanh đã sẵn sàng" if quick else "Đã dựng xong video",
+                     Path(path).name)
 
     def _on_render_failed(self, msg: str) -> None:
         self.render.show_error(msg)

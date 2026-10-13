@@ -102,7 +102,7 @@ def test_cover_blur_graph(big_job):
                            orig_volume=1.0, dub_volume=1.0, cover_mode="blur")
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "boxblur" in script and "overlay=0:main_h*2/3" in script
-    assert "[vbg]ass=subs.ass[v]" in script          # subs burned on top of the blur
+    assert "[vbg]ass=subs.ass:fontsdir=fonts[v]" in script   # subs burned on top of the blur
 
 
 def test_keep_music_adds_bg_input_and_mix(big_job):
@@ -143,7 +143,7 @@ def test_cover_off_keeps_plain_ass_chain(big_job):
                            orig_volume=1.0, dub_volume=1.0)
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "boxblur" not in script
-    assert "[0:v]ass=subs.ass[v]" in script
+    assert "[0:v]ass=subs.ass:fontsdir=fonts[v]" in script   # bundled Be Vietnam Pro
 
 
 def test_probe_duration_survives_ffprobe_error(monkeypatch, tmp_path):
@@ -154,3 +154,17 @@ def test_probe_duration_survives_ffprobe_error(monkeypatch, tmp_path):
 
     monkeypatch.setattr(assemble.subprocess, "run", boom)
     assert assemble.probe_duration(tmp_path / "broken.mp3") == 0.0
+
+
+def test_preview_is_the_same_graph_scaled_down_and_fast(big_job):
+    """E-15: "Xem nhanh" renders the real audio mix + burned subs at 640p, ultrafast,
+    into preview.mp4 — output.mp4 is never touched."""
+    job, segments = big_job
+    final = _build(job, segments[:3])
+    graph_final = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    quick = _build(job, segments[:3], preview=True)
+    graph_quick = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert quick[-1] == "preview.mp4" and final[-1] == "output.mp4"
+    assert "ultrafast" in quick and "veryfast" in final
+    assert graph_quick.startswith(graph_final.rstrip("\n"))        # same mix + subs
+    assert "[v]scale=-2:640[vp]" in graph_quick and "[vp]" in quick

@@ -338,6 +338,7 @@ class PipelineWorker(QObject):
                 size=ass_size,
                 style=o.get("style"),
                 log=self.log.emit,
+                preview=bool(o.get("preview")),     # E-15: fast low-res check first
             )
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")
