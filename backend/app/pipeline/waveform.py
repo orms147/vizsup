@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
-from array import array
 from pathlib import Path
 
 from app.models import Job
@@ -24,19 +22,24 @@ def _key(src: Path) -> str:
 
 
 def compute(src: Path) -> list[float]:
-    from app.ffmpegutil import ffmpeg_bin
+    """RMS per 20 ms window, streamed and vectorized (a 3-hour track is 540k windows;
+    the per-sample Python loop took minutes there)."""
+    import numpy as np
 
-    raw = subprocess.run([ffmpeg_bin(), "-v", "error", "-i", str(src), "-vn", "-ac", "1",
-                          "-ar", str(RATE), "-f", "s16le", "-"],
-                         capture_output=True, check=True).stdout
-    samples = array("h")
-    samples.frombytes(raw[: len(raw) // 2 * 2])
+    from app.ffmpegutil import pcm_blocks
+
     win = RATE // PER_SEC
     out: list[float] = []
-    for i in range(0, len(samples), win):
-        chunk = samples[i:i + win]
-        if chunk:
-            out.append(math.sqrt(sum(s * s for s in chunk) / len(chunk)))
+    carry = np.zeros(0, dtype=np.int64)
+    for block in pcm_blocks(src, RATE, win * 500):          # 10 s blocks
+        x = np.concatenate([carry, block.astype(np.int64)])
+        whole = len(x) // win * win
+        if whole:
+            sq = (x[:whole] ** 2).reshape(-1, win).sum(axis=1)
+            out.extend(np.sqrt(sq / win).tolist())
+        carry = x[whole:]
+    if len(carry):                                          # last short window, as before
+        out.append(math.sqrt(float((carry ** 2).sum()) / len(carry)))
     top = max(out, default=0.0) or 1.0
     return [round(v / top, 3) for v in out]
 

@@ -38,7 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from app.ffmpegutil import ffmpeg_bin
+from app.ffmpegutil import ffmpeg_bin, read_exact
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
 from app.providers.base import _installed
@@ -316,16 +316,6 @@ CHECKPOINT = "ocr_frames.json"
 CHECKPOINT_EVERY = 50    # frames
 
 
-def _read_exact(stream, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = stream.read(n - len(buf))
-        if not chunk:
-            break
-        buf += chunk
-    return buf
-
-
 def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
     """BGR frames (numpy) of the cropped strip, streamed from ffmpeg as BMP images
     through a pipe — nothing is written to disk. ``start`` seeks (resume)."""
@@ -339,11 +329,11 @@ def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         while True:
-            head = _read_exact(proc.stdout, 14)               # "BM" + file size (LE)
+            head = read_exact(proc.stdout, 14)                # "BM" + file size (LE)
             if len(head) < 14:
                 break
             size = int.from_bytes(head[2:6], "little")
-            body = _read_exact(proc.stdout, size - 14)
+            body = read_exact(proc.stdout, size - 14)
             if len(body) < size - 14:
                 break
             img = cv2.imdecode(np.frombuffer(head + body, np.uint8), cv2.IMREAD_COLOR)

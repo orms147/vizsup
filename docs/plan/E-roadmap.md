@@ -346,7 +346,7 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
   mode the original audio stopped at the last dub line (sidechain key now padded).
 - ✅ **ASR per-chunk cache** (`_cloud.chunk_cache`, `asr_cache/`): a failed chunk no longer
   re-buys the finished ones (Haiku 5.5 subagent, reviewed).
-- **Streamed audio decode** for VAD / waveform (in progress).
+- ✅ **Streamed audio decode** (`ffmpegutil.pcm_blocks`): VAD reads ~10 s blocks instead of the whole track (3 h ≈ 1 GB as float32), the waveform is vectorized too; on a real job both are identical to the old results (waveform 0.07 s).
 - ✅ **OCR plumbing**: frames stream from ffmpeg as BMP through a pipe (no PNG dump — ~5.4 GB
   for 3 h), progress with ETA, cancel between frames, checkpoint `ocr_frames.json` every 50
   frames → resume. Real 137 s video: 97/97 cues identical to the PNG path.

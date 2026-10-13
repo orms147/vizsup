@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 from app.models import Job
@@ -142,25 +141,27 @@ def _session(path: Path):
 # --- audio → probabilities ------------------------------------------------------------
 
 def speech_probs(src: Path, model: Path) -> list[float]:
-    """Per-32 ms speech probability over the whole file."""
+    """Per-32 ms speech probability over the whole file. The audio is streamed in
+    ~10 s blocks (whole frames only, the trailing partial frame dropped as before)."""
     import numpy as np
 
-    from app.ffmpegutil import ffmpeg_bin
+    from app.ffmpegutil import pcm_blocks
 
-    raw = subprocess.run([ffmpeg_bin(), "-v", "error", "-i", str(src), "-vn", "-ac", "1",
-                          "-ar", str(RATE), "-f", "s16le", "-"],
-                         capture_output=True, check=True).stdout
-    x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
     sess = _session(model)
     state = np.zeros((2, 1, 128), dtype=np.float32)
     ctx = np.zeros((1, CONTEXT), dtype=np.float32)
     sr = np.array(RATE, dtype=np.int64)
     probs: list[float] = []
-    for i in range(0, len(x) - FRAME + 1, FRAME):
-        frame = np.concatenate([ctx, x[i:i + FRAME][None, :]], axis=1)
-        out, state = sess.run(None, {"input": frame, "state": state, "sr": sr})
-        probs.append(float(out[0][0]))
-        ctx = frame[:, -CONTEXT:]
+    carry = np.zeros(0, dtype=np.float32)
+    for block in pcm_blocks(src, RATE, FRAME * 320):
+        x = np.concatenate([carry, block.astype(np.float32) / 32768.0])
+        whole = len(x) // FRAME * FRAME
+        for i in range(0, whole, FRAME):
+            frame = np.concatenate([ctx, x[i:i + FRAME][None, :]], axis=1)
+            out, state = sess.run(None, {"input": frame, "state": state, "sr": sr})
+            probs.append(float(out[0][0]))
+            ctx = frame[:, -CONTEXT:]
+        carry = x[whole:]
     return probs
 
 
