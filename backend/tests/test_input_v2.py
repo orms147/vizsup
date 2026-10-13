@@ -79,3 +79,45 @@ def test_cancel_is_not_an_error_card(view):
     view.show_error("Đã hủy.")
     assert view.alert.isHidden()
     assert view.stage_rows["download"].state == "paused"
+
+
+# --- E-10: clipboard pickup ----------------------------------------------------------
+
+def test_clipboard_link_is_offered_once_and_starts_only_on_click(view):
+    sent = []
+    view.startRequested.connect(sent.append)
+    view.url.setText("")
+    text = "xem nè https://v.douyin.com/AbC123/ hay lắm"
+    assert view.offer_clipboard(text, known={"https://v.douyin.com/old/"})
+    assert not view.clip_chip.isHidden() and sent == []            # never auto-starts
+    view._use_clipboard()
+    assert view.url.text() == "https://v.douyin.com/AbC123/" and len(sent) == 1
+    assert not view.offer_clipboard(text)                          # used → not offered again
+
+
+def test_clipboard_ignores_other_links_known_projects_and_dismissed(view):
+    assert not view.offer_clipboard("https://youtube.com/watch?v=x")
+    assert not view.offer_clipboard("https://b23.tv/k", known={"https://b23.tv/k"})
+    assert view.offer_clipboard("https://www.bilibili.com/video/BV1x")
+    view._dismiss_clipboard()
+    assert not view.offer_clipboard("https://www.bilibili.com/video/BV1x")
+
+
+# --- E-11: unfinished projects are listed for resuming ---------------------------------
+
+def test_unfinished_jobs_are_listed(tmp_path, monkeypatch):
+    import json
+
+    from app.config import settings
+    from desktop import store
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "source.mp4").write_bytes(b"x")
+    (tmp_path / "a" / "job.json").write_text(json.dumps({"url": "https://v.douyin.com/a/",
+                                                         "opts": {"tts": "edge"}}), encoding="utf-8")
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "source.mp4").write_bytes(b"x")          # no job.json → not resumable
+    jobs = store.list_jobs()
+    assert [j["id"] for j in jobs] == ["a"] and jobs[0]["unfinished"]
+    assert "https://v.douyin.com/a/" in store.known_urls()

@@ -9,12 +9,13 @@ from __future__ import annotations
 import sys
 import uuid
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
     QMainWindow,
     QStackedWidget,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -94,6 +95,43 @@ class MainWindow(QMainWindow):
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
+        self._tray = self._make_tray()
+        app = QApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_app_state)
+
+    # --- E-12 notifications / E-10 clipboard --------------------------------------
+    def _make_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return None
+        from desktop.icons import icon
+        from desktop.theme import V2
+
+        tray = QSystemTrayIcon(icon("Captions", V2["purple_bright"], 32), self)
+        tray.setToolTip("vizsup")
+        tray.messageClicked.connect(self._bring_to_front)
+        tray.activated.connect(lambda _r: self._bring_to_front())
+        tray.show()
+        return tray
+
+    def _bring_to_front(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _notify(self, title: str, msg: str) -> None:
+        """A Windows notification — only when the user is looking elsewhere."""
+        if self._tray is not None and not self.isActiveWindow():
+            self._tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 8000)
+
+    def _on_app_state(self, state) -> None:
+        if state != Qt.ApplicationState.ApplicationActive or self._busy():
+            return
+        if self.stack.currentIndex() != INPUT:
+            return
+        clip = QApplication.clipboard()
+        if clip is not None:
+            self.input.offer_clipboard(clip.text() or "", known=store.known_urls())
 
     # --- chrome (v2: appdesign/v2, desktop/widgets/chrome.py) ---------------
     def _build_chrome(self) -> None:
@@ -128,20 +166,30 @@ class MainWindow(QMainWindow):
     def _start_gate(self, opts: dict) -> None:
         if self._busy():
             return
-        self.opts = opts
         jid = uuid.uuid4().hex[:12]
-        self.job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
-        store.save_job(self.job, opts, "running")
-        store.debug(f"=== _start_gate job={jid} ===")
+        job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
+        self._run_gate(job, opts, f"▶ Bắt đầu (job {jid})")
+
+    def _run_gate(self, job: Job, opts: dict, first_line: str) -> None:
+        """New run or E-11 resume: the worker skips every step whose file exists."""
+        self.opts, self.job = opts, job
+        store.save_job(job, opts, "running")
+        store.debug(f"=== run_gate job={job.id} ===")
+        self.stack.setCurrentIndex(INPUT)
         self.input.set_busy(True)
-        self.input.append_log(f"▶ Bắt đầu (job {jid})")
+        self.input.append_log(first_line)
         self._run("run_to_gate", opts, {
             "stage_started": self._on_stage,
             "progress": self.input.set_progress,
             "log": self.input.append_log,
-            "failed": self.input.show_error,
+            "failed": self._on_gate_failed,
             "gate_reached": self._on_gate,
         })
+
+    def _on_gate_failed(self, msg: str) -> None:
+        self.input.show_error(msg)
+        if not msg.strip().startswith("Đã hủy"):
+            self._notify("Chưa xong video", msg[:160])
 
     def _on_stage(self, s: str) -> None:
         self.input.append_log(f"• {s}")
@@ -155,6 +203,17 @@ class MainWindow(QMainWindow):
                 dur = ""
             self.input.set_title(md.get("title") or "", " · ".join(p for p in (dur, plat) if p))
 
+    def _on_render_done(self, path: str) -> None:
+        from pathlib import Path
+
+        self.render.show_done(path)
+        self._notify("Đã dựng xong video", Path(path).name)
+
+    def _on_render_failed(self, msg: str) -> None:
+        self.render.show_error(msg)
+        if not msg.strip().startswith("Đã hủy"):
+            self._notify("Chưa dựng được video", msg[:160])
+
     def _on_gate(self) -> None:
         store.debug("on_gate: editor.load begin")
         try:
@@ -165,6 +224,8 @@ class MainWindow(QMainWindow):
             store.save_job(self.job, self.opts, "await_edit")  # title now known → resumable
             self.stack.setCurrentIndex(EDITOR)
             self.status.setText("● Sửa phụ đề — duyệt khi xong")
+            self._notify("Phụ đề đã sẵn sàng",
+                         f"{len(self.editor.cues)} câu · {self.editor.pending_count()} câu cần xem lại")
             store.debug("on_gate: switched to editor")
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
             import traceback as _tb
@@ -178,9 +239,13 @@ class MainWindow(QMainWindow):
         loaded = store.load_job(job_id)
         if not loaded:
             return
-        self.job, self.opts = loaded
-        if self.job.vi_srt.exists():
+        job, opts = loaded
+        if job.vi_srt.exists():
+            self.job, self.opts = job, opts
             self._on_gate()  # reopen straight at the edit gate (no re-download/ASR)
+        elif opts:
+            # E-11: an unfinished run — continue from the first missing step
+            self._run_gate(job, opts, f"▶ Tiếp tục dự án đang dở (job {job.id})")
 
     def _delete_job(self, job_id: str) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -333,8 +398,8 @@ class MainWindow(QMainWindow):
             "stage_started": self._on_render_stage,
             "progress": self.render.set_progress,
             "log": self.render.append_log,
-            "failed": self.render.show_error,
-            "render_done": self.render.show_done,
+            "failed": self._on_render_failed,
+            "render_done": self._on_render_done,
         })
 
     def _set_render_locked(self, on: bool) -> None:

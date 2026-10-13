@@ -226,18 +226,27 @@ Paste several links (one per line) or drop several files → a queue that runs e
 **sequentially** (heavy work stays serial — 8 GB rule). The recent-projects list shows queue state;
 open any finished one while the rest continue.
 
-### E-10 [S] Clipboard pickup
+### ✅ E-10 [S] Clipboard pickup — DONE 2026-10-13
+
+Shipped: `InputView.offer_clipboard` on app activation (Start page, idle) — chip "Dùng link vừa copy?" for Douyin/Bilibili links not already a project / not dismissed; one click fills + starts.
+
 
 On window focus, a Douyin/Bilibili link in the clipboard that isn't a known job → chip under the
 hero "Dùng link vừa copy?" (one click fills + starts). Never auto-starts.
 
-### E-11 [S] Resume unfinished jobs
+### ✅ E-11 [S] Resume unfinished jobs — DONE 2026-10-13
+
+Shipped: `store.list_jobs` also lists jobs with source/cn.srt + job.json but no vi.srt (`unfinished`, badge "Đang dở"); opening one re-runs `run_to_gate` with the saved options (every finished step is skipped).
+
 
 `store.list_jobs` only lists jobs with `vi.srt`/`output.mp4`. Also list jobs with a source video
 but no vi.srt as "Đang dở" with "Tiếp tục" → `run_to_gate` (already skips an existing cn.srt; make
 download skip an existing `source.mp4` too).
 
-### E-12 [S] Notifications
+### ✅ E-12 [S] Notifications — DONE 2026-10-13
+
+Shipped: `QSystemTrayIcon` messages for gate reached (cue + review counts), render done, run/render failed — only when the window is not active; clicking focuses the app.
+
 
 `QSystemTrayIcon` message when the gate is reached, a render finishes, or a run fails — only when
 the window isn't active. Clicking it focuses the right page.

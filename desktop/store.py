@@ -57,7 +57,9 @@ def save_job(job: Job, opts: dict, stage: str = "await_edit") -> None:
 
 
 def list_jobs(limit: int = 8) -> list[dict]:
-    """Recent resumable projects (have vi.srt or output.mp4), newest first."""
+    """Recent projects, newest first: ready ones (vi.srt / output.mp4) and, E-11,
+    unfinished ones (a source video or cn.srt but no vi.srt yet — a run was cancelled
+    or failed) flagged ``unfinished`` so they can be resumed without re-downloading."""
     base = _storage()
     out: list[dict] = []
     if not base.exists():
@@ -67,11 +69,13 @@ def list_jobs(limit: int = 8) -> list[dict]:
             continue
         has_vi = (d / "vi.srt").exists()
         has_output = (d / "output.mp4").exists()
-        if not (has_vi or has_output):
+        partial = [p for p in (d / "cn.srt", d / "source.mp4") if p.exists()]
+        if not (has_vi or has_output or (partial and (d / "job.json").exists())):
             continue
+        newest = d / "vi.srt" if has_vi else d / "output.mp4" if has_output else partial[0]
         info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
-                "has_output": has_output, "mtime": (d / "vi.srt").stat().st_mtime if has_vi
-                else (d / "output.mp4").stat().st_mtime}
+                "has_output": has_output, "unfinished": not (has_vi or has_output),
+                "url": None, "mtime": newest.stat().st_mtime}
         jf = d / "job.json"
         if jf.exists():
             try:
@@ -79,11 +83,22 @@ def list_jobs(limit: int = 8) -> list[dict]:
                 info["title"] = saved.get("title") or d.name
                 info["platform"] = saved.get("platform")
                 info["opts"] = saved.get("opts", {})
+                info["url"] = saved.get("url")
             except Exception:  # noqa: BLE001
                 pass
         out.append(info)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
+
+
+def known_urls() -> set[str]:
+    """Links already turned into a project (E-10: don't offer them from the clipboard)."""
+    out: set[str] = set()
+    for j in list_jobs(limit=500):
+        for u in (j.get("url"), (j.get("opts") or {}).get("url")):
+            if u:
+                out.add(str(u).strip())
+    return out
 
 
 def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:

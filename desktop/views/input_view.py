@@ -5,6 +5,7 @@ lists recent projects to reopen at the edit gate. Emits startRequested(opts).
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.icons import pixmap
 from desktop.theme import V2
-from desktop.widgets.chrome import badge, button, icon_label, label
+from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from desktop.widgets.provider_combo import ProviderCombo
 from desktop.widgets.recent_projects import RecentProjects, short_title
 
@@ -38,6 +39,8 @@ SOURCES = (("auto", "Tự động · khuyên dùng"), ("asr", "AI nghe âm thanh
 OCR_REGIONS = (("Phía dưới (mặc định)", "bottom-third"), ("Nửa dưới", "bottom-half"),
                ("Giữa màn hình", "middle-third"), ("Trên màn hình", "top-third"),
                ("Toàn khung (phụ đề di động)", "full"))
+_CLIP_URL = re.compile(r"https?://[^\s]*(?:douyin\.com|iesdouyin\.com|bilibili\.com|b23\.tv)[^\s]*",
+                       re.I)
 STAGES = (("download", "Tải video"), ("subtitle", "Lấy phụ đề tiếng Trung"),
           ("context", "Đọc ngữ cảnh"), ("translate", "Dịch sang tiếng Việt"))
 
@@ -267,9 +270,57 @@ class InputView(QWidget):
         self.hint = label("", "small")
         self.hint.setVisible(False)
         v.addWidget(self.hint)
+
+        # E-10: a Douyin / Bilibili link just copied elsewhere → one click to start
+        self.clip_chip = QFrame()
+        self.clip_chip.setObjectName("inset")
+        ch = QHBoxLayout(self.clip_chip)
+        ch.setContentsMargins(10, 6, 6, 6)
+        ch.setSpacing(8)
+        ch.addWidget(icon_label("Link", V2["purple_bright"], 14))
+        ch.addWidget(label("Dùng link vừa copy?", "secondary"))
+        self.clip_url = label("", "mono")
+        ch.addWidget(self.clip_url, 1)
+        use = button("Dùng", "ArrowRight", variant="primary", small=True)
+        use.clicked.connect(self._use_clipboard)
+        ch.addWidget(use)
+        close = icon_button("X", "Bỏ qua link này")
+        close.clicked.connect(self._dismiss_clipboard)
+        ch.addWidget(close)
+        self.clip_chip.setVisible(False)
+        self._clip: str | None = None
+        self._clip_dismissed: set[str] = set()
+        v.addWidget(self.clip_chip)
         self.setAcceptDrops(True)
         self._hero_frame = hero
         return hero
+
+    def offer_clipboard(self, text: str, *, known: set[str] = frozenset()) -> bool:
+        """Show the chip for a Douyin / Bilibili link found in ``text`` that is not
+        already typed, not an existing project and not dismissed. Never starts."""
+        m = _CLIP_URL.search(text or "")
+        url = m.group(0).rstrip(".,;)」】") if m else None
+        if (self._busy or not url or url == self.url.text().strip() or url in known
+                or url in self._clip_dismissed):
+            return False
+        self._clip = url
+        self.clip_url.setText(url if len(url) <= 52 else url[:49] + "…")
+        self.clip_url.setToolTip(url)
+        self.clip_chip.setVisible(True)
+        return True
+
+    def _use_clipboard(self) -> None:
+        if self._clip:
+            self.url.setText(self._clip)
+            self._clip_dismissed.add(self._clip)
+            self.clip_chip.setVisible(False)
+            if self.start.isEnabled():
+                self._emit_start()
+
+    def _dismiss_clipboard(self) -> None:
+        if self._clip:
+            self._clip_dismissed.add(self._clip)
+        self.clip_chip.setVisible(False)
 
     def dragEnterEvent(self, ev) -> None:  # noqa: N802
         if ev.mimeData().hasUrls() and not self._busy:

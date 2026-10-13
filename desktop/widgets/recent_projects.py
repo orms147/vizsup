@@ -67,10 +67,15 @@ class _Row(QFrame):
         col.addWidget(title)
         if info.get("has_output"):
             self.badge = badge("Đã dựng", "ok")
+        elif info.get("unfinished"):
+            self.badge = badge("Đang dở — bấm để tiếp tục", "warn")
         else:
             self.badge = badge("Chờ bạn duyệt", "purple")
         col.addWidget(self.badge, 0, Qt.AlignLeft)
-        self.sub = label("MP4" if info.get("has_output") else "Phụ đề tiếng Việt", "small")
+        self.sub = label("MP4" if info.get("has_output") else
+                         "Chưa có phụ đề tiếng Việt" if info.get("unfinished") else
+                         "Phụ đề tiếng Việt", "small")
+        self._unfinished = bool(info.get("unfinished"))
         col.addWidget(self.sub)
         col.addWidget(label(_when(info.get("mtime") or time.time()), "small"))
         h.addLayout(col, 1)
@@ -102,6 +107,9 @@ class _Row(QFrame):
         dur = fmt_time(s["duration"], 0) if s.get("duration") else ""
         if self._has_output:
             self.sub.setText(" · ".join(p for p in ("MP4", dur) if p))
+            return
+        if self._unfinished:
+            self.sub.setText(" · ".join(p for p in ("Chưa dịch xong", dur) if p))
             return
         if s.get("approved"):
             self.badge.setText("Đã duyệt")
