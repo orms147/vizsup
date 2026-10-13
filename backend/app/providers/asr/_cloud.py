@@ -16,7 +16,10 @@ Google-Lens OCR mode. Pieces here:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -24,8 +27,9 @@ import tempfile
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import TypeVar
 
 from app.config import settings
 from app.models import Cue
@@ -190,6 +194,84 @@ def run_chunks(fn: Callable, items: list) -> list:
         return [first, *ex.map(fn, items[1:])]
 
 
+# --- per-chunk cache ----------------------------------------------------------
+# A 45-chunk video that fails at chunk 40 must not re-buy chunks 1-39. Each finished
+# chunk is stored as soon as it returns (inside the per-chunk function, so sibling
+# threads still store theirs when one chunk raises). Keys name everything that changes
+# the answer — never the temp chunk path, which is different on every run.
+
+T = TypeVar("T")
+_MISS = object()
+
+
+def audio_identity(media: Path) -> str:
+    """What the audio is, for cache keys: name, size and mtime."""
+    st = media.stat()
+    return f"{media.name}:{st.st_size}:{int(st.st_mtime)}"
+
+
+def cache_for(media: Path) -> tuple[Path | None, str]:
+    """(``asr_cache`` dir beside the job's audio, audio identity). ``(None, "")`` when the
+    audio is not on disk — then nothing is cached."""
+    if not media.is_file():
+        return None, ""
+    return media.parent / "asr_cache", audio_identity(media)
+
+
+def span_tag(span: tuple[float, float]) -> str:
+    return f"{span[0]:.3f}-{span[1]:.3f}"
+
+
+def text_tag(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+def chunk_cache(cache_dir: Path | None, kind: str, key: str, compute: Callable[[], T]) -> T:
+    """Return the value stored under ``key``, or compute it, store it and return it.
+
+    One JSON file per result. A failing ``compute`` raises and stores nothing, so the
+    chunk is simply asked again next time. An empty answer (``""``, ``[]``) is a real
+    result and IS stored. ``cache_dir=None`` just computes.
+    """
+    if cache_dir is None:
+        return compute()
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    path = cache_dir / f"{kind}_{digest}.json"
+    hit = _read_entry(path, key)
+    if hit is not _MISS:
+        return hit
+    value = compute()
+    _write_entry(cache_dir, path, key, value)
+    return value
+
+
+def _read_entry(path: Path, key: str) -> object:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _MISS
+    if isinstance(data, dict) and data.get("key") == key and "value" in data:
+        return data["value"]
+    return _MISS
+
+
+def _write_entry(cache_dir: Path, path: Path, key: str, value: object) -> None:
+    """Best effort: the answer is paid for and in hand, so a failed write (full disk,
+    locked file) is logged and the run goes on. Temp file + os.replace = never half-written."""
+    tmp: str | None = None
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"key": key, "value": value}, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError) as exc:
+        if tmp is not None:
+            with suppress(OSError):
+                Path(tmp).unlink()
+        log.warning("chunk cache: could not store %s (%s)", path.name, exc)
+
+
 # --- text-only engines: sentences + timing --------------------------------------
 
 def _split_long(s: str) -> list[str]:
@@ -255,21 +337,31 @@ def _words_of(resp, offset: float) -> list[Word]:
     return out
 
 
-def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str) -> list[Word]:
+def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
+                cache_dir: Path | None = None, audio_id: str = "") -> list[Word]:
     """Word timestamps for each uploaded chunk from a /audio/transcriptions model
     (verbose_json + word granularity), shifted to absolute time. Measured 2026-10-01
-    on a real 137 s vlog: openai/whisper-large-v3 → 691 words in 4.6 s."""
+    on a real 137 s vlog: openai/whisper-large-v3 → 691 words in 4.6 s.
+
+    With ``cache_dir`` and the source's ``audio_id`` (see :func:`cache_for`), each chunk's
+    words are kept so a rerun does not pay for them again."""
     model = timing_model()
+    cache = cache_dir if audio_id else None
 
     def one(item) -> list[Word]:
         path, (lo, _hi) = item
 
-        def send():
-            with path.open("rb") as fh:
-                return client().audio.transcriptions.create(
-                    file=fh, model=model, language=language, response_format="verbose_json",
-                    timestamp_granularities=["word", "segment"])
-        return _words_of(with_retry(send), lo)
+        def fetch() -> list[Word]:
+            def send():
+                with path.open("rb") as fh:
+                    return client().audio.transcriptions.create(
+                        file=fh, model=model, language=language, response_format="verbose_json",
+                        timestamp_granularities=["word", "segment"])
+            return _words_of(with_retry(send), lo)
+
+        key = f"words|{model}|{span_tag((lo, _hi))}|{audio_id}|{language}"
+        # JSON gives lists back: rebuild the tuples so cached and fresh results are equal
+        return [(t, s, e) for t, s, e in chunk_cache(cache, "words", key, fetch)]
 
     return [w for chunk in run_chunks(one, items) for w in chunk]
 

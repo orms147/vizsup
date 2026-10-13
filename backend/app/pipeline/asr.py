@@ -116,8 +116,10 @@ def retime(job: Job, *, log=None, language: str = "zh") -> int:
             groups[k][1].append(c.text)                 # takes anything past the end
     if words is None:
         say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
+        cache, aid = _cloud.cache_for(src)
         with _cloud.chunk_files(src, spans) as paths:
-            words = _cloud.cloud_words(list(zip(paths, spans)), language)
+            words = _cloud.cloud_words(list(zip(paths, spans)), language,
+                                       cache_dir=cache, audio_id=aid)
     voice = vad.spans_for(src, job.work_dir, log=say)
     groups = [(sp, sents) for sp, sents in groups if sents]
     new = _cloud.reindex(_cloud.time_groups(src, groups, language, words=words, voice=voice))

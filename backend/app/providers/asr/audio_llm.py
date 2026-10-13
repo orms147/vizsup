@@ -131,15 +131,29 @@ class AudioLLM(ASRProvider):
         n = len(spans)
         say(f"Gửi âm thanh lên {self.model} — {n} đoạn × ≤{int(CHUNK_SEC // 60)} phút…")
         done = _cloud.Counter()
+        # each chunk's answer is kept beside the audio: a failed run resumes where it stopped
+        cache, aid = _cloud.cache_for(media)
+        instr = _cloud.text_tag(INSTRUCTION)
+        sent: list[int] = []            # chunks actually uploaded; the rest came from cache
 
         def hear(it):
-            text = self._call(it[0], it[1][1] - it[1][0])
+            path, span = it
+            key = f"transcript|{self.model}|{_cloud.span_tag(span)}|{aid}|{language}|{instr}"
+
+            def listen() -> str:
+                text = self._call(path, span[1] - span[0])
+                sent.append(1)
+                return text
+            text = _cloud.chunk_cache(cache, "transcript", key, listen)
             say(f"  ✓ AI đã nghe xong đoạn {done.next()}/{n}")
             return text
 
         with _cloud.chunk_files(media, spans) as paths:
             items = list(zip(paths, spans))
             texts = _cloud.run_chunks(hear, items)
+            reused = n - len(sent)
+            if reused:
+                say(f"↷ Dùng lại {reused}/{n} đoạn đã nghe trước đó (không tốn thêm tiền)")
             # no local faster-whisper → the word-timing track comes from the cloud too,
             # fetched while the chunk files still exist
             if _cloud.local_words_available():
@@ -147,7 +161,7 @@ class AudioLLM(ASRProvider):
                 say("Lấy mốc thời gian từng từ (faster-whisper trên máy)…")
             else:
                 say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
-                words = _cloud.cloud_words(items, language)
+                words = _cloud.cloud_words(items, language, cache_dir=cache, audio_id=aid)
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
         voice = _voice(media, say)
         cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words,
