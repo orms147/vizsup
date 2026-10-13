@@ -307,6 +307,25 @@ the ASS `[Events]` Format line lacked `Name` → every burned line started with 
 Output named from the project title; "Xuất cho TikTok" preset (1080×1920, pad); optional
 soft-subtitle MKV/MP4 (no burn) for re-editing elsewhere.
 
+### ✅ Follow-ups to the caveats — DONE 2026-10-13
+
+- **Singing under loud music** (VAD ~0.3–0.5 on whole choruses): `vad.voice_spans` adds the
+  saved Whisper word track (`asr_words.json`) where VAD heard < 30 % of a word span; VAD edges
+  still win where it heard the voice. 329 s livestream: 3 more sung lines snapped (15 → 12
+  "no voice"; the rest had broken pre-E-1 timings). 40 % of Whisper words there were
+  zero-length → dropped. Shift+A hints "Đo lại thời gian" when ≥ 3 lines have no voice and no
+  word track exists.
+- **Speaker gender**: checked on known-gender clips (edge-tts zh male / female / husband–wife
+  dialogue / female under loud noise) → the listener was right 4/4. Added a local YIN pitch
+  check (`pipeline/pitch.py`, numpy, 0.2 s) that only speaks up for talking clips — when it
+  contradicts the listener (→ "CHƯA CHẮC", neutral pronouns) or fills in an unnamed gender.
+  Brief rules: 他/她 are homophones in ASR text (not evidence of male); song pronouns follow
+  the lyrics' persona; uncertain gender → mình / bạn.
+- **"AI xem khung hình"** (qwen3.7-flash) checked on 3 real videos against the frames
+  themselves: settings, people, a blurred second face and an inserted alien image all right,
+  5–8 s each.
+- **Notifications in front**: in-app toast. **Soft-sub .mkv**: re-applies the render's blur.
+
 ---
 
 ## P2 — later (keep in mind, don't start yet)

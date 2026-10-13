@@ -201,3 +201,21 @@ def test_ai_finding_shows_in_the_inspector_and_its_fix_is_one_undo_step(view):
     assert view.inspector.ai_box.isHidden()
     view._undo_action()
     assert view.cues[0].vi == "một"
+
+
+def test_snap_all_suggests_the_word_track_when_voice_is_hidden(view, tmp_path):
+    from app.models import Job
+
+    view.job = Job(id="h", work_dir=tmp_path / "h")
+    view.cues[1].start, view.cues[1].end = 20.0, 22.0       # three lines far from any voice
+    view.cues[2].start, view.cues[2].end = 30.0, 32.0
+    view.cues[3].start, view.cues[3].end = 40.0, 42.0
+    view._set_speech([(0.3, 1.6)])
+    msgs = []
+    view.message.connect(lambda t, k: msgs.append(t))
+    view._auto_snap_all()
+    assert "Đo lại thời gian từ âm thanh" in msgs[-1]
+    (view.job.work_dir / "asr_words.json").write_text('{"words": [["我", 0.3, 0.6]]}',
+                                                      encoding="utf-8")
+    view._auto_snap_all()                                    # word track exists → no hint
+    assert "Đo lại thời gian" not in msgs[-1]

@@ -143,7 +143,7 @@ def snap_srt(job, srt_path, *, log=None) -> SnapReport | None:
     from app.pipeline.assemble import probe_duration
     from app.pipeline.srt import parse_srt, write_srt
 
-    spans = vad.speech_spans(job, log=log)
+    spans = vad.voice_spans(job, log=log)      # + the word track where music hid the voice
     if not spans:
         return None
     cues = parse_srt(srt_path)

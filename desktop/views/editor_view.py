@@ -619,7 +619,7 @@ class EditorView(QWidget):
             if notes:
                 self.message.emit(f"Tự canh lời chưa dùng được: {why}", "warn")
 
-        self._run_async(lambda: vad.speech_spans(job, log=notes.append), done,
+        self._run_async(lambda: vad.voice_spans(job, log=notes.append), done,
                         lambda m: self._set_speech(None, m))
 
     def _auto_snap_selected(self) -> None:
@@ -655,9 +655,10 @@ class EditorView(QWidget):
         if not self._speech or not self.cues:
             return
         times, rep = snap.plan(self.cues, self._speech, duration=self._duration())
+        hint = self._no_voice_hint(len(rep.no_voice))
         if not rep.changed:
-            self.message.emit("Mọi câu đã khớp giọng nói (hoặc không thấy giọng) — không đổi gì.",
-                              "ok")
+            self.message.emit("Mọi câu đã khớp giọng nói (hoặc không thấy giọng) — không đổi gì."
+                              + hint, "ok")
             return
         self._snapshot()
         for k in rep.changed:
@@ -668,7 +669,17 @@ class EditorView(QWidget):
             parts.append(f"bỏ qua {len(rep.locked)} câu khóa")
         if rep.no_voice:
             parts.append(f"{len(rep.no_voice)} câu không thấy giọng")
-        self.message.emit(" · ".join(parts) + " — Ctrl+Z để hoàn tác.", "ok")
+        self.message.emit(" · ".join(parts) + " — Ctrl+Z để hoàn tác." + hint, "ok")
+
+    def _no_voice_hint(self, n: int) -> str:
+        """Several lines without voice and no word track yet: usually singing under loud
+        music, which local VAD can't hear — the word track (Đo lại thời gian) can."""
+        from app.pipeline import vad
+
+        if n < 3 or self.job is None or vad.saved_words(self.job):
+            return ""
+        return (" Nhạc nền to che giọng hát? ··· → “Đo lại thời gian từ âm thanh” để AI nghe "
+                "kỹ từng chữ, rồi Tự canh lại.")
 
     def _retime(self) -> None:
         """E-1: re-time the Chinese lines against the audio (text kept), then move the

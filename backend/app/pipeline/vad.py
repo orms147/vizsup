@@ -10,7 +10,8 @@ job dir as ``vad.json`` keyed by the source file, model and parameters.
 
 Measured on a 329 s Douyin livestream (01/10/2026 clip): ~1.5 s CPU. Clear speech and
 solo singing score 0.6–0.9; singing under loud music often stays below 0.5 and is
-NOT reported — snapping then simply leaves those cues alone.
+NOT reported. :func:`voice_spans` fills those gaps from the saved Whisper word track
+(asr_words.json) when the job has one — on that clip 3 more sung lines snapped.
 """
 from __future__ import annotations
 
@@ -208,3 +209,62 @@ def spans_for(src: Path, cache_dir: Path, *, log=None) -> list[Span] | None:
     except OSError:
         pass
     return spans
+
+
+# --- singing under music: borrow the word track ---------------------------------------
+# Silero hears singing under a loud music bed poorly (probabilities ~0.3-0.5 for whole
+# choruses, i.e. below THRESHOLD). The cloud Whisper word track (asr_words.json, saved by
+# the ASR path and by "Đo lại thời gian") does hear those words, so where VAD heard
+# (almost) nothing, word spans count as voice. Where VAD did hear the voice its edges
+# win: Whisper word ends run late.
+WORD_MAX = 1.5         # a "word" longer than this was stretched over a pause — skip
+WORD_COVER = 0.3       # VAD covering less than this of a word span = music-masked voice
+
+
+def word_spans(words, *, gap: float = MERGE_GAP, min_speech: float = MIN_SPEECH) -> list[Span]:
+    """Voice spans from Whisper words ``[(text, start, end), …]``: zero-length words
+    (collapsed timestamps) and stretched ones are dropped, the rest merged across
+    gaps < ``gap``. Pure."""
+    good = sorted((float(w[1]), float(w[2])) for w in words or []
+                  if len(w) >= 3 and 0.02 < float(w[2]) - float(w[1]) <= WORD_MAX)
+    out: list[list[float]] = []
+    for a, b in good:
+        if out and a - out[-1][1] < gap:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 3), round(b, 3)) for a, b in out if b - a >= min_speech]
+
+
+def fuse(vad_spans: list[Span], words: list[Span], *, gap: float = MERGE_GAP) -> list[Span]:
+    """VAD spans plus the word spans VAD (almost) missed, merged. Pure."""
+    def covered(a: float, b: float) -> float:
+        return sum(max(0.0, min(e, b) - max(s, a)) for s, e in vad_spans) / max(b - a, 1e-6)
+
+    extra = [(a, b) for a, b in words if covered(a, b) < WORD_COVER]
+    out: list[list[float]] = []
+    for a, b in sorted([*vad_spans, *extra]):
+        if out and a - out[-1][1] < gap:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 3), round(b, 3)) for a, b in out]
+
+
+def saved_words(job: Job) -> list | None:
+    try:
+        data = json.loads((job.work_dir / "asr_words.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    words = data.get("words") if isinstance(data, dict) else None
+    return words or None
+
+
+def voice_spans(job: Job, *, log=None) -> list[Span] | None:
+    """What "tự canh lời" snaps to: :func:`speech_spans`, plus the saved word track
+    where VAD missed the voice (singing under music). None when neither exists."""
+    spans = speech_spans(job, log=log)
+    ws = word_spans(saved_words(job))
+    if not ws:
+        return spans
+    return fuse(spans or [], ws)
