@@ -182,17 +182,15 @@ def test_waveform_peaks_are_normalised_and_cached(job, monkeypatch):
     calls = []
     loud = array("h", [0] * 40 + [10000] * 40 + [5000] * 40)   # 3 windows of 40 samples
 
-    class R:
-        stdout = loud.tobytes()
+    def fake_blocks(src, rate, n):                               # the streamed decode
+        import numpy as np
 
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        return R()
+        calls.append(src)
+        yield np.frombuffer(loud.tobytes(), dtype=np.int16)
 
     monkeypatch.setattr(waveform, "RATE", 2000)
     monkeypatch.setattr(waveform, "PER_SEC", 50)                # 40-sample windows
-    monkeypatch.setattr("subprocess.run", fake_run)
-    monkeypatch.setattr("app.ffmpegutil.ffmpeg_bin", lambda: "ffmpeg")
+    monkeypatch.setattr("app.ffmpegutil.pcm_blocks", fake_blocks)
     p = waveform.peaks(job)
     assert p == [0.0, 1.0, 0.5]
     assert waveform.peaks(job) == p and len(calls) == 1          # second call hits the cache
