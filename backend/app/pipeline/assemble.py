@@ -462,4 +462,21 @@ def assemble(
                         dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
                         frame=frame)
     subprocess.run(cmd, cwd=str(job.work_dir), check=True)
-    return job.work_dir / "preview.mp4" if preview else job.output_video
+    if preview:
+        return job.work_dir / "preview.mp4"
+    # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
+    (job.work_dir / RENDER_INFO).write_text(
+        json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode}),
+        encoding="utf-8")
+    return job.output_video
+
+
+RENDER_INFO = "render.json"
+
+
+def load_render_info(job: Job) -> dict:
+    try:
+        d = json.loads((job.work_dir / RENDER_INFO).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}

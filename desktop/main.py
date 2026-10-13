@@ -29,7 +29,7 @@ from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
 from desktop.views.render_view import RenderView
-from desktop.widgets.chrome import AppNav, StatusBar
+from desktop.widgets.chrome import AppNav, StatusBar, Toast
 from desktop.worker import PipelineWorker
 
 from app.config import settings  # noqa: E402
@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
         self._tray = self._make_tray()
+        self._toast = Toast(self)
         app = QApplication.instance()
         if app is not None:
             app.applicationStateChanged.connect(self._on_app_state)
@@ -123,10 +124,20 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _notify(self, title: str, msg: str) -> None:
-        """A Windows notification — only when the user is looking elsewhere."""
+    def _notify(self, title: str, msg: str, kind: str = "ok") -> None:
+        """A Windows notification when the user is looking elsewhere, an in-app toast
+        when vizsup is in front (or the tray is unavailable)."""
         if self._tray is not None and not self.isActiveWindow():
-            self._tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 8000)
+            ic = (QSystemTrayIcon.MessageIcon.Warning if kind == "err"
+                  else QSystemTrayIcon.MessageIcon.Information)
+            self._tray.showMessage(title, msg, ic, 8000)
+        else:
+            self._toast.show_message(title, msg, kind)
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        if getattr(self, "_toast", None) is not None:
+            self._toast.reposition()
 
     def _on_app_state(self, state) -> None:
         if state != Qt.ApplicationState.ApplicationActive or self._busy():
@@ -193,7 +204,7 @@ class MainWindow(QMainWindow):
     def _on_gate_failed(self, msg: str) -> None:
         self.input.show_error(msg)
         if not msg.strip().startswith("Đã hủy"):
-            self._notify("Chưa xong video", msg[:160])
+            self._notify("Chưa xong video", msg[:160], "err")
 
     def _on_stage(self, s: str) -> None:
         self.input.append_log(f"• {s}")
@@ -218,7 +229,7 @@ class MainWindow(QMainWindow):
     def _on_render_failed(self, msg: str) -> None:
         self.render.show_error(msg)
         if not msg.strip().startswith("Đã hủy"):
-            self._notify("Chưa dựng được video", msg[:160])
+            self._notify("Chưa dựng được video", msg[:160], "err")
 
     def _on_gate(self) -> None:
         store.debug("on_gate: editor.load begin")
@@ -499,7 +510,7 @@ class MainWindow(QMainWindow):
         self.input.show_error(msg)
         self.input.refresh_recent()
         if not msg.strip().startswith("Đã hủy"):
-            self._notify("Một video trong hàng đợi lỗi", msg[:160])
+            self._notify("Một video trong hàng đợi lỗi", msg[:160], "err")
 
     def _run(self, method: str, opts: dict, connections: dict, *, job: Job | None = None) -> None:
         """Build worker+thread, connect ALL signals BEFORE start (no emit races),

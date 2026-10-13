@@ -1,6 +1,8 @@
 """E-16 export conveniences: file names from the project title, and a soft-subtitle
-MKV (source picture untouched + the rendered audio + the styled .ass as a switchable
-track, fonts attached) for re-editing elsewhere. Remux only — no re-encode.
+MKV (source picture without burned subs + the rendered audio + the styled .ass as a
+switchable track, fonts attached) for re-editing elsewhere. Remux only — unless the
+render blurred the Chinese hardsub band: then the picture is re-encoded with the same
+blur, so the .mkv never shows what output.mp4 hid.
 """
 from __future__ import annotations
 
@@ -38,11 +40,20 @@ def _fonts(job: Job) -> list[Path]:
 def softsub_cmd(job: Job, dest: Path) -> list[str]:
     """ffmpeg argv (cwd = job dir): video from source.mp4 (no burned subs), audio from
     the rendered output.mp4 (the dub mix), subs.ass as the default subtitle track."""
-    cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4", "-i", "output.mp4", "-i", "subs.ass",
-           "-map", "0:v:0", "-map", "1:a:0?", "-map", "2:0",
-           "-c:v", "copy", "-c:a", "copy", "-c:s", "ass",
-           "-metadata:s:s:0", "language=vie", "-metadata:s:s:0", "title=Tiếng Việt",
-           "-metadata:s:a:0", "language=vie", "-disposition:s:0", "default"]
+    from app.pipeline import assemble
+
+    cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4", "-i", "output.mp4", "-i", "subs.ass"]
+    if assemble.load_render_info(job).get("cover_mode") == "blur":
+        crop_expr, overlay_pos = assemble._blur_band_filters(assemble._load_region(job))
+        cmd += ["-filter_complex",
+                f"[0:v]split[vsrc][vband];[vband]{crop_expr},boxblur=10:2[vblur];"
+                f"[vsrc][vblur]{overlay_pos}[v]",
+                "-map", "[v]", "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+    else:
+        cmd += ["-map", "0:v:0", "-c:v", "copy"]
+    cmd += ["-map", "1:a:0?", "-map", "2:0", "-c:a", "copy", "-c:s", "ass",
+            "-metadata:s:s:0", "language=vie", "-metadata:s:s:0", "title=Tiếng Việt",
+            "-metadata:s:a:0", "language=vie", "-disposition:s:0", "default"]
     for i, f in enumerate(_fonts(job)):
         cmd += ["-attach", f"fonts/{f.name}", f"-metadata:s:t:{i}", "mimetype=font/ttf"]
     return cmd + [str(dest)]

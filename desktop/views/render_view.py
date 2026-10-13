@@ -491,7 +491,8 @@ class RenderView(QWidget):
         menu.addAction("Phụ đề .ass (giữ kiểu chữ)", lambda: self._export("ass"))
         self.mkv_action = menu.addAction("Video .mkv · phụ đề rời (bật/tắt được)", self._export_mkv)
         self.mkv_action.setToolTip("Hình gốc không đốt chữ + giọng đã dựng + phụ đề kèm font — "
-                                   "để sửa tiếp trong phần mềm khác. Không mã hóa lại, vài giây.")
+                                   "để sửa tiếp trong phần mềm khác. Thường vài giây; nếu đã che bằng làm mờ "
+                                   "thì hình được làm mờ y như bản dựng (lâu hơn).")
         menu.setToolTipsVisible(True)
         self.export_btn.setMenu(menu)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")

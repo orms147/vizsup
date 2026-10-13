@@ -5,7 +5,7 @@ key caps, badges). Specs: appdesign/v2/design.css (.app-nav, .statusbar, .btn, k
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -308,6 +308,64 @@ class ProjectBar(QFrame):
     def add_action(self, w: QWidget) -> QWidget:
         self.actions.addWidget(w)
         return w
+
+
+# --- toast ----------------------------------------------------------------------
+
+class Toast(QFrame):
+    """In-app notice in the window's top-right corner — the counterpart of the Windows
+    notification when the user is already looking at vizsup. Click or wait to dismiss."""
+
+    MS = 6000
+    _KINDS = {"ok": ("CircleCheck", "green"), "err": ("CircleAlert", "red")}
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setFixedWidth(340)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(f"QFrame#toast{{background:{V2['raised']};border:1px solid "
+                           f"{V2['purple_line']};border-radius:8px;}}"
+                           f"QFrame#toast QLabel{{background:transparent;}}")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(10)
+        self._ic = QLabel()
+        self._ic.setFixedSize(18, 18)
+        h.addWidget(self._ic, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.title = label("", "h3")
+        self.msg = label("", "small", wrap=True)
+        col.addWidget(self.title)
+        col.addWidget(self.msg)
+        h.addLayout(col, 1)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(self.MS)
+        self._timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_message(self, title: str, msg: str, kind: str = "ok") -> None:
+        ic, color = self._KINDS.get(kind, self._KINDS["ok"])
+        self._ic.setPixmap(pixmap(ic, V2[color], 18))
+        self.title.setText(title)
+        self.msg.setText(msg)
+        self.msg.setVisible(bool(msg))
+        self.adjustSize()
+        self.reposition()
+        self.raise_()
+        self.show()
+        self._timer.start()
+
+    def reposition(self) -> None:
+        par = self.parentWidget()
+        if par is not None:
+            self.move(max(0, par.width() - self.width() - 18), 64)
+
+    def mousePressEvent(self, _e) -> None:  # noqa: N802
+        self._timer.stop()
+        self.hide()
 
 
 # --- status bar -----------------------------------------------------------------
