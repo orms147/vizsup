@@ -16,13 +16,21 @@ approach, invariants that must not break, and headless verification.
 | `README.md` (this) | Status, environment, working rules | read first |
 | `A-api-optimization.md` | ✅ **SHIPPED** — API-1…API-10 landed (`bc7eda1`…`069a25c`). Historical record of the latency/token work | reference only |
 | `B-engine-quality.md` | ✅ **SHIPPED** — ENG-1…ENG-5 landed (`388b78b`…`9b54d93`). Historical record | reference only |
-| `C-workflow-ux.md` | **Active workstream**: remaining workflow/UX tasks (find/replace, undo+redo, settings, GUI queue, nudge). **UX-6 is PARKED — read its note before touching the API** | do next |
+| `C-workflow-ux.md` | Mostly shipped (UX-2…UX-5; v2 UI 2026-10). UX-1 → folded into E-9; UX-7 still open. **UX-6 is PARKED — read its note before touching the API** | reference |
+| `E-roadmap.md` | **Active workstream (2026-10-13)**: model-per-role on OpenRouter (benchmark table), ASR timing bug (E-1), OCR overlay filter, translation QA / xưng hô / songs, everyday UX | **do next** |
 | `D-backlog.md` | Parked ideas — do not start without the user asking | never by default |
 
 History: `docs/dev-plan.md` is the previous plan (v2) with DONE annotations for milestones M5–M8;
 it remains the record of what was built and why. This directory is the forward-looking plan.
 
-## Status snapshot (2026-09-11, HEAD `9b54d93`)
+## Status snapshot (2026-10-13, HEAD `00f2d04`)
+
+Since 2026-09-11: v2 UI (all four screens rebuilt from `appdesign/v2`), durable approval
+revisions, review flags + "Cần xem lại", real waveform, cloud ASR default (`audio_llm`),
+"tự canh lời" (local Silero VAD snap), `make run`. **525 tests green**, ruff clean.
+Next: `E-roadmap.md`. The older snapshot below is kept for history.
+
+### Previous snapshot (2026-09-11, HEAD `9b54d93`)
 
 The app **works end-to-end** and has been verified with a real CLI job (hardsubbed clip → auto-detect
 → OCR → edit gate → edge-tts dub → MP4). Test suite: **235 headless tests green** (`pytest -q` from
