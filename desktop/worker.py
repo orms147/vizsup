@@ -169,7 +169,9 @@ class PipelineWorker(QObject):
                 region = o.get("ocr_region", "bottom-third")
                 self.progress.emit(0.4, "Đọc chữ cháy trên video bằng OCR…")
                 self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region})")
-                ocr.extract_hardsubs(job, crop=region)
+                ocr.extract_hardsubs(
+                    job, crop=region, cancel=lambda: self._cancel,     # long videos: ETA + resume
+                    progress=lambda f, m: self.progress.emit(0.4 + 0.15 * f, m))
                 self.log.emit("✓ OCR xong")
                 if o.get("ocr_proofread"):
                     self._check()
@@ -265,7 +267,7 @@ class PipelineWorker(QObject):
 
             self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
             self.gate_reached.emit()
-        except (_Cancelled, translate.TranslateCancelled):
+        except (_Cancelled, translate.TranslateCancelled, InterruptedError):
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001 - surface to UI
             import traceback as _tb

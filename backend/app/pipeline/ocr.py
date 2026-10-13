@@ -17,13 +17,26 @@ Post-processing (this is what keeps cn.srt readable):
   subtitle into many fragments);
 - emit the cleanest variant in each group (the read with the most Chinese chars).
 Remaining errors get fixed at the human edit gate.
+
+Long videos (2026-10-14): frames stream from ffmpeg through a pipe (no PNG dump — a
+3-hour video used to write ~5.4 GB), two OCR workers, progress with an ETA, cancel
+between frames, and a checkpoint (``ocr_frames.json``) every few dozen frames so an
+interrupted run resumes where it stopped. Measured on this machine (CPU, PP-OCRv6):
+~0.5 s per frame, almost all of it text DETECTION on the 3x-upscaled strip; a coarser
+detection resize was ~3x faster but dropped real characters, so it is not used.
+CUDA engages automatically once onnxruntime finds the CUDA 13 / cuDNN 9 libraries.
 """
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+import threading
+import time
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
+from pathlib import Path
 
 from app.ffmpegutil import ffmpeg_bin
 from app.models import Cue, Job
@@ -188,6 +201,7 @@ def _build_ocr():
     onnxruntime-gpu, confirm the GPU actually engaged (nvidia-smi / frame timing).
     """
     if _installed("rapidocr"):
+        _preload_cuda()
         from rapidocr import RapidOCR
 
         v5: dict = {}
@@ -218,6 +232,22 @@ def _build_ocr():
     raise RuntimeError('OCR chưa được cài. Chạy: pip install -e ".[ocr]"')
 
 
+def _preload_cuda() -> None:
+    """onnxruntime-gpu finds the CUDA / cuDNN DLLs from the nvidia-* wheels only after
+    preload_dlls(); without them it falls back to CPU on its own. Quiet either way."""
+    import contextlib
+    import io
+
+    try:
+        import onnxruntime as ort
+
+        if hasattr(ort, "preload_dlls"):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                ort.preload_dlls()
+    except Exception:  # noqa: BLE001 - CPU still works
+        pass
+
+
 def _similar(a: str, b: str, sim: float) -> bool:
     """Same subtitle still on screen? True if one read contains the other or the
     normalized texts are similar enough (catches misreads/garbage suffixes)."""
@@ -244,7 +274,7 @@ def group_frames(per_frame: list[tuple[float, str, float]], *,
 
     Pure, behavior-preserving extraction of the old inline state machine (the subtle
     start-time handling on a group break is reproduced exactly); the only addition is
-    tracking which frame each chosen read came from, for ocr_report.rep_frame."""
+    tracking which frame each chosen read came from, for ocr_report.rep_t."""
     cues: list[Cue] = []
     confs: list[float] = []
     reps: list[int] = []
@@ -281,30 +311,134 @@ def group_frames(per_frame: list[tuple[float, str, float]], *,
     return [(c, cf, rf) for c, cf, rf in zip(cues, confs, reps) if c.duration >= min_dur]
 
 
+OCR_WORKERS = 2          # measured: 2 → ~15 % faster than 1; more only contends for the CPU
+CHECKPOINT = "ocr_frames.json"
+CHECKPOINT_EVERY = 50    # frames
+
+
+def _read_exact(stream, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
+    """BGR frames (numpy) of the cropped strip, streamed from ffmpeg as BMP images
+    through a pipe — nothing is written to disk. ``start`` seeks (resume)."""
+    import cv2
+    import numpy as np
+
+    cmd = [ffmpeg_bin(), "-v", "error"]
+    if start > 0:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", str(src), "-vf", vf, "-f", "image2pipe", "-c:v", "bmp", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        while True:
+            head = _read_exact(proc.stdout, 14)               # "BM" + file size (LE)
+            if len(head) < 14:
+                break
+            size = int.from_bytes(head[2:6], "little")
+            body = _read_exact(proc.stdout, size - 14)
+            if len(body) < size - 14:
+                break
+            img = cv2.imdecode(np.frombuffer(head + body, np.uint8), cv2.IMREAD_COLOR)
+            if img is not None:
+                yield img
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
+def _checkpoint_key(src: Path, fps: float, vf: str, min_conf: float) -> str:
+    st = src.stat()
+    return f"{src.name}:{st.st_size}:{int(st.st_mtime)}|{fps}|{vf}|{min_conf}|v1"
+
+
+def _load_checkpoint(path: Path, key: str) -> list[list]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or data.get("key") != key:
+        return []
+    return [r for r in data.get("frames") or [] if isinstance(r, list) and len(r) == 2]
+
+
+def _save_checkpoint(path: Path, key: str, frames: list) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"key": key, "frames": frames}, ensure_ascii=False),
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+def _fmt_eta(sec: float) -> str:
+    sec = int(max(0, sec))
+    return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else \
+        f"{sec // 60}:{sec % 60:02d}"
+
+
 def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
-                     min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5) -> Job:
-    """OCR burned-in subtitles → job.cn_srt."""
-    ocr = _build_ocr()
-
-    frames_dir = job.work_dir / "frames"
-    frames_dir.mkdir(exist_ok=True)
-    for old in frames_dir.glob("*.png"):
-        old.unlink()
-
-    vf = f"fps={fps}," + _CROP.get(crop, _CROP["bottom-third"])
-    subprocess.run(
-        [ffmpeg_bin(), "-y", "-i", str(job.source_video), "-vf", vf, str(frames_dir / "%05d.png")],
-        check=True, capture_output=True,
-    )
-
-    frames = sorted(frames_dir.glob("*.png"))
-    # 1) OCR + clean each frame to a single text line (normalizing both RapidOCR APIs)
+                     min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5,
+                     progress: Callable[[float, str], None] | None = None,
+                     cancel: Callable[[], bool] | None = None) -> Job:
+    """OCR burned-in subtitles → job.cn_srt. Resumable (``ocr_frames.json``)."""
     from app.heavy import heavy_task
+    from app.pipeline.assemble import probe_duration
 
-    with heavy_task("OCR"):
-        per_frame = [(k / fps, *_clean_frame_conf(_to_lines(ocr(str(fp))), min_conf))
-                     for k, fp in enumerate(frames)]
+    src = job.source_video
+    vf = f"fps={fps}," + _CROP.get(crop, _CROP["bottom-third"])
+    old_frames = job.work_dir / "frames"                 # PNG dumps of the old pipeline
+    if old_frames.is_dir():
+        for old in old_frames.glob("*.png"):
+            old.unlink(missing_ok=True)
 
+    ckpt = job.work_dir / CHECKPOINT
+    key = _checkpoint_key(src, fps, vf, min_conf)
+    done: list[list] = _load_checkpoint(ckpt, key)
+    total = max(1, int((probe_duration(src) or 0.0) * fps))
+    say = progress or (lambda _f, _m: None)
+    if done:
+        say(len(done) / total, f"OCR: chạy tiếp từ khung {len(done)}/{total}")
+
+    engines = threading.local()
+
+    def read(img) -> list:
+        if not hasattr(engines, "ocr"):
+            engines.ocr = _build_ocr()
+        text, conf = _clean_frame_conf(_to_lines(engines.ocr(img)), min_conf)
+        return [text, round(float(conf), 4)]
+
+    t0, start_n = time.monotonic(), len(done)
+    with heavy_task("OCR"), ThreadPoolExecutor(max_workers=OCR_WORKERS) as ex:
+        batch: list = []
+
+        def flush() -> None:
+            done.extend(ex.map(read, batch))
+            batch.clear()
+            _save_checkpoint(ckpt, key, done)
+            rate = (time.monotonic() - t0) / max(1, len(done) - start_n)
+            left = max(0, total - len(done))
+            say(min(1.0, len(done) / total),
+                f"OCR {len(done)}/{total} khung · còn ~{_fmt_eta(left * rate)}")
+
+        for img in _frame_stream(src, vf, start=len(done) / fps):
+            if cancel and cancel():
+                if batch:
+                    flush()
+                raise InterruptedError("Đã hủy.")
+            batch.append(img)
+            if len(batch) >= CHECKPOINT_EVERY:
+                flush()
+        if batch:
+            flush()
+
+    per_frame = [(k / fps, text, conf) for k, (text, conf) in enumerate(done)]
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     kept = group_frames(per_frame, sim=sim, fps=fps, min_dur=min_dur)
     # 2b) E-0: static banners / watermarks / one-frame Latin junk are not subtitles
@@ -320,7 +454,7 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         cues.append(c)
         report.append({
             "index": i, "conf": round(cf, 3), "suspect": _suspect(c.text, cf),
-            "rep_frame": f"frames/{rf + 1:05d}.png",   # a frame showing this cue (curation/proofread)
+            "rep_t": round(rf / fps, 3),        # a moment showing this cue (re-extract to see it)
         })
     # per-cue confidence sidecar — proofread_srt(only_suspect=True) reads this so
     # the LLM only sees lines worth fixing (cost drops sharply on clean videos)

@@ -347,8 +347,19 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
 - ✅ **ASR per-chunk cache** (`_cloud.chunk_cache`, `asr_cache/`): a failed chunk no longer
   re-buys the finished ones (Haiku 5.5 subagent, reviewed).
 - **Streamed audio decode** for VAD / waveform (in progress).
-- **OCR**: skip frames whose subtitle band did not change, parallel workers, no PNG dump (keep
-  only representative frames), progress + resume.
+- ✅ **OCR plumbing**: frames stream from ffmpeg as BMP through a pipe (no PNG dump — ~5.4 GB
+  for 3 h), progress with ETA, cancel between frames, checkpoint `ocr_frames.json` every 50
+  frames → resume. Real 137 s video: 97/97 cues identical to the PNG path.
+- ✗ **OCR speed on CPU — not solved, measured**: 0.25–0.5 s/frame; 92 % of it is text
+  DETECTION because `limit_type=min, 736` upscales the 240-px strip ~3x. Tried: 2–6 workers
+  (≤15 %, onnxruntime already uses the cores; kept 2), downscaling (no gain), skipping
+  unchanged frames (vlog backgrounds move: same-subtitle frames differ 24 % median, even
+  inside the text boxes it missed 11 real changes at a 5 % threshold), coarser detection
+  resize (~3x faster but drops real characters, e.g. 我们再把校服换上 → …换). The real fix is
+  the GPU: onnxruntime-gpu 1.27 is installed but needs CUDA 13 + cuDNN 9, which the pip
+  extras can't provide on Windows (`nvidia-cuda-nvrtc-cu13` has no real wheel) → a system
+  install; `_preload_cuda()` then picks it up. Until then a 3-hour hardsub video ≈ 1.5–4 h of
+  OCR (or use the ASR path).
 - Optional: split a long video into ~30-min parts through the queue, join at the end.
 
 ## P2 — later (keep in mind, don't start yet)
