@@ -260,7 +260,10 @@ Shipped: `QSystemTrayIcon` messages for gate reached (cue + review counts), rend
 `QSystemTrayIcon` message when the gate is reached, a render finishes, or a run fails — only when
 the window isn't active. Clicking it focuses the right page.
 
-### E-13 [S] Tool upkeep in Settings
+### ✅ E-13 [S] Tool upkeep in Settings — DONE 2026-10-13
+
+Shipped (written by a Haiku 5.5 subagent, reviewed + applied): `app/tools.py` (`update_ytdlp`, `cookie_age_days`); Settings → Tải video: yt-dlp card with version + "Cập nhật yt-dlp", cookie-age line (amber > 20 days); new group "Kiểm tra" running `doctor.run_checks()` off-thread.
+
 
 - "Cập nhật yt-dlp" (pip upgrade inside the venv, off-thread) — Douyin breaks extractors often.
 - Cookie age: warn when `cookies.txt` is older than ~20 days, before a download fails.

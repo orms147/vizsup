@@ -9,6 +9,7 @@ so the UI never freezes.
 from __future__ import annotations
 
 from datetime import date
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
@@ -34,7 +35,9 @@ from desktop.theme import V2
 from desktop.ui_thread import connect_on_ui
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from app.config import settings  # noqa: E402
+from app.doctor import run_checks  # noqa: E402
 from app.providers.registry import find_provider  # noqa: E402
+from app.tools import cookie_age_days, update_ytdlp  # noqa: E402
 
 # (env var, display name, settings attr, provider name)
 KEYS = [
@@ -106,7 +109,11 @@ OPTIONS = [
 ]
 OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 GROUPS = (("keys", "Khóa API", "KeyRound"), ("download", "Tải video", "Download"),
-          ("ai", "AI và mô hình", "Sparkles"), ("paths", "Đường dẫn", "HardDrive"))
+          ("ai", "AI và mô hình", "Sparkles"), ("paths", "Đường dẫn", "HardDrive"),
+          ("check", "Kiểm tra", "ShieldCheck"))
+# doctor status → (icon, theme colour) for the Kiểm tra rows
+_CHECK_STYLE = {"ok": ("CircleCheck", "green"), "warn": ("TriangleAlert", "amber"),
+                "fail": ("X", "red"), "info": ("CircleHelp", "muted")}
 OPT_GROUP = {"YTDLP_COOKIES_FILE": "download", "YTDLP_COOKIES_FROM_BROWSER": "download",
              "BBDOWN_PATH": "download", "VIZSUP_STORAGE_DIR": "paths", "FFMPEG_PATH": "paths"}
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
@@ -150,6 +157,13 @@ def _card() -> QFrame:
     f.setStyleSheet(f"QFrame#panel{{background:{V2['panel']};border:1px solid {V2['line']};"
                     f"border-radius:10px;}}")
     return f
+
+
+def _ytdlp_installed_version() -> str:
+    try:
+        return version("yt-dlp")
+    except PackageNotFoundError:
+        return "chưa cài"
 
 
 class SettingsView(QWidget):
@@ -220,7 +234,8 @@ class SettingsView(QWidget):
         self._stack = QStackedLayout(stack_host)
         self._stack.addWidget(self._scroll(self._keys_page()))
         for key, _t, _i in GROUPS[1:]:
-            self._stack.addWidget(self._scroll(self._options_page(key)))
+            page = self._check_page() if key == "check" else self._options_page(key)
+            self._stack.addWidget(self._scroll(page))
         right.addWidget(stack_host, 1)
         foot = QFrame()
         foot.setStyleSheet(f"QFrame{{border-top:1px solid {V2['line_soft']};}} "
@@ -368,6 +383,8 @@ class SettingsView(QWidget):
         }[group]
         v.addWidget(label(title, "h1"))
         v.addWidget(label(sub, "secondary"))
+        if group == "download":
+            v.addWidget(self._ytdlp_card())
         if group == "ai":
             v.addWidget(self._model_card())
             self.promo_state = label("", "small")
@@ -377,6 +394,10 @@ class SettingsView(QWidget):
                 v.addWidget(self._opt_card(*spec))
                 if spec[0] == "OPENROUTER_PROMO_EXPIRES":
                     v.addWidget(self.promo_state)
+                if spec[0] == "YTDLP_COOKIES_FILE":
+                    self.cookie_state = label("", "small", wrap=True)
+                    v.addWidget(self.cookie_state)
+                    self._opts[spec[0]].textChanged.connect(self._update_cookie_state)
         v.addStretch(1)
         return page
 
@@ -417,6 +438,134 @@ class SettingsView(QWidget):
         self.model_status.setWordWrap(True)
         cl.addWidget(self.model_status)
         return card
+
+    # --- Tải video: yt-dlp upkeep and cookie age -------------------------------------
+    def _ytdlp_card(self) -> QFrame:
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(6)
+        head = QHBoxLayout()
+        head.addWidget(label("Công cụ tải video", "h3"), 1)
+        self.ytdlp_ver = label("", "secondary")
+        head.addWidget(self.ytdlp_ver)
+        self.ytdlp_btn = button("Cập nhật yt-dlp", "RefreshCw", variant="ghost", small=True)
+        self.ytdlp_btn.clicked.connect(self._update_ytdlp)
+        self._buttons.append(self.ytdlp_btn)
+        head.addWidget(self.ytdlp_btn)
+        cl.addLayout(head)
+        cl.addWidget(label("Douyin hay đổi cách chặn tải — cập nhật khi tải lỗi.", "small",
+                           wrap=True))
+        self.ytdlp_status = label("", "small", wrap=True)
+        self.ytdlp_status.setVisible(False)
+        cl.addWidget(self.ytdlp_status)
+        self._refresh_ytdlp_version()
+        return card
+
+    def _refresh_ytdlp_version(self) -> None:
+        self.ytdlp_ver.setText(f"Phiên bản: {_ytdlp_installed_version()}")
+
+    def _update_ytdlp(self) -> None:
+        self.ytdlp_status.setVisible(True)
+        self.ytdlp_status.setStyleSheet(f"color:{V2['muted']};")
+        self.ytdlp_status.setText("Đang cập nhật yt-dlp… có thể mất vài chục giây.")
+        self._bg(update_ytdlp, self._update_ytdlp_done)
+
+    def _update_ytdlp_done(self, res) -> None:
+        self._set_busy(False)
+        if isinstance(res, Exception):
+            ok, msg = False, f"{type(res).__name__}: {res}"
+        else:
+            ok, msg = res
+        self._refresh_ytdlp_version()
+        if ok:
+            self.ytdlp_status.setText(f"✓ {msg} — khởi động lại vizsup để dùng bản mới.")
+        else:
+            self.ytdlp_status.setText(f"✗ {msg}")
+        self.ytdlp_status.setStyleSheet(f"color:{V2['green'] if ok else V2['red']};")
+
+    def _update_cookie_state(self, *_a) -> None:
+        age = cookie_age_days(self._opt_value("YTDLP_COOKIES_FILE"))
+        lbl = self.cookie_state
+        lbl.setVisible(age is not None)
+        if age is None:
+            return
+        days = int(age)
+        if age > 20:
+            lbl.setText(f"Tệp cookie đã {days} ngày — Douyin thường hết hạn sau khoảng 3 tuần, "
+                        "nên xuất lại.")
+            lbl.setStyleSheet(f"color:{V2['amber']};")
+        else:
+            lbl.setText(f"Tệp cookie: {days} ngày tuổi.")
+            lbl.setStyleSheet(f"color:{V2['muted']};")
+
+    # --- Kiểm tra: doctor checks, run off the GUI thread ----------------------------
+    def _check_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 4, 12, 12)
+        v.setSpacing(12)
+        v.addWidget(label("Kiểm tra môi trường", "h1"))
+        v.addWidget(label("Công cụ, bộ nhận dạng, font và khóa trên máy này — cùng nội dung "
+                          "với lệnh vizsup doctor.", "secondary", wrap=True))
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(10)
+        top = QHBoxLayout()
+        self.check_summary = label('Chưa kiểm tra. Bấm "Kiểm tra ngay" để xem.', "small",
+                                   wrap=True)
+        top.addWidget(self.check_summary, 1)
+        self.check_btn = button("Kiểm tra ngay", "RefreshCw")
+        self.check_btn.clicked.connect(self._run_checks)
+        self._buttons.append(self.check_btn)
+        top.addWidget(self.check_btn)
+        cl.addLayout(top)
+        self._check_grid = QGridLayout()
+        self._check_grid.setHorizontalSpacing(12)
+        self._check_grid.setVerticalSpacing(8)
+        self._check_grid.setColumnStretch(2, 1)
+        cl.addLayout(self._check_grid)
+        v.addWidget(card)
+        v.addStretch(1)
+        return page
+
+    def _run_checks(self) -> None:
+        self.check_summary.setText("Đang kiểm tra…")
+        self.check_summary.setStyleSheet(f"color:{V2['muted']};")
+        self._bg(run_checks, self._checks_done)
+
+    def _checks_done(self, res) -> None:
+        self._set_busy(False)
+        grid = self._check_grid
+        while grid.count():
+            w = grid.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        if isinstance(res, Exception):
+            self.check_summary.setText(f"✗ Không chạy được kiểm tra: {type(res).__name__}: {res}")
+            self.check_summary.setStyleSheet(f"color:{V2['red']};")
+            return
+        for r, (status, name, detail) in enumerate(res):
+            glyph, color = _CHECK_STYLE.get(status, _CHECK_STYLE["info"])
+            grid.addWidget(icon_label(glyph, V2[color], 16), r, 0, Qt.AlignTop)
+            grid.addWidget(label(name, "h3"), r, 1, Qt.AlignTop)
+            det = label(detail, "small", wrap=True)
+            det.setMinimumWidth(1)  # let the wide column shrink and wrap, not push the card out
+            grid.addWidget(det, r, 2, Qt.AlignTop)
+        fails = sum(1 for s, _n, _d in res if s == "fail")
+        warns = sum(1 for s, _n, _d in res if s == "warn")
+        if fails:
+            text = f"✕ {fails} lỗi phải sửa · {warns} cảnh báo — pipeline chưa chạy đủ."
+            color = V2["red"]
+        elif warns:
+            text = f"! {warns} cảnh báo — chạy được nhưng thiếu một số tính năng."
+            color = V2["amber"]
+        else:
+            text = "✓ Mọi thứ sẵn sàng."
+            color = V2["green"]
+        self.check_summary.setText(text)
+        self.check_summary.setStyleSheet(f"color:{color};")
 
     def _opt_card(self, env: str, name: str, attr: str, kind: str,
                   hint: str, choices: list[str] | None) -> QWidget:
@@ -492,6 +641,7 @@ class SettingsView(QWidget):
             combo.setEditText(getattr(settings, ROLES[key].attr, "") or "")
             combo.blockSignals(False)
         self._update_promo_state()
+        self._update_cookie_state()
         self._set_dirty(False)
 
     def _update_promo_state(self) -> None:
