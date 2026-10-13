@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -85,19 +86,38 @@ def _save(job: Job, data: dict) -> None:
         pass
 
 
-def _listen(job: Job, say) -> str | None:
-    from app.ffmpegutil import ffmpeg_bin
+def _window(job: Job):
+    """(src, a, b, voice spans) of the excerpt both the listener and the pitch check use."""
     from app.pipeline import vad
     from app.pipeline.assemble import probe_duration
-    from app.providers.registry import get_asr
 
     src = job.source_audio if job.source_audio.exists() else job.source_video
     if not src.exists():
         return None
+    spans = vad.spans_for(src, job.work_dir)
+    a, b = pick_excerpt(spans, probe_duration(src) or EXCERPT_SEC)
+    return src, a, b, spans
+
+
+def _measure(job: Job, _say) -> dict | None:
+    """Local pitch verdict on the same excerpt (pitch.py) — nothing uploaded."""
+    from app.pipeline import pitch
+
+    win = _window(job)
+    return pitch.measure(*win) if win else None
+
+
+def _listen(job: Job, say) -> str | None:
+    from app.ffmpegutil import ffmpeg_bin
+    from app.providers.registry import get_asr
+
     prov = get_asr("audio_llm")
     if not prov.available():
         return None
-    a, b = pick_excerpt(vad.spans_for(src, job.work_dir), probe_duration(src) or EXCERPT_SEC)
+    win = _window(job)
+    if win is None:
+        return None
+    src, a, b, _spans = win
     with tempfile.TemporaryDirectory(prefix="vizsup_spk_") as tmp:
         clip = Path(tmp) / "excerpt.mp3"
         subprocess.run([ffmpeg_bin(), "-y", "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", str(src),
@@ -139,10 +159,42 @@ def _look(job: Job, say) -> str | None:
     return (resp.choices[0].message.content or "").strip() or None
 
 
+_VOICE = {"low": "giọng trầm (thường là nam)", "high": "giọng cao (thường là nữ)"}
+_NOT_GENDER = re.compile(r"việt nam|miền nam|phía nam|hướng nam|nam bộ|nam phi|nam mỹ|"
+                         r"nam kinh|đông nam|tây nam")
+_CHILD = re.compile(r"trẻ em|trẻ con|em bé|cậu bé|cô bé|bé trai|bé gái|thiếu nhi")
+
+
+def genders(text: str | None) -> set[str]:
+    """{'low', 'high'} for the genders the listener names ('nam' / 'nữ'). Pure."""
+    t = _NOT_GENDER.sub(" ", (text or "").lower())
+    out = set()
+    if re.search(r"\bnam\b", t):
+        out.add("low")
+    if re.search(r"\bnữ\b", t):
+        out.add("high")
+    return out
+
+
+def pitch_note(audio: str | None, measured: dict | None) -> str | None:
+    """A line for the brief when the measured pitch says something the listener did not:
+    it contradicts a single named gender (→ CHƯA CHẮC) or fills in an unnamed one. Only
+    for talking — singing and children's voices don't follow the speech ranges. Pure."""
+    voice = (measured or {}).get("voice")
+    if voice not in _VOICE or parse_singing(audio) != "no" or _CHILD.search((audio or "").lower()):
+        return None
+    said = genders(audio)
+    head = f"Cao độ giọng đo trên máy: trung vị ~{measured['median']} Hz — nghiêng về {_VOICE[voice]}"
+    if said and voice not in said:
+        return (f"{head}, trái với nhận xét nghe ở trên. Giới tính người nói CHƯA CHẮC: dùng "
+                f"xưng hô trung tính (mình / bạn) trừ khi lời thoại cho biết rõ.")
+    if not said:
+        return head + "."
+    return None
+
+
 def parse_singing(text: str | None) -> str | None:
     """'yes' / 'mixed' / 'no' from the audio answer's last 'HÁT: …' line, else None."""
-    import re
-
     m = re.search(r"HÁT\s*[:：]\s*(có|xen kẽ|không)", text or "", re.I)
     return _SINGING.get(m.group(1).lower()) if m else None
 
@@ -158,7 +210,8 @@ def observe(job: Job, *, frames: bool = False, log=None) -> str | None:
     say = log or (lambda _m: None)
     data = _load(job)
     changed = False
-    for kind, wanted, fn in (("audio", True, _listen), ("frames", frames, _look)):
+    for kind, wanted, fn in (("audio", True, _listen), ("pitch", True, _measure),
+                             ("frames", frames, _look)):
         if not wanted or data.get(kind):
             continue
         try:
@@ -174,6 +227,9 @@ def observe(job: Job, *, frames: bool = False, log=None) -> str | None:
     parts = []
     if data.get("audio"):
         parts.append(f"Nghe âm thanh (tin cậy cho ai nói / hát và giới tính): {data['audio']}")
+        note = pitch_note(data["audio"], data.get("pitch"))
+        if note:
+            parts.append(note)
     if frames and data.get("frames"):
         parts.append(f"Xem khung hình (chỉ bối cảnh và ai xuất hiện): {data['frames']}")
     return "\n".join(parts) or None
