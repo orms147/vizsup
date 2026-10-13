@@ -129,7 +129,8 @@ def project_summary(job_id: str) -> dict:
 
             cues = cuemodel.load_pair(job)
             ocr, term = review.load_flag_spans(job)
-            issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term)
+            issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term,
+                                       guess_spans=review.load_guess_spans(job))
             info["cues"] = len(cues)
             info["pending"] = sum(1 for c, i in zip(cues, issues, strict=False)
                                   if i and not cuemodel.is_reviewed(c))

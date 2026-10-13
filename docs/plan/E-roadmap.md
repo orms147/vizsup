@@ -73,7 +73,19 @@ or repeats with near-identical content across many short cues, or (b) is Latin-o
 source language is zh (keep an opt-out). Report dropped lines in `ocr_report.json`.
 **Verify:** that job's cn.srt loses the banner lines; real dialogue lines unchanged.
 
-### E-1 [M] Stacked / overlong ASR cues (root cause found)
+### ✅ E-1 [M] Stacked / overlong ASR cues — DONE 2026-10-13
+
+Shipped: in-order DP character alignment (`align._match_pairs`, replaces difflib — a repeated
+chorus was paired out of order), collapsed Whisper timestamps dropped (`_drop_collapsed`),
+unanchored sentences laid over VAD voice in their gap (`_place_on_voice`, natural length
+without VAD, capped at 8 s / 0.6 s per char), overlong anchored cues cut to their densest
+anchor run, `Cue.guess` → `timing_report.json` → review issue `guess` ("Timing đoán"),
+filler-only lines with no voice → `novoice`, word track saved in `asr_words.json`,
+`asr.retime(job)` + `vizsup retime --workdir` + editor ··· "Đo lại thời gian từ âm thanh"
+(per-chunk acceptance: a chunk Whisper barely heard keeps its old times; `repair_runs`
+re-lays stacked/overlong leftovers). Real job: 0 stacked starts, 0 overlaps, max 10.5 s
+(was 76 s), 11 lines flagged for review. Original spec below.
+
 
 **Symptom** (job `2dc712c162d7`, cn.srt): cues 33–39 all at `240.00–240.30`; cue 40 spans
 `245.30–321.40` (76 s); cue 3 is 21 s. The editor can't fix this by snapping (no voice "inside").

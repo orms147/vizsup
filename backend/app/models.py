@@ -13,6 +13,7 @@ class Cue:
     start: float
     end: float
     text: str
+    guess: bool = False   # timing was spread/interpolated, not anchored on heard words
 
     @property
     def duration(self) -> float:

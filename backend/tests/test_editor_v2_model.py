@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root → `d
 
 from app.models import Cue, Job  # noqa: E402
 from app.pipeline import approval, review, waveform  # noqa: E402
-from app.pipeline.srt import write_srt  # noqa: E402
+from app.pipeline.srt import parse_srt, write_srt  # noqa: E402
 from desktop import cuemodel  # noqa: E402
 from desktop.cuemodel import EditorCue  # noqa: E402
 
@@ -196,3 +196,75 @@ def test_waveform_peaks_are_normalised_and_cached(job, monkeypatch):
     p = waveform.peaks(job)
     assert p == [0.0, 1.0, 0.5]
     assert waveform.peaks(job) == p and len(calls) == 1          # second call hits the cache
+
+
+# --- E-1: estimated timing + hallucinated filler -----------------------------------
+
+def test_guess_and_novoice_flags():
+    a, b, c = ec(0.0, 2.0), ec(2.0, 4.0), ec(5.0, 7.0)
+    b.zh, c.zh = "呼呜呼呜呼呜。", "你好"
+    iss = review.cue_issues([a, b, c], guess_spans=[review.Span(0.5, 1.5)],
+                            voice=[(0.0, 1.9), (5.0, 7.0)])
+    assert "guess" in iss[0]
+    assert "novoice" in iss[1]                 # filler, nothing heard under it
+    assert "novoice" not in iss[2]             # real words: never a hallucination flag
+
+
+def test_asr_stage_persists_words_and_guessed_cues(job, monkeypatch):
+    from app.pipeline import asr
+
+    class Fake:
+        last_words = [("你好", 1.0, 1.5)]
+        last_groups = [((0.0, 10.0), ["你好。", "听不清。"])]
+
+        def available(self):
+            return True
+
+        def transcribe(self, media, language="zh", log=None):
+            return [Cue(1, 1.0, 1.5, "你好。"), Cue(2, 3.0, 4.0, "听不清。", guess=True)]
+
+        def unload(self):
+            pass
+
+    job.source_audio.write_bytes(b"x")
+    monkeypatch.setattr(asr, "get_asr", lambda name: Fake())
+    asr.transcribe(job, provider="fake")
+    data = json.loads((job.work_dir / "asr_words.json").read_text(encoding="utf-8"))
+    assert data["words"] == [["你好", 1.0, 1.5]] and data["groups"][0][1] == ["你好。", "听不清。"]
+    assert review.load_guess_spans(job) == [review.Span(3.0, 4.0)]
+
+
+def test_retime_uses_saved_words_and_keeps_chunks_it_cannot_hear(job, monkeypatch):
+    """No network: words come from asr_words.json; a chunk with (almost) no heard
+    words keeps its old times; stacked cues are repaired over the voice."""
+    from app.pipeline import asr, vad
+    from app.providers.asr import _cloud
+
+    job.source_audio.write_bytes(b"x")
+    write_srt([Cue(1, 0.0, 2.0, "我说再喝一碗。"), Cue(2, 5.0, 7.0, "你说你要渡江。"),
+               Cue(3, 20.0, 20.3, "你何时回来？"), Cue(4, 20.0, 20.3, "这次多放老姜。")], job.cn_srt)
+    words = [(ch, 1.0 + i * 0.2, 1.2 + i * 0.2) for i, ch in enumerate("我说再喝一碗")] \
+        + [(ch, 5.0 + i * 0.2, 5.2 + i * 0.2) for i, ch in enumerate("你说你要渡江")]
+    (job.work_dir / "asr_words.json").write_text(json.dumps({"words": words, "groups": []}),
+                                                 encoding="utf-8")
+    monkeypatch.setattr(_cloud, "plan_chunks", lambda src, target: [(0.0, 10.0), (10.0, 30.0)])
+    monkeypatch.setattr(vad, "spans_for", lambda src, d, log=None: [(21.0, 26.0)])
+    monkeypatch.setattr("app.pipeline.assemble.probe_duration", lambda p: 30.0)
+    asr.retime(job)
+    cues = parse_srt(job.cn_srt)
+    assert cues[0].start == pytest.approx(1.0) and cues[1].start == pytest.approx(5.0)
+    assert cues[2].start < cues[3].start                      # no longer stacked
+    assert all(21.0 <= c.start < 26.0 for c in cues[2:])      # laid over the voice
+    assert len(review.load_guess_spans(job)) == 2
+
+
+def test_vi_times_follow_retimed_chinese_only_when_lines_still_pair(job):
+    from app.pipeline import asr
+
+    write_srt([Cue(1, 1.0, 2.0, "一"), Cue(2, 3.0, 4.0, "二")], job.cn_srt)
+    assert asr.vi_time_map(job, ["一", "二"]) == [(1.0, 2.0), (3.0, 4.0)]
+    assert asr.vi_time_map(job, ["一"]) is None                   # merged / deleted
+    assert asr.vi_time_map(job, ["二", "一"]) is None             # reordered / split
+    write_srt([Cue(1, 0.0, 9.0, "một"), Cue(2, 9.0, 9.5, "hai")], job.vi_srt)
+    assert asr.sync_vi_times(job)
+    assert [(c.start, c.end) for c in parse_srt(job.vi_srt)] == [(1.0, 2.0), (3.0, 4.0)]

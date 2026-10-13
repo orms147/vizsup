@@ -182,7 +182,13 @@ def speech_spans(job: Job, *, log=None) -> list[Span] | None:
     src = _source(job)
     if src is None:
         return None
-    cache = job.work_dir / _CACHE
+    return spans_for(src, job.work_dir, log=log)
+
+
+def spans_for(src: Path, cache_dir: Path, *, log=None) -> list[Span] | None:
+    """Same as :func:`speech_spans` for a bare media file (ASR providers only see the
+    path); cached in ``cache_dir/vad.json``."""
+    cache = cache_dir / _CACHE
     key = _key(src)
     try:
         data = json.loads(cache.read_text(encoding="utf-8"))

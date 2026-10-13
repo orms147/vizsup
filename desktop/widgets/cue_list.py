@@ -211,6 +211,7 @@ class CueList(QFrame):
     addRequested = Signal()
     deleteRequested = Signal()
     snapAllRequested = Signal()
+    retimeRequested = Signal()
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
@@ -338,6 +339,7 @@ class CueList(QFrame):
         m.addAction("Xóa câu này", self.deleteRequested.emit)
         m.addSeparator()
         m.addAction("Tự canh tất cả câu theo giọng nói   Shift+A", self.snapAllRequested.emit)
+        m.addAction("Đo lại thời gian từ âm thanh (giữ nguyên chữ)…", self.retimeRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

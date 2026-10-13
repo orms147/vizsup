@@ -51,6 +51,7 @@ docs/                 research, architecture, providers, dev-plan; docs/plan/ = 
 # backend (venv: backend/.venv)
 uv pip install -e .            # or: pip install -e .  (from backend/)
 python -m app.cli URL          # headless: download → subs → translate → gate; then `vizsup render`
+python -m app.cli retime --workdir ../storage/<id>   # re-time an old job's lines to the audio (text kept, backups made)
 uvicorn app.main:app --reload  # FastAPI server (SRT/ASR path; OCR route desktop/CLI-only)
 python -m pytest -q            # from repo root (pytest.ini) — full headless suite
 

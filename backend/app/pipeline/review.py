@@ -8,6 +8,9 @@ Pure, UI-agnostic. A cue is flagged for any of:
                 (same estimate the translate stage uses: fit_estimate)
 - ``ocr``     — the Chinese source came from an OCR read marked suspect
 - ``term``    — a glossary term's Vietnamese rendering is missing from the line
+- ``guess``   — ASR timed it by estimate (no heard words anchored it; timing_report)
+- ``novoice`` — filler-only Chinese (呼呜 / 啊啊) with no voice under it: likely an
+                ASR hallucination on music
 
 OCR and glossary reports number cues by their position in cn.srt, which no longer
 matches vi.srt once translation deduped repeats and the user split/merged lines —
@@ -16,6 +19,7 @@ so those flags are mapped onto the editor's cues by TIME OVERLAP, not by index.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from app.models import Job
@@ -28,8 +32,11 @@ LABELS = {
     "long": "Quá dài",
     "ocr": "OCR đáng ngờ",
     "term": "Thiếu thuật ngữ",
+    "guess": "Timing đoán",
+    "novoice": "Không nghe thấy giọng",
 }
-ORDER = ("short", "overlap", "long", "ocr", "term")
+ORDER = ("short", "overlap", "guess", "novoice", "long", "ocr", "term")
+_FILLER = re.compile(r"^[呼呜啊哦嗯哈呀唔嘿喔哎诶噢嗷哇咿吖啦嘛哼\s，。！？、…~～.!?,-]*$")
 
 
 @dataclass(frozen=True)
@@ -42,9 +49,12 @@ def _overlaps(a_start: float, a_end: float, spans: list[Span]) -> bool:
     return any(min(a_end, s.end) - max(a_start, s.start) > 0.05 for s in spans)
 
 
-def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = ()) -> list[list[str]]:
+def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
+               guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None
+               ) -> list[list[str]]:
     """``cues``: objects with ``start``, ``end``, and Vietnamese text in ``vi`` (editor
-    cues) or ``text``. Returns, per cue, its issue keys in ORDER."""
+    cues) or ``text`` (+ optional Chinese ``zh``). ``voice``: VAD spans, when known.
+    Returns, per cue, its issue keys in ORDER."""
     out: list[list[str]] = []
     for i, c in enumerate(cues):
         text = getattr(c, "vi", None)
@@ -55,6 +65,12 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = ())
             issues.append("short")
         if i > 0 and c.start < cues[i - 1].end - 0.01:
             issues.append("overlap")
+        if guess_spans and _overlaps(c.start, c.end, guess_spans):
+            issues.append("guess")
+        zh = getattr(c, "zh", "") or ""
+        if (voice is not None and zh.strip() and _FILLER.match(zh)
+                and not any(s < c.end and e > c.start for s, e in voice)):
+            issues.append("novoice")
         if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i)):
             issues.append("long")
         if ocr_spans and _overlaps(c.start, c.end, ocr_spans):
@@ -79,6 +95,13 @@ def _report(job: Job, name: str) -> list:
         return data if isinstance(data, list) else []
     except (OSError, ValueError):
         return []
+
+
+def load_guess_spans(job: Job) -> list[Span]:
+    """Time ranges of cues the ASR stage timed by estimate (timing_report.json)."""
+    cn = _cn_spans(job)
+    return [cn[r["index"]] for r in _report(job, "timing_report.json")
+            if isinstance(r, dict) and r.get("guess") and r.get("index") in cn]
 
 
 def load_flag_spans(job: Job) -> tuple[list[Span], list[Span]]:

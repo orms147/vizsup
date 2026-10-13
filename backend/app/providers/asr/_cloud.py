@@ -275,7 +275,8 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str) ->
 
 
 def time_groups(media: Path, groups: list[Group], language: str,
-                words: list[Word] | None = None) -> list[Cue]:
+                words: list[Word] | None = None,
+                voice: list[tuple[float, float]] | None = None) -> list[Cue]:
     """Time text-only transcripts chunk by chunk against a WORD track, aligning each
     chunk on just its own words (±margin) — a bounded problem, and a chunk's mistakes
     cannot leak into another. ``words`` is the cloud word track when the caller fetched
@@ -306,7 +307,7 @@ def time_groups(media: Path, groups: list[Group], language: str,
             log.warning("cloud transcript for %.0f-%.0fs has %d hanzi where whisper heard %d — "
                         "using whisper's text for this chunk", lo, hi, got, heard)
             sents = split_sentences("".join(w[0] for w in local if lo <= w[1] <= hi))
-        out.extend(align_text_to_words(sents, local, (lo, hi)))
+        out.extend(align_text_to_words(sents, local, (lo, hi), voice=voice))
     return out
 
 

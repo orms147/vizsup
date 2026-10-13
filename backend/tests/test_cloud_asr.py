@@ -190,7 +190,7 @@ def no_media(monkeypatch, tmp_path):
 
     words_seen: list = []
 
-    def fake_timing(media, groups, language, words=None):
+    def fake_timing(media, groups, language, words=None, voice=None):
         from app.pipeline.align import _spread
 
         timed.append(sum(len(sents) for _span, sents in groups))

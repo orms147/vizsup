@@ -76,6 +76,7 @@ class EditorView(QWidget):
         self.cues: list[EditorCue] = []
         self.issues: list[list[str]] = []
         self._spans: tuple[list, list] = ([], [])   # (ocr, glossary) flag spans
+        self._guess: list = []                      # ASR-estimated timing (timing_report)
         self._speech: list | None = None   # voice spans (app.pipeline.vad) for "Tự canh"
         self._ctx: dict = {}          # tts/voice/translator context from step 1
         self._sel: int = -1           # selected cue index
@@ -161,6 +162,7 @@ class EditorView(QWidget):
         cl.addRequested.connect(self._add)
         cl.deleteRequested.connect(self._delete)
         cl.snapAllRequested.connect(self._auto_snap_all)
+        cl.retimeRequested.connect(self._retime)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -498,9 +500,17 @@ class EditorView(QWidget):
             self.inspector.refresh_timing(self.cues[self._sel])
 
     # --- tự canh lời (snap to the voice) ----------------------------------------
+    def _compute_issues(self) -> list[list[str]]:
+        ocr, term = self._spans
+        return review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term,
+                                 guess_spans=self._guess, voice=self._speech)
+
     def _set_speech(self, spans: list | None, why: str = "") -> None:
+        had = self._speech
         self._speech = spans or None
         self.timeline.set_speech(spans or [])
+        if self._speech != had and self.cues:
+            self._refresh_issues()              # "Không nghe thấy giọng" needs the voice
         ok = bool(spans)
         self.inspector.set_snap_available(ok, why)
         self.timeline_panel.snap_all_btn.setEnabled(ok)
@@ -577,6 +587,49 @@ class EditorView(QWidget):
             parts.append(f"{len(rep.no_voice)} câu không thấy giọng")
         self.message.emit(" · ".join(parts) + " — Ctrl+Z để hoàn tác.", "ok")
 
+    def _retime(self) -> None:
+        """E-1: re-time the Chinese lines against the audio (text kept), then move the
+        Vietnamese lines when they still pair 1:1. One undo step."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.pipeline import asr
+
+        job = self.job
+        if job is None or not job.cn_srt.exists():
+            return
+        saved = (job.work_dir / "asr_words.json").exists()
+        if QMessageBox.question(
+                self, "Đo lại thời gian",
+                "Đo lại mốc thời gian của mọi câu từ âm thanh, giữ nguyên chữ và bản dịch.\n"
+                + ("Dùng mốc từng từ đã lưu — không gửi gì lên mạng." if saved else
+                   "Cần gửi âm thanh lên máy chủ để lấy mốc từng từ (một lần, vài xu).")
+                + "\n\nHoàn tác được bằng Ctrl+Z.") != QMessageBox.StandardButton.Yes:
+            return
+        self.flush()
+        self.message.emit("Đang đo lại thời gian từ âm thanh…", "busy")
+
+        def done(_moved):
+            if self.job is not job:
+                return
+            times = asr.vi_time_map(job, [c.zh for c in self.cues])
+            from app.pipeline import review
+
+            self._guess = review.load_guess_spans(job)
+            if times is None:
+                self._refresh_issues()
+                self.message.emit("Đã đo lại tiếng Trung, nhưng bạn đã tách / gộp câu nên không "
+                                  "áp được thời gian mới cho tiếng Việt.", "warn")
+                return
+            self._snapshot()
+            for c, (s, e) in zip(self.cues, times):
+                c.start, c.end = s, e
+            self._reload()
+            self.message.emit("Đã đo lại thời gian — câu “Timing đoán” cần xem lại. "
+                              "Ctrl+Z để hoàn tác.", "ok")
+
+        self._run_async(lambda: asr.retime(job), done,
+                        lambda m: self.message.emit(f"Không đo lại được: {m}", "err"))
+
     def _fit_selection(self) -> None:
         if 0 <= self._sel < len(self.cues):
             c = self.cues[self._sel]
@@ -584,8 +637,7 @@ class EditorView(QWidget):
 
     # --- review ---------------------------------------------------------------
     def _refresh_issues(self) -> None:
-        ocr, term = self._spans
-        self.issues = review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term)
+        self.issues = self._compute_issues()
         self.cue_list.set_issues(self.issues)
         self.timeline.set_issues(self.issues)
         if 0 <= self._sel < len(self.cues):
@@ -728,8 +780,9 @@ class EditorView(QWidget):
         self.cues = cuemodel.load_pair(job)
         try:
             self._spans = review.load_flag_spans(job)
+            self._guess = review.load_guess_spans(job)
         except Exception:  # noqa: BLE001 - flags are hints; never block opening a job
-            self._spans = ([], [])
+            self._spans, self._guess = ([], []), []
         self._meta = {"title": _job_title(job), "platform": job.metadata.get("platform") or
                       _job_field(job, "platform") or "", "dur": 0.0, "dims": (0, 0)}
         self._update_project()
@@ -761,8 +814,7 @@ class EditorView(QWidget):
         self._run_async(lambda: waveform.peaks(job), done, lambda _m: None)
 
     def _reload(self, *, dirty: bool = True) -> None:
-        ocr, term = self._spans
-        self.issues = review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term)
+        self.issues = self._compute_issues()
         self.cue_list.load(self.cues, self.issues)
         self.timeline.set_cues(self.cues)
         self.timeline.set_issues(self.issues)

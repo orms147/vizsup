@@ -159,6 +159,25 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
     return 0
 
 
+def cmd_retime(args: argparse.Namespace) -> int:
+    """E-1: re-time an existing job's Chinese lines (text kept) and, when the
+    Vietnamese lines still pair 1:1, copy the new times into vi.srt."""
+    work_dir = Path(args.workdir)
+    if not work_dir.exists():
+        print(f"workdir not found: {work_dir}", file=sys.stderr)
+        return 2
+    job = _load_job(work_dir)
+    shutil.copyfile(job.cn_srt, work_dir / "cn.before-retime.srt")
+    if job.vi_srt.exists():
+        shutil.copyfile(job.vi_srt, work_dir / "vi.before-retime.srt")
+    asr.retime(job, log=lambda m: print(f"[retime] {m}"))
+    if job.vi_srt.exists():
+        print("[retime] vi.srt " + ("updated" if asr.sync_vi_times(job) else
+                                    "kept (lines were split/merged — re-time them in the editor)"))
+    print(f"[retime] backups: cn.before-retime.srt / vi.before-retime.srt in {work_dir}")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     work_dir = Path(args.workdir)
     if not work_dir.exists():
@@ -259,6 +278,10 @@ def build_parser() -> argparse.ArgumentParser:
     rn.set_defaults(func=cmd_render)
 
     pr = sub.add_parser("providers", help="list available providers (JSON)")
+    rt = sub.add_parser("retime", help="re-time an existing job's lines to the audio (text kept)")
+    rt.add_argument("--workdir", required=True, help="job working directory")
+    rt.set_defaults(func=cmd_retime)
+
     pr.set_defaults(func=cmd_providers)
 
     dr = sub.add_parser("doctor", help="environment self-check (deps, GPU, fonts, keys)")

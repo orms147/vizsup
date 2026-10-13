@@ -26,6 +26,17 @@ DEFAULT_MODEL = "qwen/qwen3.8-omni-flash"
 CHUNK_SEC = 240.0       # shorter than cloud_stt: long audio invites an LLM to skip/summarize
 MAX_TOKENS = 4096       # ~240 s of speech is ~1.1k hanzi
 
+def _voice(media: Path, say) -> list[tuple[float, float]] | None:
+    """Local VAD spans for timing sentences Whisper heard no words for (music);
+    None when unavailable — alignment then falls back to natural speaking length."""
+    try:
+        from app.pipeline import vad
+
+        return vad.spans_for(media, media.parent, log=say)
+    except Exception:  # noqa: BLE001 - timing aid only
+        return None
+
+
 INSTRUCTION = (
     "Transcribe the Mandarin Chinese speech in this audio VERBATIM, in Simplified Chinese "
     "with full punctuation (，。！？). Rules: do not translate, summarize, explain or add "
@@ -125,6 +136,15 @@ class AudioLLM(ASRProvider):
                 say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
                 words = _cloud.cloud_words(items, language)
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
-        cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words))
+        voice = _voice(media, say)
+        cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words,
+                                                 voice=voice))
+        # kept for the ASR stage to persist (asr_words.json): re-timing must never
+        # need another upload
+        self.last_words, self.last_groups = words, groups
+        guessed = sum(1 for c in cues if c.guess)
+        if guessed:
+            say(f"  ⚠ {guessed} câu không nghe rõ từng chữ — thời gian ước theo giọng nói, "
+                f"đánh dấu “Timing đoán” để xem lại")
         say(f"  ✓ {len(cues)} câu tiếng Trung")
         return cues
