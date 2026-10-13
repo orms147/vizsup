@@ -181,6 +181,7 @@ class EditorView(QWidget):
         ins.autoSnapRequested.connect(self._auto_snap_selected)
         ins.applyFixRequested.connect(self._apply_ai_fix)
         ins.retranslateRequested.connect(self._retranslate)
+        ins.editStyleRequested.connect(self._edit_style)
         ins.shortenRequested.connect(self._shorten)
         ins.listenRequested.connect(self._preview_dub)
         ins.glossaryRequested.connect(self.glossaryRequested)
@@ -388,6 +389,27 @@ class EditorView(QWidget):
 
         found = qa.findings_for(self.cues[i], self._qa) if 0 <= i < len(self.cues) else []
         self.inspector.set_ai_finding(found[0] if found else None)
+
+    def _edit_style(self) -> None:
+        """E-7: the learnt rules are plain text the user owns."""
+        from PySide6.QtWidgets import QPlainTextEdit
+
+        from app.pipeline import memory
+        from desktop.widgets.dialogs import VzDialog
+
+        dlg = VzDialog("Phong cách của tôi", self, width=520)
+        dlg.body.addWidget(label("Mỗi dòng một quy tắc, áp cho mọi video khi dịch. AI tự cập "
+                                 "nhật sau mỗi 5 lần bạn duyệt; bạn sửa tay được.", "small", wrap=True))
+        box = QPlainTextEdit(memory.style_rules())
+        box.setPlaceholderText("- Người nói xưng \"mình\", gọi người xem \"các bạn\"\n- …")
+        box.setMinimumHeight(200)
+        dlg.body.addWidget(box)
+        dlg.add_button("Hủy")
+        dlg.add_button("Lưu", icon_name="Check", primary=True, accept=True)
+        if dlg.exec():
+            memory.save_style_rules(box.toPlainText())
+            self.inspector.set_style_rules(memory.style_rules())
+            self.message.emit("Đã lưu “Phong cách của tôi” — áp cho các video dịch sau.", "ok")
 
     def _retranslate(self) -> None:
         """E-6: three AI renderings of the selected line; the chosen one replaces it
@@ -863,6 +885,9 @@ class EditorView(QWidget):
         self.video.set_style(self._g_style, self._g_size, self._g_font)
         self._update_scope_hint()
         self.inspector.set_context(*_brief_and_note(job))
+        from app.pipeline import memory
+
+        self.inspector.set_style_rules(memory.style_rules())
         if self.cues:
             self.cue_list.selectRow(0)
         self._load_waveform(job)

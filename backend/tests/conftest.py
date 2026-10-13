@@ -20,3 +20,14 @@ def _no_vad_download(monkeypatch):
         raise RuntimeError("Silero VAD download disabled in tests")
 
     monkeypatch.setattr(vad, "ensure_model", offline)
+
+
+@pytest.fixture(autouse=True)
+def _private_storage(tmp_path_factory, monkeypatch):
+    """Tests never read or write the user's real storage/ (translation memory, style
+    rules, ui_state, glossary…). A test may still point it elsewhere itself."""
+    try:
+        from app.config import settings
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path_factory.mktemp("storage"))

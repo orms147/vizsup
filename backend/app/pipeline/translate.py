@@ -565,11 +565,27 @@ def translate(
         context["_lyrics"] = True
         if log:
             log("ℹ Video có hát — dịch lời hát cho tự nhiên, giữ nhịp, điệp khúc thống nhất")
+    # E-7: the user's own recurring corrections ride in every prompt
+    from app.pipeline import memory
+
+    rules = memory.style_rules()
+    if rules:
+        context["_style"] = rules
+        if log:
+            log("ℹ Dịch theo “Phong cách của tôi” (rút ra từ các lần bạn sửa)")
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,
                         glossary=glossary, work_dir=job.work_dir, log=log, cancel=cancel)
+    # E-7: lines you already approved in another video keep your approved wording
+    texts, reused = memory.apply_tm([c.text for c in cues], [c.text for c in vi])
+    if reused:
+        for c, t in zip(vi, texts):
+            c.text = t
+        if log:
+            log(f"↷ {reused} câu dùng lại bản bạn đã duyệt trước đây (bộ nhớ dịch)")
     write_srt(vi, job.vi_srt)
+    memory.save_machine_translation(job)
     # ENG-1: flag lines where a glossary term's VI target is missing (advisory — the
     # user fixes them at the gate; never rewrites the translation).
     from app.pipeline import terms

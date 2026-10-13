@@ -73,6 +73,7 @@ class CueInspector(QFrame):
     autoSnapRequested = Signal()       # "Tự canh" — snap this cue's edges to the voice
     applyFixRequested = Signal(str)    # "Dùng gợi ý" from the AI review (E-5)
     retranslateRequested = Signal()    # "Dịch lại" (E-6, Alt+R)
+    editStyleRequested = Signal()      # "Phong cách của tôi" (E-7)
     shortenRequested = Signal()
     listenRequested = Signal()
     glossaryRequested = Signal()
@@ -315,8 +316,27 @@ class CueInspector(QFrame):
         lay.addWidget(gl, 0, Qt.AlignLeft)
         lay.addWidget(label("Thông tin bạn ghi cho video luôn được ưu tiên khi dịch.", "small",
                             wrap=True))
+        lay.addWidget(_hline())
+        sh = QHBoxLayout()
+        sh.addWidget(label("Phong cách của tôi", "secondary"))
+        sh.addStretch(1)
+        sh.addWidget(badge("mọi video", "purple"))
+        lay.addLayout(sh)
+        self.style_text = QLabel("")
+        self.style_text.setWordWrap(True)
+        self.style_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.style_text.setStyleSheet(f"color:{V2['secondary']};font-size:12px;")
+        lay.addWidget(self.style_text)
+        st = button("Sửa phong cách", "Type", small=True,
+                    tip="Quy tắc rút ra từ các lần bạn sửa bản dịch — sửa tay được")
+        st.clicked.connect(self.editStyleRequested)
+        lay.addWidget(st, 0, Qt.AlignLeft)
         lay.addStretch(1)
         return page
+
+    def set_style_rules(self, rules: str) -> None:
+        self.style_text.setText(rules or "Chưa có. Sau vài video bạn duyệt, AI rút ra thói quen "
+                                         "sửa của bạn (xưng hô, từ ngữ…) và áp cho video sau.")
 
     def set_context(self, brief: str | None, note: str | None = None) -> None:
         text = (brief or "").strip()

@@ -315,6 +315,7 @@ class MainWindow(QMainWindow):
                     return
                 approval.approve(self.job, cues=len(self.editor.cues))
                 self.editor.refresh_approval()
+                self._learn_from_approval()
                 self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
             self.render.set_voices(voices)
             self._sync_render_page()
@@ -322,6 +323,24 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    def _learn_from_approval(self) -> None:
+        """E-7: approved lines → translation memory; changed lines → style edits; every
+        few approvals the style rules are condensed again (off the GUI thread)."""
+        from app.pipeline import memory
+
+        pairs = [(c.zh, c.vi) for c in self.editor.cues if c.zh]
+        try:
+            memory.remember(pairs)
+            since = memory.record_edits(self.job, pairs)
+        except Exception as exc:  # noqa: BLE001 - learning never blocks approving
+            store.debug(f"memory: {exc}")
+            return
+        if since >= memory.STYLE_EVERY:
+            provider = self.opts.get("refine") or self.opts.get("translator") or "openrouter"
+            self.editor._run_async(lambda: memory.update_style(provider),
+                                   lambda rules: rules and self.editor.inspector.set_style_rules(rules),
+                                   lambda _m: None)
 
     def _sync_render_page(self) -> None:
         """Render page mirrors the editor's project + the backend approval state."""

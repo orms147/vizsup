@@ -85,6 +85,9 @@ def system_prompt_for(base: str, context: dict | None) -> str:
     out = base
     if ctx.get("_lyrics"):
         out += LYRICS_HINT
+    if ctx.get("_style"):                       # E-7: rules learnt from the user's edits
+        out += ("\nTHE USER'S OWN STYLE (learnt from their corrections — follow it unless "
+                "the brief says otherwise):\n" + str(ctx["_style"]).strip() + "\n")
     brief = ctx.get("_brief")
     if brief and str(brief).strip():
         out += _BRIEF_HEADER + str(brief).strip() + "\n"

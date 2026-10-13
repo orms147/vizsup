@@ -195,7 +195,10 @@ Selected cue → 3 alternatives from the refine model with ±3 neighbouring line
 *sát nghĩa / tự nhiên / ngắn gọn (vừa thời lượng)*. Pick one → replaces text (undo). Free-text
 "yêu cầu thêm" box ("trang trọng hơn", "giữ chơi chữ").
 
-### E-7 [M] Learn from your edits
+### ✅ E-7 [M] Learn from your edits — DONE 2026-10-13
+
+Shipped `app/pipeline/memory.py`: approval → `remember` (storage/tm.json, normalised CN → approved VI; `apply_tm` reuses exact matches after translation) and `record_edits` (vi.mt.srt vs approved → edits.jsonl); every 5 approvals `update_style` (brief role) rewrites storage/style_rules.txt, which rides in the translator prompt (`context["_style"]`) and is shown / editable in editor → Ngữ cảnh. Tests now run on a private temp storage (conftest).
+
 
 On approval, diff machine VI vs approved VI per cue:
 - **Translation memory** (`storage/tm.jsonl`): approved CN→VI pairs; exact / near-exact CN matches
