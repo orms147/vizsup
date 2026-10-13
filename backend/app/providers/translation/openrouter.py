@@ -140,7 +140,11 @@ class OpenRouter(OpenAICompatTranslator):
             if mandatory:
                 call["max_tokens"] = kw["max_tokens"] + REASONING_HEADROOM
             try:
-                return require_choices(self._client().chat.completions.create(**call))
+                resp = require_choices(self._client().chat.completions.create(**call))
+                from app import usage
+
+                usage.record(model, getattr(resp, "usage", None))   # E-14 per-job cost
+                return resp
             except Exception as exc:
                 if not mandatory and _reasoning_is_mandatory(exc):
                     self._mandatory_reasoning.add(model)

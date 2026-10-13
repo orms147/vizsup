@@ -656,7 +656,12 @@ class RenderView(QWidget):
         except OSError:
             pass
         dur = fmt_time(self.preview.duration(), 0) if self.preview.duration() else ""
-        self.out_meta.setText(" · ".join(p for p in (Path(path).name, dur, size) if p))
+        spent = ""
+        if self._job is not None:
+            from app import usage
+
+            spent = usage.label(self._job.work_dir)     # E-14
+        self.out_meta.setText(" · ".join(p for p in (Path(path).name, dur, size, spent) if p))
         self.result.load(Path(path))
         self._right_stack.setCurrentIndex(2)
         self.again_lbl.setVisible(True)

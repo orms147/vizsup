@@ -161,6 +161,9 @@ def project_summary(job_id: str) -> dict:
             pass
     thumb = thumbnail(d)
     info["thumb"] = str(thumb) if thumb else None
+    from app import usage
+
+    info["usage"] = usage.label(d)          # E-14: "AI $0.012 · 2 phút 05"
     return info
 
 

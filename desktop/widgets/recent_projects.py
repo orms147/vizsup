@@ -105,6 +105,8 @@ class _Row(QFrame):
                 y = max(0, (pm.height() - THUMB_H) // 2)
                 self.thumb.setPixmap(pm.copy(x, y, THUMB_W, THUMB_H))
         dur = fmt_time(s["duration"], 0) if s.get("duration") else ""
+        if s.get("usage"):
+            self.setToolTip(s["usage"])
         if self._has_output:
             self.sub.setText(" · ".join(p for p in ("MP4", dur) if p))
             return
@@ -118,7 +120,7 @@ class _Row(QFrame):
             self.badge.style().polish(self.badge)
         n, pend = s.get("cues", 0), s.get("pending", 0)
         first = f"{pend} câu cần xem lại" if pend else f"{n} câu"
-        self.sub.setText(" · ".join(p for p in (first, dur) if p))
+        self.sub.setText(" · ".join(p for p in (first, dur, s.get("usage", "")) if p))
 
 
 class RecentProjects(QWidget):

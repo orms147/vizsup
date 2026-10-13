@@ -257,7 +257,10 @@ the window isn't active. Clicking it focuses the right page.
 - Cookie age: warn when `cookies.txt` is older than ~20 days, before a download fails.
 - "Kiểm tra môi trường" page reusing `app.doctor` (ffmpeg, VAD model, keys, fonts).
 
-### E-14 [S] Cost & time per job
+### ✅ E-14 [S] Cost & time per job — DONE 2026-10-13
+
+Shipped `app/usage.py`: the worker wraps each run in `usage.track(job_dir, phase=…)`; OpenRouter `_chat` and the audio model record `usage.cost` (always returned now — the `usage.include` param is deprecated) into `usage.json`; shown on recent projects and the render result ("AI $0.012 · 2 phút 05").
+
 
 Request OpenRouter usage accounting (`usage: {"include": true}` → `usage.cost`) in `_chat`;
 accumulate per job/role in `usage.json`; show "AI $0.004 · 1 phút 12" on recent projects and the

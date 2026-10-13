@@ -1,0 +1,102 @@
+"""E-14: what each video cost in AI calls, and how long its runs took.
+
+OpenRouter returns ``usage.cost`` (credits ≈ USD) on every response. The worker opens a
+``track(job_dir)`` scope around a run; any AI call made meanwhile — from any thread —
+is added to ``<job>/usage.json``. Outside a scope nothing is recorded. Best effort:
+accounting must never break a call.
+"""
+from __future__ import annotations
+
+import json
+import threading
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+_FILE = "usage.json"
+_lock = threading.Lock()
+_sink: Path | None = None          # job dir of the run in progress (one run at a time)
+
+
+@contextmanager
+def track(job_dir: Path, *, phase: str):
+    """Record AI calls into ``job_dir`` and the wall time of this ``phase``."""
+    global _sink
+    prev, _sink = _sink, Path(job_dir)
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        _add(Path(job_dir), seconds={phase: time.monotonic() - t0})
+        _sink = prev
+
+
+def _usage_fields(usage) -> tuple[int, int, float]:
+    if usage is None:
+        return 0, 0, 0.0
+    get = (usage.get if isinstance(usage, dict) else lambda k, d=None: getattr(usage, k, d))
+    extra = {} if isinstance(usage, dict) else (getattr(usage, "model_extra", None) or {})
+    cost = get("cost", None)
+    if cost is None:
+        cost = extra.get("cost", 0.0)
+    return int(get("prompt_tokens", 0) or 0), int(get("completion_tokens", 0) or 0), float(cost or 0.0)
+
+
+def record(model: str, usage) -> None:
+    """Add one AI call (its response's ``usage``) to the job being tracked."""
+    sink = _sink
+    if sink is None:
+        return
+    try:
+        pin, pout, cost = _usage_fields(usage)
+        _add(sink, model=model, pin=pin, pout=pout, cost=cost)
+    except Exception:  # noqa: BLE001 - accounting never breaks a call
+        pass
+
+
+def _add(job_dir: Path, *, model: str | None = None, pin: int = 0, pout: int = 0,
+         cost: float = 0.0, seconds: dict | None = None) -> None:
+    path = job_dir / _FILE
+    with _lock:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if model:
+            m = data.setdefault("models", {}).setdefault(model, {"calls": 0, "in": 0, "out": 0,
+                                                                 "cost": 0.0})
+            m["calls"] += 1
+            m["in"] += pin
+            m["out"] += pout
+            m["cost"] = round(m["cost"] + cost, 6)
+        for phase, sec in (seconds or {}).items():
+            data.setdefault("seconds", {})[phase] = round(
+                data.get("seconds", {}).get(phase, 0.0) + sec, 1)
+        try:
+            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def summary(job_dir: Path) -> dict:
+    """``{"cost": $, "calls": n, "seconds": s}`` for a job (zeros when unknown)."""
+    try:
+        data = json.loads((Path(job_dir) / _FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"cost": 0.0, "calls": 0, "seconds": 0.0}
+    models = data.get("models", {}).values()
+    return {"cost": round(sum(m.get("cost", 0.0) for m in models), 4),
+            "calls": sum(m.get("calls", 0) for m in models),
+            "seconds": round(sum(data.get("seconds", {}).values()), 1)}
+
+
+def label(job_dir: Path) -> str:
+    """Short Vietnamese line for the UI, e.g. 'AI $0.012 · 2 phút 05'."""
+    s = summary(job_dir)
+    parts = []
+    if s["calls"]:
+        parts.append(f"AI ${s['cost']:.3f}")
+    if s["seconds"]:
+        m, sec = divmod(int(s["seconds"]), 60)
+        parts.append(f"{m} phút {sec:02d}" if m else f"{sec} giây")
+    return " · ".join(parts)

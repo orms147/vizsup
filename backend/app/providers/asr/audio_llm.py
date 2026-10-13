@@ -116,6 +116,9 @@ class AudioLLM(ASRProvider):
         if resp.choices[0].finish_reason == "length":
             raise RuntimeError(f"{self.model}: reply truncated at max_tokens (chunk {path.name}) "
                                f"— usually a repetition loop; pick another AUDIO_LLM_MODEL")
+        from app import usage
+
+        usage.record(self.model, getattr(resp, "usage", None))   # E-14 per-job cost
         if not transcript:
             return (resp.choices[0].message.content or "").strip()
         text = _cloud.clean_transcript(resp.choices[0].message.content or "")

@@ -91,6 +91,13 @@ class PipelineWorker(QObject):
     # --- to the edit gate ----------------------------------------------------
     @Slot()
     def run_to_gate(self) -> None:
+        """E-14: every AI call of this run is costed into <job>/usage.json."""
+        from app import usage
+
+        with usage.track(self.job.work_dir, phase="gate"):
+            self._run_to_gate()
+
+    def _run_to_gate(self) -> None:
         from app.pipeline import asr, download, translate
         from app.pipeline.srt import parse_srt, write_srt
 
@@ -270,6 +277,13 @@ class PipelineWorker(QObject):
     # --- render --------------------------------------------------------------
     @Slot()
     def run_render(self) -> None:
+        """E-14: every AI call of this run is costed into <job>/usage.json."""
+        from app import usage
+
+        with usage.track(self.job.work_dir, phase="render"):
+            self._run_render()
+
+    def _run_render(self) -> None:
         from app.pipeline import assemble, tts
 
         job, o = self.job, self.opts
