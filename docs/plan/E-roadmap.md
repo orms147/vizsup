@@ -37,7 +37,7 @@ not yet by E-3's blind judge, so treat as preliminary):
 
 | Model | $/M in/out | 40 lines | Verdict |
 |---|---|---|---|
-| `deepseek/deepseek-v4-pro-0813` | 1.32 / 3.96 (½ off-peak) | 17–22 s | **Best**: right meaning (兑现 → "chưa kịp thực hiện", 清唱 → "hát mộc"), the only one using "cô ấy" for the female singer; cleans OCR noise |
+| `deepseek/deepseek-v4-pro-0813` | 1.32 / 3.96 (½ off-peak) | 17–22 s | right meaning (兑现 → "chưa kịp thực hiện", 清唱 → "hát mộc"); cleans OCR noise. (Its "cô ấy" for the singer was WRONG: three audio models hear a male singer and the line itself says 他 — corrected 2026-10-13, E-4) |
 | `qwen/qwen3.7-plus` | 0.32 / 1.28 | 9–13 s | **≈ best**, cheaper, faster; missed the singer's gender ("cậu ấy") |
 | `moonshotai/kimi-k3` | 0.73 / 13.5 | 13–18 s | good; slight drift ("hát live"); output price high |
 | `qwen/qwen3.8-flash` | 0.15 / 0.47 | 8–11 s | fluent, a few meaning slips ("chưa kịp ngỏ") |
@@ -155,7 +155,14 @@ Add an LLM judge (strong model, rubric: meaning, naturalness, xưng hô consiste
 length-fit vs `SYL_PER_SEC` budget) that scores blind, plus the user's own pick. Re-run whenever a
 new Chinese model ships; update the role defaults from it.
 
-### E-4 [M] Xưng hô from who is actually speaking
+### ✅ E-4 [M] Xưng hô from who is actually speaking — DONE 2026-10-13
+
+Shipped `app/pipeline/speakers.py`: the ASR audio model answers a speaker question on the
+most voice-rich 60 s (VAD), optional frames (opt-in "AI xem khung hình", vision role) describe
+setting only; cached in `observed.json`, fed to the brief as OBSERVED (audio wins on who
+speaks — on the test job the frames suggested a woman singing, three audio models heard a
+man, and the transcript says 他). `AudioLLM.ask()` for free-form audio questions. Original spec:
+
 
 Vietnamese pronouns (anh/em/chị/cô/bạn/tớ/mình…) depend on speaker gender, age and relationship —
 the single biggest naturalness lever, and the brief today only sees text.

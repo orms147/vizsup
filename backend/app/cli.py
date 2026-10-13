@@ -130,7 +130,13 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
         from app.pipeline import brief
 
         print("[run] building the video context brief ...")
-        b = brief.build_brief(job, args.translator, note=note or None, force=force, log=print)
+        from app.pipeline import speakers
+
+        observed = (speakers.observe(job, frames=getattr(args, "ai_frames", False),
+                                     log=lambda m: print(f"[run] {m}"))
+                    if getattr(args, "auto_context", False) else None)
+        b = brief.build_brief(job, args.translator, note=note or None, force=force, log=print,
+                              observed=observed)
         if b:
             print("[run] brief:\n" + "\n".join("    " + ln for ln in b.splitlines() if ln.strip()))
 
@@ -265,6 +271,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="your own context note for this video; the AI expands it into a brief "
                         "and treats it as authoritative (implies a brief even without --auto-context)")
     r.add_argument("--asr", default=settings.vizsup_default_asr, help="ASR provider for the no-hardsub path")
+    r.add_argument("--ai-frames", action="store_true",
+                   help="with --auto-context: also upload ~6 frames so a vision model sees who "
+                        "is on screen (better xưng hô)")
     r.add_argument("--no-qa", action="store_true",
                    help="skip the AI review pass that flags suspect lines (qa_report.json)")
     r.add_argument("--no-snap", action="store_true",

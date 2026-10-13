@@ -308,7 +308,7 @@ def brief_calls(monkeypatch):
 
     calls: list[dict] = []
 
-    def fake(job, provider, *, note=None, force=False, log=None):
+    def fake(job, provider, *, note=None, force=False, log=None, observed=None):
         calls.append({"provider": provider, "note": note, "force": force})
         return "Xưng hô: mình / các bạn"
 

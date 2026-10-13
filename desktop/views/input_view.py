@@ -345,8 +345,13 @@ class InputView(QWidget):
 
         self.auto_context = QCheckBox("Tự đọc ngữ cảnh video")
         self.auto_context.setToolTip(
-            "Trước khi dịch, AI đọc nhanh tiêu đề + phụ đề tiếng Trung và viết một 'brief' ngắn: "
-            "thể loại, ai nói với ai, xưng hô, tên riêng, giọng điệu. Tốn rất ít API.")
+            "Trước khi dịch, AI nghe một đoạn ≤60 s (ai nói / hát, nam hay nữ, tuổi) và đọc tiêu đề "
+            "+ phụ đề tiếng Trung, rồi viết 'brief': thể loại, ai nói với ai, xưng hô, tên riêng, "
+            "giọng điệu. Gửi đoạn âm thanh đó lên máy chủ AI. Tốn rất ít API.")
+        self.ai_frames = QCheckBox("AI xem khung hình")
+        self.ai_frames.setToolTip(
+            "Gửi thêm 6 ảnh của video để AI biết ai đang xuất hiện — xưng hô chính xác hơn. "
+            "Mặc định tắt vì gửi hình ảnh lên máy chủ.")
         self.extract_terms = QCheckBox("Tự trích thuật ngữ")
         self.extract_terms.setToolTip(
             "Nhờ bộ dịch liệt kê tên riêng / thương hiệu lặp lại để giữ nhất quán. Bảng thuật "
@@ -365,6 +370,7 @@ class InputView(QWidget):
             "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
             "(nghĩa, xưng hô, tên riêng…) kèm gợi ý sửa — vào mục “Cần xem lại”. Không tự sửa.")
         g.addWidget(self.ai_review, 7, 0)
+        g.addWidget(self.ai_frames, 7, 1)
         g.addWidget(self.extract_terms, 6, 0)
         g.addWidget(self.ocr_proofread, 6, 1)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
@@ -397,6 +403,7 @@ class InputView(QWidget):
         self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
         self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
+        self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -474,6 +481,7 @@ class InputView(QWidget):
             "auto_context": self.auto_context.isChecked(),
             "auto_snap": self.auto_snap.isChecked(),
             "ai_review": self.ai_review.isChecked(),
+            "ai_frames": self.ai_frames.isChecked(),
         }
         note = self.context_note.toPlainText().strip()
         if note:

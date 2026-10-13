@@ -64,18 +64,26 @@ class AudioLLM(ASRProvider):
     def test_connection(self) -> tuple[bool, str]:
         return _cloud.test_models_endpoint()
 
-    def _request(self, b64: str) -> dict:
+    def _request(self, b64: str, instruction: str = INSTRUCTION,
+                 max_tokens: int = MAX_TOKENS) -> dict:
         return {
             "model": self.model,
             "temperature": 0,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": INSTRUCTION},
+                {"type": "text", "text": instruction},
                 {"type": "input_audio", "input_audio": {"data": b64, "format": "mp3"}},
             ]}],
         }
 
-    def _call(self, path: Path, seconds: float) -> str:
+    def ask(self, path: Path, instruction: str, *, max_tokens: int = 600) -> str:
+        """Ask the listening model a free-form question about an audio clip (E-4:
+        who speaks / sings, gender, age, who they address). No transcript checks."""
+        return self._call(path, 0.0, instruction=instruction, max_tokens=max_tokens,
+                          transcript=False)
+
+    def _call(self, path: Path, seconds: float, *, instruction: str = INSTRUCTION,
+              max_tokens: int = MAX_TOKENS, transcript: bool = True) -> str:
         from app.providers.translation.openrouter import (
             REASONING_HEADROOM,
             REASONING_MIN,
@@ -84,7 +92,7 @@ class AudioLLM(ASRProvider):
             require_choices,
         )
 
-        req = self._request(base64.b64encode(path.read_bytes()).decode())
+        req = self._request(base64.b64encode(path.read_bytes()).decode(), instruction, max_tokens)
         openrouter = _cloud.is_openrouter(_cloud.endpoint()[0])
 
         def send(mandatory: bool):
@@ -92,7 +100,7 @@ class AudioLLM(ASRProvider):
             if openrouter:   # same reasoning-token trap as translation (see openrouter.py)
                 kw["extra_body"] = REASONING_MIN if mandatory else REASONING_OFF
                 if mandatory:
-                    kw["max_tokens"] = MAX_TOKENS + REASONING_HEADROOM
+                    kw["max_tokens"] = max_tokens + REASONING_HEADROOM
             # validate INSIDE the retried call: an empty 200 must be retried, not crash
             # later at resp.choices[0]
             return require_choices(_cloud.client().chat.completions.create(**kw))
@@ -108,6 +116,8 @@ class AudioLLM(ASRProvider):
         if resp.choices[0].finish_reason == "length":
             raise RuntimeError(f"{self.model}: reply truncated at max_tokens (chunk {path.name}) "
                                f"— usually a repetition loop; pick another AUDIO_LLM_MODEL")
+        if not transcript:
+            return (resp.choices[0].message.content or "").strip()
         text = _cloud.clean_transcript(resp.choices[0].message.content or "")
         _cloud.check_transcript(text, seconds, model=self.model)
         return text

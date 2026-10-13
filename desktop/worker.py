@@ -204,10 +204,14 @@ class PipelineWorker(QObject):
             note = (o.get("context_note") or "").strip()
             if (o.get("auto_context") or note) and not job.vi_srt.exists():
                 self._check()
-                from app.pipeline import brief
+                from app.pipeline import brief, speakers
                 self.progress.emit(0.7, "Đọc nhanh ngữ cảnh video…")
+                # E-4: who is speaking (≤60 s audio excerpt; frames only if opted in)
+                observed = (speakers.observe(job, frames=bool(o.get("ai_frames")),
+                                             log=self.log.emit)
+                            if o.get("auto_context") else None)
                 b = brief.build_brief(job, o.get("translator", "passthrough"),
-                                      note=note or None, log=self.log.emit)
+                                      note=note or None, log=self.log.emit, observed=observed)
                 if b:
                     self.log.emit("── Brief ngữ cảnh (bộ dịch sẽ theo) ──")
                     for ln in b.splitlines():

@@ -43,6 +43,11 @@ BRIEF_INSTRUCTION = (
     "Rules:\n"
     "- Base everything on the material given. If a USER NOTE is present it is authoritative:\n"
     "  keep every fact in it and never contradict it; use the transcript only to fill gaps.\n"
+    "- OBSERVED notes come from listening to / looking at the video itself: trust them for\n"
+    "  who speaks or sings, gender and age, and choose the Vietnamese pronouns from that\n"
+    "  (e.g. a young woman singing to an absent lover → xưng \"em\", gọi \"anh\"). When the\n"
+    "  audio and the frames disagree about who speaks or sings, trust the AUDIO (a person\n"
+    "  on screen may be silent). The USER NOTE still wins over both.\n"
     "- If the USER NOTE says how a person should be called, use EXACTLY that form in every\n"
     "  section, including the names list (e.g. note says 小王 is called \"em Vương\" → write\n"
     "  `小王 → em Vương`, never a different rendering).\n"
@@ -90,7 +95,8 @@ def sample_transcript(lines: list[str], budget: int = SAMPLE_CHARS) -> tuple[str
     return "\n…\n".join("\n".join(b) for b in blocks if b), used
 
 
-def build_request(job: Job, cn_lines: list[str], note: str | None) -> str:
+def build_request(job: Job, cn_lines: list[str], note: str | None,
+                  observed: str | None = None) -> str:
     meta = job.metadata or {}
     parts: list[str] = []
     for label, key in (("Title", "title"), ("Platform", "platform"),
@@ -100,6 +106,8 @@ def build_request(job: Job, cn_lines: list[str], note: str | None) -> str:
             parts.append(f"{label}: {v.strip()}")
     if note and note.strip():
         parts.append(f"USER NOTE (authoritative — these are facts):\n{note.strip()}")
+    if observed and observed.strip():
+        parts.append(f"OBSERVED (from the video's own audio / frames):\n{observed.strip()}")
     sample, used = sample_transcript(cn_lines)
     if sample:
         total = len([ln for ln in cn_lines if ln and ln.strip()])
@@ -108,9 +116,11 @@ def build_request(job: Job, cn_lines: list[str], note: str | None) -> str:
     return "\n\n".join(parts)
 
 
-def _inputs_key(cn_lines: list[str], note: str | None) -> str:
+def _inputs_key(cn_lines: list[str], note: str | None, observed: str | None = None) -> str:
     h = hashlib.sha1()
     h.update((note or "").strip().encode("utf-8"))
+    if observed:                                  # adding an observation rebuilds the brief
+        h.update(b"\x01" + observed.strip().encode("utf-8"))
     h.update(b"\x00")
     h.update("\n".join(cn_lines).encode("utf-8"))
     return h.hexdigest()
@@ -138,7 +148,8 @@ def _save(job: Job, *, brief: str, note: str | None, key: str, source: str) -> N
 # --- the pre-pass -------------------------------------------------------------
 
 def build_brief(job: Job, provider_name: str, *, note: str | None = None,
-                force: bool = False, log: Callable[[str], None] | None = None) -> str | None:
+                force: bool = False, log: Callable[[str], None] | None = None,
+                observed: str | None = None) -> str | None:
     """Create (or re-use) the brief for ``job``. Returns the brief text, or None when
     there is nothing to go on. Never raises."""
     from app.pipeline.srt import parse_srt
@@ -146,7 +157,7 @@ def build_brief(job: Job, provider_name: str, *, note: str | None = None,
 
     say = log or (lambda _m: None)
     cn_lines = [c.text for c in parse_srt(job.cn_srt)] if job.cn_srt.exists() else []
-    key = _inputs_key(cn_lines, note)
+    key = _inputs_key(cn_lines, note, observed)
 
     p = job.work_dir / BRIEF_FILE
     if not force and p.exists():
@@ -165,7 +176,7 @@ def build_brief(job: Job, provider_name: str, *, note: str | None = None,
     try:
         prov = get_translator(provider_name)
         if hasattr(prov, "rewrite") and prov.available():
-            request = build_request(job, cn_lines, note)
+            request = build_request(job, cn_lines, note, observed)
             for attempt in range(_ATTEMPTS):   # an empty/transient reply is worth one retry
                 try:
                     reply = prov.rewrite(request, BRIEF_INSTRUCTION, max_tokens=_MAX_TOKENS, role="brief")
