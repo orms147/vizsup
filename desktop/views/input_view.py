@@ -41,6 +41,7 @@ OCR_REGIONS = (("Phía dưới (mặc định)", "bottom-third"), ("Nửa dướ
                ("Toàn khung (phụ đề di động)", "full"))
 _CLIP_URL = re.compile(r"https?://[^\s]*(?:douyin\.com|iesdouyin\.com|bilibili\.com|b23\.tv)[^\s]*",
                        re.I)
+_ALL_URLS = re.compile(r"https?://[^\s]+")
 STAGES = (("download", "Tải video"), ("subtitle", "Lấy phụ đề tiếng Trung"),
           ("context", "Đọc ngữ cảnh"), ("translate", "Dịch sang tiếng Việt"))
 
@@ -113,6 +114,7 @@ class InputView(QWidget):
     deleteRequested = Signal(str)  # job_id of a recent project to delete
     glossaryRequested = Signal()   # open the glossary dialog (global scope)
     settingsRequested = Signal()   # "Thêm khóa" on the missing-key card
+    queueRequested = Signal(list)  # E-9: several links / files → run them one by one
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
@@ -327,7 +329,13 @@ class InputView(QWidget):
             ev.acceptProposedAction()
 
     def dropEvent(self, ev) -> None:  # noqa: N802
-        for u in ev.mimeData().urls():
+        urls = ev.mimeData().urls()
+        files = [u.toLocalFile() for u in urls if u.isLocalFile()]
+        if len(files) > 1:                   # E-9: several videos dropped → a queue
+            base = self._collect_opts()
+            self.queueRequested.emit([{**base, "file": f, "url": None} for f in files])
+            return
+        for u in urls:
             if u.isLocalFile():
                 self._set_file(u.toLocalFile())
                 return
@@ -516,10 +524,30 @@ class InputView(QWidget):
         if self.url.text().strip():
             self._file = None
             self.file_badge.setVisible(False)
-        self.hint.setVisible(need_srt and has_src)
-        self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
+        many = len(_ALL_URLS.findall(self.url.text()))
+        if need_srt and has_src:
+            self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
+        elif many > 1:
+            self.hint.setText(f"{many} link — sẽ xử lý lần lượt tới bước duyệt, báo khi từng video xong.")
+        self.hint.setVisible((need_srt and has_src) or many > 1)
 
     def _emit_start(self) -> None:
+        opts = self._collect_opts()
+        urls = _ALL_URLS.findall(self.url.text())
+        if len(urls) > 1 and not self._file:          # E-9: several links pasted at once
+            self._remember(opts)
+            self.queueRequested.emit([{**opts, "url": u} for u in urls])
+            return
+        self._remember(opts)
+        self._last_opts = dict(opts)
+        self.startRequested.emit(opts)
+
+    def _remember(self, opts: dict) -> None:
+        st = store.load_ui_state()
+        st.update({k: v for k, v in opts.items() if v is not None})
+        store.save_ui_state(st)
+
+    def _collect_opts(self) -> dict:
         opts: dict = {
             "subtitle_source": self._subtitle_source(),
             "asr": self.asr.current_name(),
@@ -543,11 +571,7 @@ class InputView(QWidget):
             opts["url"] = self.url.text().strip()
         if opts["subtitle_source"] == "srt" and self._srt:
             opts["srt"] = self._srt
-        st = store.load_ui_state()
-        st.update({k: v for k, v in opts.items() if v is not None})
-        store.save_ui_state(st)
-        self._last_opts = dict(opts)
-        self.startRequested.emit(opts)
+        return opts
 
     # --- progress card -----------------------------------------------------------
     def _progress_card(self) -> QFrame:

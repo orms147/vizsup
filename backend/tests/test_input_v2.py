@@ -121,3 +121,37 @@ def test_unfinished_jobs_are_listed(tmp_path, monkeypatch):
     jobs = store.list_jobs()
     assert [j["id"] for j in jobs] == ["a"] and jobs[0]["unfinished"]
     assert "https://v.douyin.com/a/" in store.known_urls()
+
+
+# --- E-9: several links → a queue -----------------------------------------------------
+
+def test_pasting_several_links_queues_them(view):
+    queued, started = [], []
+    view.queueRequested.connect(queued.append)
+    view.startRequested.connect(started.append)
+    view.url.setText("https://v.douyin.com/a/\nhttps://v.douyin.com/b/ https://b23.tv/c")
+    assert "3 link" in view.hint.text()
+    view._emit_start()
+    assert started == [] and [o["url"] for o in queued[0]] == [
+        "https://v.douyin.com/a/", "https://v.douyin.com/b/", "https://b23.tv/c"]
+    assert all(o["tts"] == queued[0][0]["tts"] for o in queued[0])   # same options for all
+
+
+def test_main_runs_the_queue_one_by_one(qapp, tmp_path, monkeypatch):
+    from app.config import settings
+    from desktop import main as main_mod
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    win = main_mod.MainWindow()
+    runs = []
+    monkeypatch.setattr(win, "_busy", lambda: False)
+    monkeypatch.setattr(win, "_run", lambda method, opts, conns, job=None: runs.append((opts["url"], job, conns)))
+    win._start_queue([{"url": "https://v.douyin.com/a/"}, {"url": "https://v.douyin.com/b/"}])
+    assert [u for u, _j, _c in runs] == ["https://v.douyin.com/a/"]       # one at a time
+    first_job = runs[0][1]
+    assert win._queue_job is first_job and win.job is not first_job     # editor job untouched
+    runs[0][2]["gate_reached"]()                                        # a finishes
+    win._run_next_queued()                                              # (_on_finished timer)
+    assert [u for u, _j, _c in runs][-1] == "https://v.douyin.com/b/"
+    win._run_next_queued()                                              # queue empty → done
+    assert win._queue_job is None and win._queue_total == 0

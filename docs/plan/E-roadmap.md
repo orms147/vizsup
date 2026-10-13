@@ -223,7 +223,10 @@ Today's test job is a sung cover: lyrics get prose translations and the dub talk
 
 ## P1 — everyday UX
 
-### E-9 [M] Many links at once (supersedes UX-1)
+### ✅ E-9 [M] Many links at once (supersedes UX-1) — DONE 2026-10-13
+
+Shipped: 2+ links pasted in the link box (or several video files dropped) → `queueRequested`; `MainWindow._start_queue/_run_next_queued` runs them one by one with their own job (`_queue_job`, never `self.job`), notifies per video, and finished projects can be opened and edited meanwhile. Hủy also drops the rest of the queue; render waits until the queue is done.
+
 
 Paste several links (one per line) or drop several files → a queue that runs each to the gate
 **sequentially** (heavy work stays serial — 8 GB rule). The recent-projects list shows queue state;

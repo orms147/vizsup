@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import uuid
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -89,6 +89,10 @@ class MainWindow(QMainWindow):
         self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
         self.input.settingsRequested.connect(self._open_settings)
+        self.input.queueRequested.connect(self._start_queue)
+        self._queue: list[dict] = []     # E-9: opts waiting to run to the gate
+        self._queue_total = 0
+        self._queue_job: Job | None = None   # the queued job running now (not self.job)
         self.settings_view.saved.connect(self._on_settings_saved)
         self.settings_view.closed.connect(
             lambda: self.stack.setCurrentIndex(self._before_settings))
@@ -217,7 +221,8 @@ class MainWindow(QMainWindow):
     def _on_gate(self) -> None:
         store.debug("on_gate: editor.load begin")
         try:
-            self.input.set_done()
+            if self._queue_job is None:          # the queue's progress card is not ours
+                self.input.set_done()
             self.editor.load(self.job)
             self.editor.set_context(self.opts)  # tts/voice/translator for preview & shorten
             store.debug("on_gate: editor.load done")
@@ -233,7 +238,13 @@ class MainWindow(QMainWindow):
             self.input.show_error(f"Lỗi mở trình sửa: {type(exc).__name__}: {exc}")
 
     def _resume(self, job_id: str) -> None:
-        if self._busy():  # don't hijack self.job/self.opts out from under a running worker
+        queued = self._queue_job is not None
+        if queued and job_id == self._queue_job.id:
+            self.status.set_status("Video này đang xử lý trong hàng đợi.", "warn")
+            return
+        # don't hijack self.job/self.opts from a running worker — a QUEUED run has its
+        # own job, so a finished project can still be opened for editing meanwhile
+        if self._busy() and not queued:
             self.status.setText("● Đang bận — đợi tác vụ hiện tại xong rồi mở dự án khác.")
             return
         loaded = store.load_job(job_id)
@@ -243,6 +254,8 @@ class MainWindow(QMainWindow):
         if job.vi_srt.exists():
             self.job, self.opts = job, opts
             self._on_gate()  # reopen straight at the edit gate (no re-download/ASR)
+        elif opts and self._busy():
+            self.status.set_status("Đợi hàng đợi xong rồi tiếp tục dự án đang dở.", "warn")
         elif opts:
             # E-11: an unfinished run — continue from the first missing step
             self._run_gate(job, opts, f"▶ Tiếp tục dự án đang dở (job {job.id})")
@@ -379,6 +392,8 @@ class MainWindow(QMainWindow):
 
     def _start_render(self, ropts: dict) -> None:
         if self._busy():
+            if self._queue_job is not None:
+                self.status.set_status("Đang chạy hàng đợi — dựng video khi hàng đợi xong.", "warn")
             return
         from app.pipeline.srt import parse_srt
 
@@ -415,7 +430,57 @@ class MainWindow(QMainWindow):
             self.render.set_cancelling()
 
     # --- worker plumbing -----------------------------------------------------
-    def _run(self, method: str, opts: dict, connections: dict) -> None:
+    # --- E-9: several videos, one after another ------------------------------------
+    def _start_queue(self, items: list[dict]) -> None:
+        self._queue.extend(items)
+        self._queue_total += len(items)
+        self.status.set_status(f"Hàng đợi: {len(self._queue)} video chờ xử lý", "busy")
+        if not self._busy():
+            self._run_next_queued()
+
+    def _run_next_queued(self) -> None:
+        if self._busy():
+            QTimer.singleShot(500, self._run_next_queued)
+            return
+        if not self._queue:
+            if self._queue_total:
+                done = self._queue_total
+                self.status.set_status(f"Xong hàng đợi: {done} video — mở ở “Tiếp tục dự án”", "ok")
+                self._notify("Xong hàng đợi", f"{done} video đã tới bước duyệt")
+            self._queue_total, self._queue_job = 0, None
+            return
+        opts = self._queue.pop(0)
+        jid = uuid.uuid4().hex[:12]
+        job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
+        self._queue_job = job
+        store.save_job(job, opts, "running")
+        k = self._queue_total - len(self._queue)
+        self.input.set_busy(True)
+        self.input.append_log(f"▶ Hàng đợi {k}/{self._queue_total}: {opts.get('url') or opts.get('file')}")
+        self.status.set_status(f"Hàng đợi {k}/{self._queue_total} — bạn vẫn mở được video đã xong",
+                               "busy")
+        self._run("run_to_gate", opts, {
+            "stage_started": self._on_stage,
+            "progress": self.input.set_progress,
+            "log": self.input.append_log,
+            "failed": lambda m, j=job, o=opts: self._on_queued_failed(j, o, m),
+            "gate_reached": lambda j=job, o=opts: self._on_queued_gate(j, o),
+        }, job=job)
+
+    def _on_queued_gate(self, job: Job, opts: dict) -> None:
+        self.input.set_done()
+        store.save_job(job, opts, "await_edit")
+        self.input.refresh_recent()
+        title = (job.metadata.get("title") or job.id).split("#")[0].strip()
+        self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
+
+    def _on_queued_failed(self, job: Job, opts: dict, msg: str) -> None:
+        self.input.show_error(msg)
+        self.input.refresh_recent()
+        if not msg.strip().startswith("Đã hủy"):
+            self._notify("Một video trong hàng đợi lỗi", msg[:160])
+
+    def _run(self, method: str, opts: dict, connections: dict, *, job: Job | None = None) -> None:
         """Build worker+thread, connect ALL signals BEFORE start (no emit races),
         then start. One run at a time (callers guard with _busy()).
 
@@ -427,7 +492,7 @@ class MainWindow(QMainWindow):
         violation inside subprocess for ffmpeg, or in pathlib), 2026-10-01. With the
         relay, bound methods and lambdas alike are queued onto the GUI thread."""
         self._thread = QThread()
-        self._worker = PipelineWorker(self.job, opts)
+        self._worker = PipelineWorker(job or self.job, opts)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(getattr(self._worker, method))
         for relay in getattr(self, "_ui_calls", []):   # drop the previous run's relays
@@ -452,12 +517,17 @@ class MainWindow(QMainWindow):
         # single unlock point for EVERY render exit path (done/failed/cancelled) —
         # per-handler unlocks would risk a soft-locked app on a missed path
         self._set_render_locked(False)
+        if self._queue_job is not None:          # E-9: on to the next queued video
+            QTimer.singleShot(400, self._run_next_queued)
 
     def _cancel(self) -> None:
         # cooperative: flag it and keep the UI in a "cancelling" state; the actual
         # reset happens on the worker's failed/finished signal (cancel is only
         # honored between stages, so the current stage runs to completion).
         if self._busy() and self._worker:
+            if self._queue:                       # E-9: Hủy stops the whole queue
+                self.input.append_log(f"⏹ Bỏ {len(self._queue)} video còn chờ trong hàng đợi")
+                self._queue.clear()
             self._worker.cancel()
             self.input.set_cancelling()
 
