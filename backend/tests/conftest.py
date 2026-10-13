@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-
 @pytest.fixture(autouse=True)
 def _no_vad_download(monkeypatch):
     """Tests never hit the network: the one-time Silero VAD model download fails fast,
@@ -31,3 +30,6 @@ def _private_storage(tmp_path_factory, monkeypatch):
     except Exception:  # noqa: BLE001
         return
     monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path_factory.mktemp("storage"))
+    # renders are built for libx264 unless a test asks otherwise — a machine with an
+    # NVIDIA GPU must not change what the graph tests see
+    monkeypatch.setattr(settings, "vizsup_video_encoder", "cpu")

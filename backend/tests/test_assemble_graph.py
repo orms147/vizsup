@@ -1,6 +1,7 @@
-"""N-18: long-video render construction. 300 cues used to blow the Windows 32k
-CreateProcess argv ceiling via one giant -filter_complex argument; the graph now
-lives in filter_complex.txt (-filter_complex_script) and the dub mix is chunked.
+"""N-18 + long videos: render construction. One ffmpeg input per line broke the
+Windows 32k command line past ~1,600 lines and mixed in time ∝ lines × length; the
+dub track is now built in windows (≤ WINDOW_MAX lines / ≤ WINDOW_SEC), each its own
+small ffmpeg, and the final encode reads them through the concat demuxer.
 Construct-only — probe/ffmpeg are monkeypatched, nothing encodes.
 """
 from __future__ import annotations
@@ -43,23 +44,51 @@ def test_300_segments_argv_small_and_script_written(big_job):
     assert (job.work_dir / "filter_complex.txt").exists()
 
 
-def test_every_input_label_used_exactly_once(big_job):
-    job, segments = big_job
-    _build(job, segments)
-    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    for i in range(1, 301):
-        # each ffmpeg input feeds exactly one per-segment chain [i:a]...[ai]
-        assert len(re.findall(rf"\[{i}:a\]", script)) == 1, i
-        produced = len(re.findall(rf"\[a{i}\]", script))
-        assert produced == 2, i                     # produced once + consumed once
+def _plan(segments):
+    placements, _sped, _flagged = assemble._plan_segments(segments)
+    return placements
 
 
-def test_chunked_amix_no_giant_input_count(big_job):
+def test_final_encode_has_one_dub_input_however_many_lines(big_job):
     job, segments = big_job
-    _build(job, segments)
+    cmd = _build(job, segments)
+    assert cmd.count("-i") == 2                     # source + the dub windows' concat list
+    assert cmd[cmd.index("concat") + 4] == "dub/list.txt"
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    for m in re.finditer(r"amix=inputs=(\d+)", script):
-        assert int(m.group(1)) <= 32                # no 300-input amix anywhere
+    assert "[1:a]loudnorm" in script and "adelay" not in script and "amix" not in script
+
+
+def test_windows_cut_in_silence_and_stay_small(big_job):
+    _job, segments = big_job
+    placements = _plan(segments)
+    wins = assemble._windows(placements)
+    assert sum(len(w["items"]) for w in wins) == len(placements) == 300
+    for a, b in zip(wins, wins[1:]):
+        assert a["hi"] == b["lo"] == b["items"][0]["start"]      # chained, no gap or overlap
+        last = a["items"][-1]
+        assert last["start"] + last["eff"] <= a["hi"] + 1e-9      # no line straddles a cut
+    assert all(len(w["items"]) <= assemble.WINDOW_MAX for w in wins)
+    assert all(w["hi"] - w["lo"] < assemble.WINDOW_SEC + 5 for w in wins)
+
+
+def _window_samples(graph: str) -> int:
+    lead = re.search(r"atrim=end_sample=(\d+),aformat[^\[]*\[lead\]", graph)
+    pads = [int(n) for n in re.findall(r"apad=whole_len=(\d+)", graph)]
+    return (int(lead.group(1)) if lead else 0) + sum(pads)
+
+
+def test_window_graph_is_sample_exact_on_the_absolute_timeline(big_job):
+    """Each window lasts exactly _sample(hi) - _sample(lo) samples, so chained windows
+    put every line at round(start * 48000) — no drift after hours."""
+    _job, segments = big_job
+    wins = assemble._windows(_plan(segments))
+    for w in wins:
+        g = assemble._window_graph(w)
+        assert _window_samples(g) == assemble._sample(w["hi"]) - assemble._sample(w["lo"])
+        for k in range(len(w["items"])):
+            assert len(re.findall(rf"\[{k}:a\]", g)) == 1       # each input used once
+            assert len(re.findall(rf"\[s{k}\]", g)) == 2        # produced + consumed
+        assert f"concat=n={len(w['items']) + ('[lead]' in g)}:v=0:a=1[out]" in g
 
 
 def test_mix_without_audio_stream_falls_back_to_replace(big_job, monkeypatch):
@@ -77,10 +106,8 @@ def test_corrupt_segment_skipped_not_fatal(big_job, monkeypatch):
     good = dict.fromkeys((str(s) for _, s in segments), 1.2)
     good[str(segments[5][1])] = 0.0                 # probe failure → 0.0 (corrupt mp3)
     monkeypatch.setattr(assemble, "probe_duration", lambda p: good[str(p)])
-    _build(job, segments[:10])
-    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[6:a]" not in script                    # corrupt input dropped from the graph
-    assert "[7:a]" in script                        # neighbours unaffected
+    placements = _plan(segments[:10])
+    assert [p["inp"] for p in placements] == [1, 2, 3, 4, 5, 7, 8, 9, 10]   # 6 dropped only
 
 
 def test_cover_blur_uses_detected_region_when_present(big_job):
@@ -111,7 +138,7 @@ def test_keep_music_adds_bg_input_and_mix(big_job):
     cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
     assert cmd.count("bg.wav") == 1                          # extra input added
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[4:a]aresample=48000,volume=0.800[bg]" in script  # 3 segs → bg is input 4
+    assert "[2:a]aresample=48000,volume=0.800[bg]" in script  # source, dub, then bg
     assert "amix=inputs=2" in script and "[outa]" in script
 
 
@@ -184,3 +211,110 @@ def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
     _build(job, segments[:3], frame="tiktok", preview=True)
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "[0:v]scale=1080:1920" in graph and "[vt]scale=-2:640[vp]" in graph
+
+
+# --- running the windows, the encoder, progress and cancel ---------------------------
+
+class _Proc:
+    """Popen stand-in: yields ffmpeg -progress lines, records terminate()."""
+
+    def __init__(self, lines, rc=0):
+        self.stdout = iter(lines)
+        self.rc, self.terminated = rc, False
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.terminated = True
+
+    def poll(self):
+        return self.rc if self.terminated or self.rc is not None else None
+
+    def wait(self):
+        return self.rc
+
+
+def test_run_ffmpeg_reports_progress_and_cancel_kills(tmp_path, monkeypatch):
+    seen = []
+    lines = ["frame=1\n", "out_time_us=N/A\n", "out_time_us=30000000\n",
+             "out_time_us=60000000\n", "out_time_us=45000000\n",   # never goes back
+             "progress=end\n"]
+    monkeypatch.setattr(assemble.subprocess, "Popen", lambda *a, **k: _Proc(lines))
+    assemble._run_ffmpeg(["ffmpeg", "-i", "x"], tmp_path, total=120.0, progress=seen.append)
+    assert seen == [0.25, 0.5]
+
+    proc = _Proc(lines, rc=None)
+    monkeypatch.setattr(assemble.subprocess, "Popen", lambda *a, **k: proc)
+    with pytest.raises(InterruptedError):
+        assemble._run_ffmpeg(["ffmpeg"], tmp_path, total=120.0, cancel=lambda: True)
+    assert proc.terminated
+
+
+def test_dub_windows_are_cached_and_stale_ones_removed(big_job, monkeypatch):
+    job, segments = big_job
+    for _c, seg in segments:
+        seg.parent.mkdir(parents=True, exist_ok=True)
+        seg.write_bytes(b"mp3")
+    runs = []
+
+    def fake_run(cmd, **kw):
+        if str(cmd[-1]).endswith(".flac"):                      # a window render
+            runs.append(cmd)
+            (job.work_dir / cmd[-1]).write_bytes(b"flac")
+        return assemble.subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(assemble.subprocess, "run", fake_run)
+    placements = _plan(segments)
+    lst = assemble._render_dub(job, segments, placements)
+    n = len(assemble._windows(placements))
+    assert lst == "dub/list.txt" and len(runs) == n
+    listed = (job.work_dir / "dub" / "list.txt").read_text(encoding="utf-8").splitlines()
+    assert listed == [f"file 'win_{i:03d}.flac'" for i in range(n)]
+    assert max(len([a for a in c if a == "-i"]) for c in runs) <= assemble.WINDOW_MAX
+
+    assemble._render_dub(job, segments, placements)              # nothing changed
+    assert len(runs) == n
+    segments[150][1].write_bytes(b"re-voiced line")              # one line re-dubbed
+    assemble._render_dub(job, segments, _plan(segments))
+    assert len(runs) == n + 1                                    # only its window
+
+    assemble._render_dub(job, segments[:50], _plan(segments[:50]))
+    left = sorted(f.name for f in (job.work_dir / "dub").glob("win_*.flac"))
+    assert len(left) == len(assemble._windows(_plan(segments[:50])))
+
+
+def test_video_args_for_cpu_and_nvenc():
+    assert assemble._video_args("libx264", False)[:6] == ["-c:v", "libx264", "-crf", "20",
+                                                          "-preset", "veryfast"]
+    gpu = assemble._video_args("h264_nvenc", True)
+    assert gpu[:2] == ["-c:v", "h264_nvenc"] and "p1" in gpu and "yuv420p" in gpu
+
+
+def test_nvenc_failure_falls_back_to_cpu(big_job, monkeypatch):
+    job, segments = big_job
+    job.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
+    monkeypatch.setattr(assemble, "_NVENC", None)              # restored after the test
+    monkeypatch.setattr(assemble, "_video_encoder", lambda: "h264_nvenc")
+    monkeypatch.setattr(assemble, "_render_dub", lambda *a, **k: "dub/list.txt")
+    tried = []
+
+    def fake_run(cmd, cwd, **kw):
+        enc = cmd[cmd.index("-c:v") + 1]
+        tried.append(enc)
+        if enc == "h264_nvenc":
+            raise RuntimeError("ffmpeg: No NVENC capable devices found")
+
+    monkeypatch.setattr(assemble, "_run_ffmpeg", fake_run)
+    logs = []
+    assemble.assemble(job, segments[:3], log=logs.append)
+    assert tried == ["h264_nvenc", "libx264"] and any("NVENC" in m for m in logs)
+
+
+def test_duck_keeps_the_original_after_the_last_dub_line(big_job):
+    """sidechaincompress stops with its key: the key (the dub) is padded with silence,
+    or the original audio was cut after the last Vietnamese line."""
+    job, segments = big_job
+    _build(job, segments[:3], audio_mode="duck")
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[scin]apad[scpad]" in script and "[bg][scpad]sidechaincompress" in script

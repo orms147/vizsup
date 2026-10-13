@@ -423,7 +423,7 @@ class RenderView(QWidget):
         fr.addWidget(log_btn)
         fr.addStretch(1)
         # cancel is only visible while a render runs (see set_rendering); TTS stops
-        # between cues, a started ffmpeg pass runs to completion
+        # between cues, the encode is killed (assemble._run_ffmpeg)
         self.cancel_btn = button("Hủy", "X")
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self.cancelRequested)
@@ -697,7 +697,7 @@ class RenderView(QWidget):
             self.p_detail.setText(line.lstrip("↷ ").strip())
 
     def set_cancelling(self) -> None:
-        self.status.setText("Đang hủy… (TTS dừng giữa câu; ffmpeg đã chạy thì chạy nốt)")
+        self.status.setText("Đang hủy… (giọng đã tạo và các đoạn đã ghép được giữ lại)")
         self.cancel_btn.setEnabled(False)
         self.append_log("⏳ Đang hủy…")
 

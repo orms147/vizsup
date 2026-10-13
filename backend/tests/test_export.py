@@ -70,7 +70,7 @@ def test_full_render_records_how_it_was_made(tmp_path, monkeypatch):
     job = Job(id="r", work_dir=tmp_path / "r")
     job.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
     monkeypatch.setattr(assemble, "_build_render", lambda *a, **k: ["ffmpeg"])
-    monkeypatch.setattr(assemble.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(assemble, "_run_ffmpeg", lambda *a, **k: None)
     assemble.assemble(job, [], cover_mode="blur", frame="tiktok", preview=True)
     assert assemble.load_render_info(job) == {}                     # a quick proof is not output.mp4
     assemble.assemble(job, [], cover_mode="blur", frame="tiktok")

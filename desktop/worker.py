@@ -340,11 +340,13 @@ class PipelineWorker(QObject):
                 log=self.log.emit,
                 preview=bool(o.get("preview")),     # E-15: fast low-res check first
                 frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
+                progress=lambda f, m: self.progress.emit(0.6 + 0.4 * f, m),
+                cancel=lambda: self._cancel,        # a long encode stops on Hủy
             )
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")
             self.render_done.emit(str(out))
-        except _Cancelled:
+        except (_Cancelled, InterruptedError):
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(f"{type(exc).__name__}: {exc}")

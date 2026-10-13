@@ -328,6 +328,29 @@ soft-subtitle MKV/MP4 (no burn) for re-editing elsewhere.
 
 ---
 
+## Long videos (several hours) — 2026-10-14
+
+Measured on this machine before the work: a 3-hour video (~4,000 lines) could not be rendered
+at all (one ffmpeg input per line → 80,182-char command line > Windows' 32,767 past ~1,600 lines;
+mixing time ∝ lines × length, ~2 h extrapolated); OCR 0.7 s/frame at 2 fps → ~4 h and ~5.4 GB of
+PNGs; a failed ASR chunk lost (and re-bought) every finished one; VAD/waveform decoded the whole
+track into RAM (~1 GB). Translation (batches + checkpoint), editor (4,000 lines: reload 0.14 s,
+edit 0.16 s) and edge-tts (3-way batch) were already fine.
+
+- ✅ **Render**: windowed dub (`assemble._windows/_render_dub`), cut in the silence before a line,
+  each window concatenates its lines padded to the exact sample of the next start → 4,000 lines
+  over 3 h: 49 s (36 windows), cached re-run 0.1 s, one edited line 4.8 s, command line 352
+  chars; real job: every checked line at lag 0 samples. Final encode: `-progress` %, Hủy kills
+  ffmpeg, NVENC auto (RTX 4070 here; 5.5-min 720×1566 job: 23 s vs 31 s libx264), CPU fallback.
+  Segment durations cached + probed in parallel (29 s first, 2.5 s after). Side fix: in "duck"
+  mode the original audio stopped at the last dub line (sidechain key now padded).
+- ✅ **ASR per-chunk cache** (`_cloud.chunk_cache`, `asr_cache/`): a failed chunk no longer
+  re-buys the finished ones (Haiku 5.5 subagent, reviewed).
+- **Streamed audio decode** for VAD / waveform (in progress).
+- **OCR**: skip frames whose subtitle band did not change, parallel workers, no PNG dump (keep
+  only representative frames), progress + resume.
+- Optional: split a long video into ~30-min parts through the queue, join at the end.
+
 ## P2 — later (keep in mind, don't start yet)
 
 - Multi-voice dubbing per speaker (needs E-4 speaker labels per line; edge-tts has 2 vi voices).

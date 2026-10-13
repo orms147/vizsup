@@ -16,17 +16,29 @@ impossible without cumulative drift):
 Audio mixing (B3): replace original / mix at a set volume / sidechain-duck the
 original under the dub. Dub and original volumes are adjustable.
 
+Long videos (2026-10-13): the dub track is built in windows of ≤5 min / ≤100 lines,
+cut in the silence before a line, each by its own small ffmpeg run into
+``dub/win_###.flac`` (cached by content) — instead of one ffmpeg with an input per
+line, which broke the Windows command line past ~1,600 lines and mixed in time
+∝ lines × video length (adelay + amix: ~2 h for a 3-hour video). Inside a window the
+lines are concatenated, each padded to the exact SAMPLE where the next one starts, so
+placement stays absolute with no drift. The final encode reads the windows through
+the concat demuxer, reports progress and can be cancelled; NVENC when available.
+
 ffmpeg runs with cwd = work_dir so the ``ass=`` filter gets a clean relative
 filename (avoids Windows drive-colon escaping headaches).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from app.config import settings
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_ass
@@ -116,28 +128,6 @@ def _has_audio_stream(src: Path) -> bool:
         return True
 
 
-def _mix_chunked(labels: list[str], parts: list[str], *, group: int = 32) -> str:
-    """amix an arbitrary number of segment labels without one giant N-input amix
-    (a 30-60 min video yields hundreds of segments; a single 500-input amix is
-    slow and fragile): mix in chunks of ``group``, then mix the chunk outputs,
-    repeating until one label remains. Returns that final label."""
-    level = 0
-    while len(labels) > 1:
-        nxt: list[str] = []
-        for ci in range(0, len(labels), group):
-            chunk = labels[ci:ci + group]
-            if len(chunk) == 1:
-                nxt.append(chunk[0])
-                continue
-            lbl = f"[mx{level}_{ci // group}]"
-            parts.append(f"{''.join(chunk)}amix=inputs={len(chunk)}"
-                         f":normalize=0:dropout_transition=0{lbl}")
-            nxt.append(lbl)
-        labels = nxt
-        level += 1
-    return labels[0]
-
-
 # The subtitle fonts ship with the app (desktop/assets/fonts, OFL) but are not installed
 # in Windows, so libass fell back to Arial ("fontselect: (Be Vietnam Pro) -> ArialMT",
 # found 2026-10-13). Copy them next to the job and point libass at them.
@@ -195,19 +185,62 @@ def style_preview_frame(
     return out
 
 
+def _durations(paths: list[Path]) -> list[float]:
+    """Segment durations, cached in ``durations.json`` next to the segments (name →
+    size, mtime, seconds): a 3-hour video has ~4,000 of them and probing each on every
+    render took minutes. Misses are probed in parallel."""
+    if not paths:
+        return []
+    cache_file = paths[0].parent / "durations.json"
+    try:
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        cache = cache if isinstance(cache, dict) else {}
+    except (OSError, ValueError):
+        cache = {}
+    out: list[float] = [0.0] * len(paths)
+    todo: list[tuple[int, Path, list | None]] = []
+    for i, path in enumerate(paths):
+        try:
+            st = path.stat()
+            sig: list | None = [st.st_size, st.st_mtime_ns]
+        except OSError:
+            sig = None
+        hit = cache.get(path.name)
+        if sig and isinstance(hit, list) and hit[:2] == sig:
+            out[i] = float(hit[2])
+        else:
+            todo.append((i, path, sig))
+    if todo:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            found = list(ex.map(lambda t: probe_duration(t[1]), todo))
+        added = False
+        for (i, path, sig), d in zip(todo, found):
+            out[i] = d
+            if sig and d > 0:
+                cache[path.name] = [*sig, d]
+                added = True
+        if added:
+            try:
+                cache_file.write_text(json.dumps(cache), encoding="utf-8")
+            except OSError:
+                pass
+    return out
+
+
 def _plan_segments(segments: list[tuple[Cue, Path]]):
     """Resolve each segment's placement on the timeline with the overlap-free
     policy. Returns (placements, sped_count, flagged) where each placement is a
     dict {inp, start, tempo, eff, trim}."""
-    indexed = list(enumerate(segments, start=1))           # keep ffmpeg input index
+    indexed = list(enumerate(segments, start=1))           # keep the segment number
     ordered = sorted(indexed, key=lambda x: x[1][0].start)  # process in time order
+    durations = _durations([Path(seg) for _i, (_c, seg) in ordered])
     placements: list[dict] = []
     flagged: list[tuple[Cue, float, float]] = []
     prev_end = 0.0
     sped = 0
     n = len(ordered)
     for j, (inp, (cue, seg)) in enumerate(ordered):
-        seg_dur = probe_duration(Path(seg))
+        seg_dur = durations[j]
         if seg_dur <= 0:
             continue
         start = max(cue.start, prev_end)                   # never overlap previous audio
@@ -238,6 +271,219 @@ def _plan_segments(segments: list[tuple[Cue, Path]]):
                            "carry_s": round(start - cue.start, 3)})  # how far this line slipped
         prev_end = end
     return placements, sped, flagged
+
+
+# --- the dub track, window by window ---------------------------------------------------
+RATE = 48000
+WINDOW_SEC = 300.0     # a window closes at the first line starting this long after it opened…
+WINDOW_MAX = 100       # …or after this many lines (≈ 2 KB of command line)
+WINDOW_WORKERS = 4
+DUB_DIR = "dub"
+
+
+def _sample(t: float) -> int:
+    return int(round(t * RATE))
+
+
+def _windows(placements: list[dict]) -> list[dict]:
+    """Group time-ordered placements into windows ``{lo, hi, items}``. A window ends
+    where the next one's first line starts — placements never overlap
+    (start[i+1] >= end[i]), so every cut falls in silence and no line straddles it.
+    Pure."""
+    wins: list[dict] = []
+    cur: list[dict] = []
+    lo = 0.0
+    for p in placements:
+        if cur and (len(cur) >= WINDOW_MAX or p["start"] - lo >= WINDOW_SEC):
+            wins.append({"lo": lo, "hi": p["start"], "items": cur})
+            lo, cur = p["start"], []
+        cur.append(p)
+    if cur:
+        wins.append({"lo": lo, "hi": cur[-1]["start"] + cur[-1]["eff"], "items": cur})
+    return wins
+
+
+def _window_graph(win: dict) -> str:
+    """Filter graph for one window: each line resampled to 48 kHz mono, sped up /
+    gain / fade-trimmed as planned, then padded (or cut) to EXACTLY the samples until
+    the next line starts, and all concatenated after a lead silence. The window lasts
+    _sample(hi) - _sample(lo) samples, so windows chain without drift. Pure."""
+    fmt = f"aformat=sample_fmts=fltp:sample_rates={RATE}:channel_layouts=mono"
+    s0, s1 = _sample(win["lo"]), _sample(win["hi"])
+    items = win["items"]
+    parts: list[str] = []
+    labels: list[str] = []
+    lead = _sample(items[0]["start"]) - s0
+    if lead > 0:
+        parts.append(f"anullsrc=r={RATE}:cl=mono,atrim=end_sample={lead},{fmt}[lead]")
+        labels.append("[lead]")
+    for k, p in enumerate(items):
+        nxt = _sample(items[k + 1]["start"]) if k + 1 < len(items) else s1
+        n = max(1, nxt - _sample(p["start"]))
+        af = [f"aresample={RATE}", fmt]
+        if p["tempo"] > 1.001:
+            af.append(_tempo_filter(p["tempo"]))
+        if abs(p.get("gain", 0.0)) > 0.01:
+            af.append(f"volume={p['gain']:.1f}dB")
+        if p["trim"]:
+            eff = p["eff"]
+            af.append(f"atrim=0:{eff:.3f}")
+            af.append(f"afade=t=out:st={max(0.0, eff - 0.12):.3f}:d=0.12")
+        af += [f"apad=whole_len={n}", f"atrim=end_sample={n}", fmt]
+        parts.append(f"[{k}:a]{','.join(af)}[s{k}]")
+        labels.append(f"[s{k}]")
+    parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=0:a=1[out]")
+    return ";\n".join(parts) + "\n"
+
+
+def _window_key(win: dict, files: list[Path]) -> str:
+    """Everything that shapes a window's audio — a re-render after editing one line
+    rebuilds only the window(s) whose key changed."""
+    rows = []
+    for p, f in zip(win["items"], files):
+        try:
+            st = f.stat()
+            sig = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            sig = None
+        rows.append([f.name, sig, _sample(p["start"]), round(p["tempo"], 4), p["trim"],
+                     round(p["eff"], 3), round(p.get("gain", 0.0), 2)])
+    raw = json.dumps([_sample(win["lo"]), _sample(win["hi"]), _tempo_filter(1.2), rows])
+    return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def _render_dub(job: Job, segments: list[tuple[Cue, Path]], placements: list[dict], *,
+                log: Callable[[str], None] | None = None,
+                cancel: Callable[[], bool] | None = None,
+                progress: Callable[[float], None] | None = None) -> str | None:
+    """Render the dub windows (cached) and write the concat list; returns the list's
+    path relative to the job dir, or None when there is nothing to dub."""
+    if not placements:
+        return None
+    wd = job.work_dir
+    d = wd / DUB_DIR
+    d.mkdir(exist_ok=True)
+    wins = _windows(placements)
+    man_path = d / "manifest.json"
+    try:
+        manifest = json.loads(man_path.read_text(encoding="utf-8"))
+        manifest = manifest if isinstance(manifest, dict) else {}
+    except (OSError, ValueError):
+        manifest = {}
+    todo = []
+    for i, w in enumerate(wins):
+        files = [Path(segments[p["inp"] - 1][1]) for p in w["items"]]
+        name = f"win_{i:03d}"
+        key = _window_key(w, files)
+        if not ((d / f"{name}.flac").exists() and manifest.get(name) == key):
+            todo.append((name, key, w, files))
+    if log and len(todo) < len(wins):
+        log(f"↷ Giữ lại {len(wins) - len(todo)}/{len(wins)} đoạn lồng tiếng đã ghép trước đó")
+
+    def run(item) -> tuple[str, str]:
+        name, key, w, files = item
+        if cancel and cancel():
+            raise InterruptedError("Đã hủy.")
+        (d / f"{name}.txt").write_text(_window_graph(w), encoding="utf-8")
+        cmd = [ffmpeg_bin(), "-y", "-v", "error"]
+        for f in files:
+            cmd += ["-i", f.resolve().relative_to(wd.resolve()).as_posix()]
+        cmd += ["-filter_complex_script", f"{DUB_DIR}/{name}.txt", "-map", "[out]",
+                "-c:a", "flac", f"{DUB_DIR}/{name}.flac"]
+        r = subprocess.run(cmd, cwd=str(wd), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            tail = (r.stderr or "").strip().splitlines()[-1:] or ["ffmpeg lỗi"]
+            raise RuntimeError(f"Ghép lồng tiếng đoạn {name}: {tail[0]}")
+        return name, key
+
+    if todo:
+        with ThreadPoolExecutor(max_workers=WINDOW_WORKERS) as ex:
+            futures = [ex.submit(run, t) for t in todo]
+            try:
+                for k, fut in enumerate(as_completed(futures), 1):
+                    name, key = fut.result()
+                    manifest[name] = key
+                    man_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+                    if progress:
+                        progress(k / len(todo))
+            except BaseException:
+                for fut in futures:
+                    fut.cancel()
+                raise
+    for f in d.glob("win_*.flac"):                     # windows of a longer earlier cut
+        if int(f.stem[4:] or 0) >= len(wins):
+            f.unlink(missing_ok=True)
+            manifest.pop(f.stem, None)
+    man_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    (d / "list.txt").write_text("".join(f"file 'win_{i:03d}.flac'\n" for i in range(len(wins))),
+                                encoding="utf-8")
+    return f"{DUB_DIR}/list.txt"
+
+
+_NVENC: bool | None = None
+
+
+def _video_encoder() -> str:
+    """'h264_nvenc' when the setting allows it and a one-frame test encode works
+    (listed encoders lie without an NVIDIA driver), else 'libx264'."""
+    global _NVENC
+    pref = (settings.vizsup_video_encoder or "auto").strip().lower()
+    if pref == "cpu":
+        return "libx264"
+    if _NVENC is None:
+        try:
+            r = subprocess.run([ffmpeg_bin(), "-v", "error", "-f", "lavfi", "-i",
+                                "color=c=black:s=256x256:d=0.1", "-frames:v", "1",
+                                "-c:v", "h264_nvenc", "-f", "null", "-"],
+                               capture_output=True, timeout=30)
+            _NVENC = r.returncode == 0
+        except Exception:  # noqa: BLE001
+            _NVENC = False
+    return "h264_nvenc" if _NVENC else "libx264"
+
+
+def _video_args(encoder: str, preview: bool) -> list[str]:
+    if encoder == "h264_nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p1" if preview else "p5", "-rc", "vbr",
+                "-cq", "30" if preview else "21", "-b:v", "0", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-crf", "30" if preview else "20",
+            "-preset", "ultrafast" if preview else "veryfast", "-pix_fmt", "yuv420p"]
+
+
+def _run_ffmpeg(cmd: list[str], cwd: Path, *, total: float,
+                progress: Callable[[float], None] | None = None,
+                cancel: Callable[[], bool] | None = None) -> None:
+    """Run the final encode with ``-progress`` on stdout: report the fraction done,
+    and kill ffmpeg when ``cancel()`` turns true (a 3-hour encode must be stoppable).
+    stderr goes to ``render.log`` in the job dir; its tail is the error message."""
+    cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
+    log_path = cwd / "render.log"
+    with log_path.open("w", encoding="utf-8", errors="replace") as err:
+        proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=err,
+                                text=True, encoding="utf-8", errors="replace")
+        best = 0.0                       # the last report can be an earlier stream's time
+        try:
+            for line in proc.stdout:
+                if cancel and cancel():
+                    proc.terminate()
+                    raise InterruptedError("Đã hủy.")
+                if line.startswith("out_time_us=") and progress and total > 0:
+                    try:
+                        frac = min(1.0, int(line.split("=", 1)[1]) / 1e6 / total)
+                    except ValueError:
+                        continue                   # "N/A" before the first frame
+                    if frac > best:
+                        best = frac
+                        progress(frac)
+            rc = proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+    if rc != 0:
+        tail = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
+        raise RuntimeError("ffmpeg: " + " | ".join(tail or ["lỗi không rõ"]))
 
 
 def _load_region(job: Job) -> dict | None:
@@ -279,13 +525,15 @@ def _build_render(
     log: Callable[[str], None] | None = None,
     preview: bool = False,     # E-15: fast low-res preview.mp4 instead of output.mp4
     frame: str = "source",     # E-16: "source" | "tiktok" (1080x1920, fit + pad)
+    plan: tuple | None = None,  # (placements, sped, flagged) when already planned
+    dub: str | None = f"{DUB_DIR}/list.txt",   # concat list of the dub windows
+    encoder: str | None = None,
 ) -> list[str]:
-    """Plan the timeline and build the ffmpeg command. The filter graph goes to
-    ``<work_dir>/filter_complex.txt`` (+ ``-filter_complex_script``) instead of
-    the argv — one giant ``-filter_complex`` argument used to hit the Windows
-    32k CreateProcess ceiling at roughly 200-250 cues. Pure construction (plus
-    ffprobe calls through probe_duration/_has_audio_stream) — no encode here,
-    so tests can assert on the produced command/graph without running ffmpeg."""
+    """Plan the timeline and build the final ffmpeg command: the source, the dub
+    track (concat list of the windows from :func:`_render_dub`) and, for "keep
+    music", the instrumental. The filter graph goes to ``filter_complex.txt``.
+    Pure construction (plus ffprobe through probe_duration/_has_audio_stream) — no
+    encode here, so tests can assert on the produced command/graph."""
     wd = job.work_dir
 
     # ENG-2: "keep music" needs a FRESH Demucs instrumental (bg.wav newer than the
@@ -300,13 +548,14 @@ def _build_render(
                 log("⚠ Chưa tách được nhạc nền (bg.wav) — chuyển sang chế độ trộn (mix).")
             audio_mode = "mix"
 
+    placements, sped, flagged = plan if plan is not None else _plan_segments(segments)
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
-    for _, seg in segments:
-        cmd += ["-i", str(Path(seg).relative_to(wd).as_posix())]
-    if audio_mode == "keep_music":
-        cmd += ["-i", "bg.wav"]   # last input → the instrumental background
-
-    placements, sped, flagged = _plan_segments(segments)
+    dubbed = bool(placements) and dub is not None
+    if dubbed:
+        cmd += ["-f", "concat", "-safe", "0", "-i", dub]          # input 1 → the dub track
+    bg_idx = 2 if dubbed else 1
+    if audio_mode == "keep_music" and dubbed:
+        cmd += ["-i", "bg.wav"]                                   # the instrumental
 
     # Machine-readable fit report next to the output: what got sped up, trimmed,
     # or slipped — the metric N-6 (length-aware drafting) optimizes against.
@@ -321,33 +570,7 @@ def _build_render(
     (wd / "fit_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    from app.pipeline.tts import load_overrides
-    ov = load_overrides(job)
-
-    def _gain_db(cue: Cue) -> float:
-        k = cue.index - 1
-        return float(ov[k].get("gain_db", 0.0)) if 0 <= k < len(ov) else 0.0
-
     parts: list[str] = []
-    labels: list[str] = []
-    for p in placements:
-        i = p["inp"]
-        # resample every segment up-front (edge-tts mp3 is 24 kHz): letting amix
-        # implicitly resample N inputs is slower and a quality risk
-        af: list[str] = ["aresample=48000"]
-        if p["tempo"] > 1.001:
-            af.append(_tempo_filter(p["tempo"]))
-        gain = _gain_db(segments[i - 1][0])
-        if abs(gain) > 0.01:
-            af.append(f"volume={gain:.1f}dB")
-        if p["trim"]:
-            eff = p["eff"]
-            af.append(f"atrim=0:{eff:.3f}")
-            af.append(f"afade=t=out:st={max(0.0, eff - 0.12):.3f}:d=0.12")
-        delay = max(0, int(round(p["start"] * 1000)))
-        af.append(f"adelay={delay}|{delay}")
-        parts.append(f"[{i}:a]{','.join(af)}[a{i}]")
-        labels.append(f"[a{i}]")
 
     if log:
         if sped:
@@ -363,10 +586,9 @@ def _build_render(
             log("⚠ Video nguồn không có track âm thanh — chuyển sang chế độ thay (replace).")
         audio_mode = "replace"
 
-    if labels:
-        dub = _mix_chunked(labels, parts)
+    if dubbed:
         # consistent dub level across voices/clips; before mixing with the original
-        parts.append(f"{dub}loudnorm=I=-16:TP=-1.5:LRA=11[dubn]")
+        parts.append("[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[dubn]")
         dub = "[dubn]"
         if abs(dub_volume - 1.0) > 1e-3:
             parts.append(f"{dub}volume={dub_volume:.3f}[dubvol]")
@@ -375,7 +597,6 @@ def _build_render(
         if audio_mode == "keep_music":
             # background = the Demucs instrumental (last input), dub on top; orig_volume
             # rides the instrumental. Speech is gone with the vocals stem, so no ducking.
-            bg_idx = len(segments) + 1
             parts.append(f"[{bg_idx}:a]aresample=48000,volume={orig_volume:.3f}[bg]")
             parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
             audio_map = "[outa]"
@@ -387,7 +608,10 @@ def _build_render(
             # original ducks only while the dub plays (sidechain), then returns
             parts.append(f"{dub}asplit=2[scin][dubv]")
             parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
-            parts.append("[bg][scin]sidechaincompress=threshold=0.05:ratio=8:"
+            # the key ends with the last dub line; padded with silence so the ducked
+            # original keeps playing to the end (it used to stop there)
+            parts.append("[scin]apad[scpad]")
+            parts.append("[bg][scpad]sidechaincompress=threshold=0.05:ratio=8:"
                          "attack=20:release=300:makeup=1:level_sc=1[duck]")
             parts.append("[duck][dubv]amix=inputs=2:normalize=0[outa]")
             audio_map = "[outa]"
@@ -422,12 +646,10 @@ def _build_render(
         parts.append(f"{vmap}scale=-2:640[vp]")
         vmap = "[vp]"
     (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
-    quality = ["-crf", "30", "-preset", "ultrafast"] if preview else ["-crf", "20", "-preset",
-                                                                      "veryfast"]
     cmd += [
         "-filter_complex_script", "filter_complex.txt",
         "-map", vmap, "-map", audio_map,
-        "-c:v", "libx264", *quality,
+        *_video_args(encoder or _video_encoder(), preview),
         "-c:a", "aac", "-b:a", "128k" if preview else "192k", "-ar", "48000",
         "preview.mp4" if preview else "output.mp4",
     ]
@@ -450,7 +672,10 @@ def assemble(
     log: Callable[[str], None] | None = None,
     preview: bool = False,
     frame: str = "source",               # "source" | "tiktok"
+    progress: Callable[[float, str], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
+    global _NVENC
     mode = cover_mode or ("box" if cover_hardsubs else "off")
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
     # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
@@ -458,10 +683,28 @@ def assemble(
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job))
 
-    cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
-                        dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
-                        frame=frame)
-    subprocess.run(cmd, cwd=str(job.work_dir), check=True)
+    say = progress or (lambda _f, _m: None)
+    plan = _plan_segments(segments)
+    dub = _render_dub(job, segments, _with_gains(job, segments, plan[0]), log=log,
+                      cancel=cancel,
+                      progress=lambda f: say(0.2 * f, f"Ghép lồng tiếng · {int(f * 100)}%"))
+    total = probe_duration(job.source_video) if job.source_video.exists() else 0.0
+    encoder = _video_encoder()
+    while True:
+        cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
+                            dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
+                            frame=frame, plan=plan, dub=dub, encoder=encoder)
+        try:
+            _run_ffmpeg(cmd, job.work_dir, total=total, cancel=cancel,
+                        progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
+            break
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            _NVENC = False                 # don't try the GPU again this session
+            encoder = "libx264"
+            if log:
+                log("⚠ Mã hóa bằng GPU (NVENC) lỗi — dựng lại bằng CPU.")
     if preview:
         return job.work_dir / "preview.mp4"
     # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
@@ -469,6 +712,17 @@ def assemble(
         json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode}),
         encoding="utf-8")
     return job.output_video
+
+
+def _with_gains(job: Job, segments: list[tuple[Cue, Path]], placements: list[dict]) -> list[dict]:
+    """Per-line dub gain (sidecar overrides) onto each placement."""
+    from app.pipeline.tts import load_overrides
+
+    ov = load_overrides(job)
+    for p in placements:
+        k = segments[p["inp"] - 1][0].index - 1
+        p["gain"] = float(ov[k].get("gain_db", 0.0)) if 0 <= k < len(ov) else 0.0
+    return placements
 
 
 RENDER_INFO = "render.json"

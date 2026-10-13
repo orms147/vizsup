@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # real Douyin audio and ~5x on accents (docs/providers.md); local models are optional
     vizsup_default_asr: str = "audio_llm"
     whisper_model: str = "large-v3"  # faster-whisper model size; set WHISPER_MODEL=tiny to downsize
+    # video encoder for renders: auto = NVIDIA NVENC when a test encode works, else libx264
+    vizsup_video_encoder: str = "auto"   # auto | nvenc | cpu
 
 
 settings = Settings()
