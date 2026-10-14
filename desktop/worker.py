@@ -118,6 +118,11 @@ class PipelineWorker(QObject):
             popts["_job_id"] = part["id"]
             store.save_job(pjob, popts, "queued")
             items.append(popts)
+        import json as _json
+
+        group["opts"] = {k: v for k, v in o.items() if k not in ("file", "url")}
+        (job.work_dir / split.GROUP_FILE).write_text(
+            _json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8")
         (job.work_dir / "job.json").unlink(missing_ok=True)   # the parent is a group now
         self.log.emit(f"✓ Đã chia {len(items)} phần — chạy lần lượt; phần nào xong sẽ báo để bạn "
                       f"duyệt trong lúc phần sau còn chạy")
@@ -162,6 +167,13 @@ class PipelineWorker(QObject):
             store.debug(f"run_to_gate begin file={bool(o.get('file'))} url={o.get('url')} src={o.get('subtitle_source')}")
             # 0) pre-flight: validate the translator choice BEFORE spending download/OCR
             self._preflight_translators(o)
+            if o.get("subtitle_source", "asr") in ("auto", "ocr"):
+                from app.providers.registry import get_ocr
+
+                eng = get_ocr(o.get("ocr_engine") or "rapidocr")
+                if not eng.available():
+                    raise RuntimeError(f"Chưa dùng được “{eng.display_name}” — thêm khóa "
+                                       f"OpenRouter trong Cài đặt, hoặc chọn đọc chữ trên máy.")
             # 1) source — skip when the artifact already exists (resume-friendly)
             self._check()
             self.stage_started.emit("download")

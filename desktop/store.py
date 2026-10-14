@@ -136,6 +136,16 @@ def list_projects(limit: int = 6) -> list[dict]:
             rows.append(row)
         row["parts"].append({**j, "index": g.get("index")})
         row["mtime"] = max(row["mtime"], j["mtime"])
+    base = _storage()
+    for gfile in base.glob("*/group.json") if base.exists() else []:
+        gid = gfile.parent.name
+        if gid not in groups:                     # every part gone: keep the original findable
+            info = _group_file(gid) or {}
+            row = {"kind": "group", "id": gid, "title": info.get("title") or gid,
+                   "total": len(info.get("parts") or []), "parts": [], "has_output": False,
+                   "mtime": gfile.stat().st_mtime, "url": info.get("url")}
+            groups[gid] = row
+            rows.append(row)
     for row in groups.values():
         row["parts"].sort(key=lambda x: x.get("index") or 0)
     rows.sort(key=lambda x: x["mtime"], reverse=True)
@@ -286,7 +296,7 @@ def group_summary(gid: str) -> dict:
     from app.pipeline import split
 
     info: dict = {"id": gid, "parts": [], "next": None, "thumb": None, "duration": 0.0,
-                  "joined": (_storage() / gid / "output.mp4").exists()}
+                  "joined": split.joined_is_current(_storage() / gid, _storage())}
     group = split.load_group(_storage() / gid)
     if not group:
         return info

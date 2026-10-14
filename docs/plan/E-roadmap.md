@@ -376,6 +376,16 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
   concat copy or re-encode + shifted vi.srt; CLI `join --group`. Renders are pinned to the
   source length (`-t` + dub `apad`). Not done: rendering a part while the queue runs (one
   worker slot — review/approve works meanwhile), a joined soft-sub .mkv / merged .ass.
+  Review + real-video checks (2026-10-14): cuts are given by FRAME NUMBER (cut times were
+  read against a container-dependent origin — B-frames or a picture starting after the sound
+  slipped every cut to the next keyframe); each part's sound is cut sample-accurately from
+  the source and its sync measured/corrected (part 1 was −132 ms → −0.9 ms; parts 2-3 0 ms);
+  a join writes to a temp file (a cancelled join no longer shows as finished), goes stale when
+  a part is re-rendered, survives a ' in the path; parts saved without options inherit the
+  group's; orphaned groups stay listed; the queue summary counts outcomes; cloud OCR reports
+  no invented confidence (the OCR proofread then covers every line). Not fixed (low): auto
+  mode needs the local OCR for detection even with the cloud engine; a group row whose next
+  part was deleted by hand does nothing on click.
 
 ## P2 — later (keep in mind, don't start yet)
 

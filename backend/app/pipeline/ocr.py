@@ -487,7 +487,8 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         c.index = i
         cues.append(c)
         report.append({
-            "index": i, "conf": round(cf, 3), "suspect": _suspect(c.text, cf),
+            "index": i, "conf": round(cf, 3) if prov.local else None,   # cloud: no score
+            "suspect": _suspect(c.text, cf) if prov.local else False,
             "rep_t": round(rf / fps, 3),        # a moment showing this cue (re-extract to see it)
         })
     # per-cue confidence sidecar — proofread_srt(only_suspect=True) reads this so
@@ -503,6 +504,8 @@ def _suspect_indexes(job: Job, n: int) -> list[int] | None:
     report (old job dir) → caller proofreads everything."""
     try:
         rep = json.loads((job.work_dir / "ocr_report.json").read_text(encoding="utf-8"))
+        if any(r.get("conf") is None for r in rep):     # read by a cloud model: no scores
+            return None
         return [r["index"] - 1 for r in rep if r.get("suspect") and 0 < r["index"] <= n]
     except (OSError, ValueError, KeyError, TypeError):
         return None

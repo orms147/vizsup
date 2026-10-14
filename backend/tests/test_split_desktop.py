@@ -224,3 +224,24 @@ def test_long_durations_read_as_hours():
     from desktop.widgets.recent_projects import duration_label
 
     assert duration_label(10800) == "3:00:00" and duration_label(328.7) == "05:28"
+
+
+def test_queue_summary_counts_outcomes_not_items(qapp, tmp_path, monkeypatch):
+    """Review: after Hủy or a failure the queue still announced 'Xong hàng đợi: N video'."""
+    from app.config import settings
+    from desktop import main as main_mod
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    win = main_mod.MainWindow()
+    seen = []
+    monkeypatch.setattr(win, "_busy", lambda: False)
+    monkeypatch.setattr(win, "_notify", lambda *a: seen.append(a))
+    monkeypatch.setattr(win, "_run", lambda method, opts, conns, job=None: None)
+    win._queue_total = 3
+    win._queue_ok, win._queue_failed = 1, 1
+    win._run_next_queued()
+    assert "1 mục tới bước duyệt" in win.status.text.text() and "1 mục lỗi" in win.status.text.text()
+    win._queue_total, win._queue_ok, win._queue_cancelled = 2, 1, True
+    seen.clear()
+    win._run_next_queued()
+    assert "Đã dừng hàng đợi" in win.status.text.text() and seen == []

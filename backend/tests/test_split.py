@@ -82,43 +82,56 @@ needs_ffmpeg = pytest.mark.skipif(_ffmpeg() is None or shutil.which("ffprobe") i
                                   and _ffmpeg() is None, reason="ffmpeg not available")
 
 
-@needs_ffmpeg
-def test_split_a_real_video_at_keyframes_in_silence(tmp_path, monkeypatch):
-    """6 minutes, a 1 s pause every 7 s, keyframes every 1.5 s (some land inside a
-    pause, e.g. 13.5 s); parts of ~2 minutes."""
+def _split_and_check(tmp_path, monkeypatch, *, video_first: list[str], fmt: list[str]):
+    """6 minutes, a 1 s pause every 7 s, keyframes every 1.5 s, B-frames; parts of ~2 min.
+    Every cut must land ON the planned keyframe (not the next one), inside a pause, with
+    the parts' sound in sync with their picture as in the source."""
     from app.pipeline import vad
 
     monkeypatch.setattr(vad, "spans_for", lambda *a, **k: None)      # → silencedetect fallback
     job = Job(id="g", work_dir=tmp_path / "g")
-    subprocess.run([_ffmpeg(), "-v", "error", "-y",
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", *video_first,
                     "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=360",
-                    "-f", "lavfi", "-i", "anoisesrc=d=360:c=pink:r=16000:a=0.4:seed=7",
+                    "-f", "lavfi", "-i", "anoisesrc=d=361:c=pink:r=16000:a=0.4:seed=7",
                     "-af", "volume='if(lt(mod(t,7),6),1,0)':eval=frame",
+                    "-map", "0:v", "-map", "1:a",
                     "-c:v", "libx264", "-g", "15", "-keyint_min", "15", "-sc_threshold", "0",
-                    "-c:a", "aac", "-shortest", str(job.source_video)], check=True)
+                    "-c:a", "aac", "-t", "360", *fmt, str(job.source_video)], check=True)
     storage = tmp_path / "storage"
-    kfs = split.keyframes(job.source_video, 100.0, 130.0)
-    assert any(dts < pts - 0.05 for pts, dts in kfs)    # B-frames: the DTS runs ahead
-    planned = []
+    index, _first = split.keyframe_index(job.source_video, offset=split.start_time(job.source_video))
+    pts_of = {n: pts for pts, n in index}
+    asked: list[int] = []
     real_segment = split._segment
-    monkeypatch.setattr(split, "_segment", lambda src, out, cuts, **kw:
-                        planned.extend(cuts) or real_segment(src, out, cuts, **kw))
+    monkeypatch.setattr(split, "_segment", lambda src, out, frames, **kw:
+                        asked.extend(frames) or real_segment(src, out, frames, **kw))
     group = split.split_job(job, storage, title="Video thử", target=120.0)
     parts = group["parts"]
     assert len(parts) == 3 and json.loads((job.work_dir / "group.json").read_text())["id"] == "g"
-    for p, asked in zip(parts[1:], planned, strict=True):
+    for p, frame in zip(parts[1:], asked, strict=True):
         assert p["in_gap"]
-        assert 6.0 <= p["start"] % 7 <= 7.0                 # inside a pause
-        assert abs(p["start"] - round(p["start"] / 1.5) * 1.5) < 0.05   # on a keyframe
-        # cut where planned, not at the NEXT keyframe (asked just before the keyframe's DTS)
-        assert 0 < p["start"] - asked < 0.3
-    for p in parts:                                     # sound and picture as in the source
+        assert abs(p["start"] - pts_of[frame]) < 0.01          # exactly the planned keyframe
+        assert 6.0 <= p["start"] % 7 <= 7.0 or 6.0 <= (p["start"] - _first) % 7 <= 7.0
+    for p in parts:                                             # sound and picture as in the source
         err = split.sync_error(job.source_video, storage / p["id"] / "source.mp4", p["start"])
         assert err is not None and abs(err) < 0.012, (p["index"], err)
+    return job, storage, parts
+
+
+@needs_ffmpeg
+def test_split_a_real_video_at_keyframes_in_silence(tmp_path, monkeypatch):
+    job, storage, parts = _split_and_check(tmp_path, monkeypatch, video_first=[], fmt=[])
     total = sum(p["duration"] for p in parts)
     assert abs(total - 360.0) < 0.15                        # no overlap at the cuts
     meta = json.loads((storage / parts[1]["id"] / "metadata.json").read_text(encoding="utf-8"))
     assert meta["title"] == "Video thử · Phần 2/3" and meta["group"]["total"] == 3
+
+
+@needs_ffmpeg
+def test_split_when_the_picture_starts_after_the_sound(tmp_path, monkeypatch):
+    """MPEG-TS whose picture starts 0.5 s after its sound: cut TIMES were read against the
+    first frame, so every cut slipped to the next keyframe (1.5 s, maybe mid-sentence)."""
+    _split_and_check(tmp_path, monkeypatch, video_first=["-itsoffset", "0.5"],
+                     fmt=["-f", "mpegts"])
 
 
 @needs_ffmpeg
@@ -187,3 +200,67 @@ def test_cli_join_reports_parts_not_ready(tmp_path, capsys):
     assert cli.main(["join", "--group", str(g)]) == 2
     assert "Chưa dựng xong" in capsys.readouterr().err
     assert cli.main(["join", "--group", str(tmp_path / "none")]) == 2
+
+
+@needs_ffmpeg
+def test_join_survives_quotes_in_paths_and_tracks_staleness(tmp_path):
+    """Review findings: a ' in the storage path broke the concat list; a join that was
+    cancelled left a half output.mp4 shown as finished; a re-rendered part didn't make
+    the joined video stale."""
+    import os
+    import time
+
+    from app.pipeline import approval, assemble
+
+    storage = tmp_path / "Bach's videos"
+    gdir = storage / "g"
+    gdir.mkdir(parents=True)
+    parts = []
+    for k in (1, 2):
+        j = Job(id=f"p{k}", work_dir=storage / f"p{k}")
+        j.vi_srt.write_text(f"1\n00:00:01,000 --> 00:00:02,000\ncâu {k}\n", encoding="utf-8")
+        approval.approve(j)
+        time.sleep(0.02)
+        subprocess.run([_ffmpeg(), "-v", "error", "-y",
+                        "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=2",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000",
+                        "-shortest", str(j.output_video)], check=True)
+        parts.append({"id": j.id, "index": k})
+    (gdir / "group.json").write_text(json.dumps({"id": "g", "parts": parts}), encoding="utf-8")
+    assert not split.joined_is_current(gdir, storage)
+    out = split.join(gdir, storage)
+    assert out.exists() and split.joined_is_current(gdir, storage)
+
+    good = out.read_bytes()
+
+    def boom(*a, **k):
+        (gdir / split.TMP_OUT).write_bytes(b"half")
+        raise InterruptedError("Đã hủy.")
+
+    real = assemble._run_ffmpeg
+    assemble._run_ffmpeg = boom
+    try:
+        with pytest.raises(InterruptedError):
+            split.join(gdir, storage)
+    finally:
+        assemble._run_ffmpeg = real
+    assert out.read_bytes() == good and not (gdir / split.TMP_OUT).exists()
+
+    p2 = storage / "p2" / "output.mp4"
+    later = out.stat().st_mtime + 5
+    os.utime(p2, (later, later))                       # part 2 re-rendered after the join
+    assert not split.joined_is_current(gdir, storage)
+
+
+def test_orphan_group_still_listed_for_deletion(tmp_path, monkeypatch):
+    from app.config import settings
+    from desktop import store
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    (tmp_path / "gid").mkdir()
+    (tmp_path / "gid" / "group.json").write_text(
+        json.dumps({"id": "gid", "title": "Video dài", "parts": [{"id": "gone", "index": 1}]}),
+        encoding="utf-8")
+    rows = store.list_projects()
+    assert [r["kind"] for r in rows] == ["group"] and rows[0]["title"] == "Video dài"

@@ -799,7 +799,9 @@ class RenderView(QWidget):
                             "Đã dừng — bấm Dựng video để tiếp tục" if cancelled else "Lỗi ở bước này")
         self.p_title.setText("Đã dừng" if cancelled else "Chưa dựng được video")
         self.p_badge.setText("Đã dừng" if cancelled else "Lỗi")
-        self.p_detail.setText("Giọng đã tạo được giữ lại." if cancelled else msg)
+        joining = not self.stage_rows["tts"].isVisibleTo(self) and self.stage_rows["assemble"]._num == 1
+        self.p_detail.setText(("Các phần vẫn nguyên — bấm Ghép video đầy đủ để ghép lại."
+                               if joining else "Giọng đã tạo được giữ lại.") if cancelled else msg)
         self.status.setText("Các câu đã tạo giọng được giữ lại cho lần dựng sau.")
         self.append_log(f"✕ {msg}")
         self.render_btn.setEnabled(True)
@@ -882,8 +884,11 @@ class RenderView(QWidget):
                 return
             dest = self._ask_dest(f"Xuất .{kind}", f".vi.{kind}", f"*.{kind}")
             if dest is not None:
-                shutil.copyfile(src, dest)
-                self.res_status.setText(f"Đã xuất: {dest.name}")
+                try:
+                    shutil.copyfile(src, dest)
+                    self.res_status.setText(f"Đã xuất: {dest.name}")
+                except OSError as e:
+                    self.res_status.setText(f"Không xuất được: {e}")
             return
         if self._job is None:
             return

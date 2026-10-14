@@ -131,3 +131,19 @@ def test_cloud_ocr_end_to_end_crops_the_band_and_keys_the_checkpoint(fake, monke
     monkeypatch.setattr(ocr, "_build_ocr", lambda: Local())
     ocr.extract_hardsubs(job, engine="rapidocr")
     assert len(reads) == len(frames)
+
+
+def test_cloud_reads_have_no_invented_confidence(fake, monkeypatch, tmp_path):
+    """Review: cloud cues carried conf 1.0, so 'AI sửa lỗi OCR' skipped everything as
+    'no suspect line'. They now carry no score and the proofread covers every line."""
+    job = Job(id="n", work_dir=tmp_path / "n")
+    job.source_video.write_bytes(b"v")
+    frames = [np.zeros((426, 720, 3), np.uint8) for _ in range(6)]
+    monkeypatch.setattr(ocr, "_frame_stream", lambda src, vf, start=0.0: iter(frames[int(start * FPS):]))
+    monkeypatch.setattr("app.pipeline.assemble.probe_duration", lambda p: len(frames) / FPS)
+    monkeypatch.setattr(ocr, "_ensure_region", lambda job, crop, log: None)
+    fake(lambda k: "你好世界")
+    ocr.extract_hardsubs(job, engine="vision_llm")
+    rep = json.loads((job.work_dir / "ocr_report.json").read_text(encoding="utf-8"))
+    assert rep and all(r["conf"] is None and r["suspect"] is False for r in rep)
+    assert ocr._suspect_indexes(job, len(rep)) is None          # → proofread every line

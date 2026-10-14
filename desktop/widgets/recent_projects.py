@@ -172,8 +172,7 @@ class _GroupRow(QFrame):
         title.setMaximumWidth(210)
         col.addWidget(title)
         ready = sum(1 for pt in self._parts if pt.get("has_vi"))
-        self.badge = (badge("Đã ghép video đầy đủ", "ok") if info.get("has_output") else
-                      badge(f"{self._total} phần · {ready}/{self._total} có phụ đề", "purple"))
+        self.badge = badge(f"{self._total} phần · {ready}/{self._total} có phụ đề", "purple")
         col.addWidget(self.badge, 0, Qt.AlignLeft)
         self.sub = label("Video dài, đã chia phần", "small")
         col.addWidget(self.sub)
@@ -232,7 +231,12 @@ class _GroupRow(QFrame):
                                      else "chờ bạn duyệt" if r["has_vi"] else "đang xử lý")
         if s.get("next"):
             self._next = s["next"]
-        if not s.get("joined"):
+        if s.get("joined"):
+            self.badge.setText("Đã ghép video đầy đủ")
+            self.badge.setObjectName("badgeOk")
+            self.badge.style().unpolish(self.badge)
+            self.badge.style().polish(self.badge)
+        else:
             self.badge.setText(f"{n} phần · {approved}/{n} đã duyệt · {rendered}/{n} đã dựng")
             if self._joinable:
                 self.badge.setObjectName("badgeOk")

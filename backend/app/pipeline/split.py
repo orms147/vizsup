@@ -11,7 +11,11 @@ Cutting (2026-10-14):
 - The PICTURE is cut with stream copy (lossless, one read of the file) by ffmpeg's segment
   muxer, which splits exactly at the given keyframes: the parts' video packets add up to
   the source's, nothing duplicated or lost (a per-part ``-ss/-t`` copy overlapped
-  ~0.2-0.5 s at every cut — B-frame reordering). A cut can only be a video KEYFRAME.
+  ~0.2-0.5 s at every cut — B-frame reordering). A cut can only be a video KEYFRAME, and
+  it is given by FRAME NUMBER (``-segment_frames``): cut TIMES are compared against an
+  origin that depends on the container — with B-frames (DTS ahead of PTS) or a picture
+  that starts after the sound (some TS files) the muxer skipped to the next keyframe,
+  1.5-7 s later.
 - The SOUND of each part is cut from the source sample-accurately over the same span and
   re-encoded once (AAC), starting with the part's first frame. Copying it through the
   segment muxer put part 1's picture 0.161 s behind its sound on a real Douyin video (the
@@ -54,6 +58,7 @@ SEARCH = 180.0            # a cut may move this far from its planned boundary
 MIN_GAP = 0.35            # a voice gap must last this long to cut in
 EDGE = 0.1                # …and the keyframe must sit this far inside it
 GROUP_FILE = "group.json"
+TMP_OUT = "output.joining.mp4"
 
 Span = tuple[float, float]
 
@@ -124,28 +129,25 @@ def start_time(src: Path) -> float:
         return 0.0
 
 
-def keyframes(src: Path, lo: float, hi: float, *, offset: float = 0.0) -> list[tuple[float, float]]:
-    """Video keyframes in [lo, hi] as (pts, dts) seconds relative to the file start, from
-    packet flags — no decoding, fast even on hours of video. The DTS matters: with
-    B-frames it runs ~0.1 s ahead of the PTS, and the segment muxer compares cut times
-    against it (asked to cut at a keyframe's PTS it skipped to the NEXT keyframe, 7 s
-    later, on a real Douyin video)."""
-    a, b = max(0.0, lo + offset), hi + offset
+def keyframe_index(src: Path, *, offset: float = 0.0) -> tuple[list[tuple[float, int]], float]:
+    """All video keyframes as (pts seconds relative to the file start, packet number in
+    decoding order), and the first frame's pts — one ffprobe pass over the packets, no
+    decoding (~0.1 s for 10k packets, a few seconds for hours of video)."""
     r = subprocess.run([ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
-                        "-read_intervals", f"{a:.3f}%{b:.3f}",
-                        "-show_entries", "packet=pts_time,dts_time,flags", "-of", "csv=p=0",
-                        str(src)], capture_output=True, text=True)
-    out: dict[float, float] = {}
-    for line in r.stdout.splitlines():
+                        "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(src)],
+                       capture_output=True, text=True)
+    out: list[tuple[float, int]] = []
+    first = None
+    for n, line in enumerate(r.stdout.splitlines()):
         parts = line.strip().split(",")
-        if len(parts) >= 3 and "K" in parts[2]:
-            try:
-                pts = round(float(parts[0]) - offset, 3)
-                dts = float(parts[1]) - offset if parts[1] not in ("", "N/A") else pts
-            except ValueError:
-                continue
-            out[pts] = round(dts, 3)
-    return sorted(out.items())
+        try:
+            pts = float(parts[0]) - offset
+        except (ValueError, IndexError):
+            continue
+        first = pts if first is None else min(first, pts)
+        if len(parts) >= 2 and "K" in parts[1]:
+            out.append((round(pts, 3), n))
+    return sorted(out), round(first or 0.0, 3)
 
 
 _SILENCE = re.compile(r"silence_(start|end): (-?[\d.]+)")
@@ -184,18 +186,19 @@ def _probe_duration(path: Path) -> float:
     return probe_duration(path)
 
 
-def _segment(src: Path, out_dir: Path, cuts: list[float], *, total: float,
+def _segment(src: Path, out_dir: Path, frames: list[int], *, total: float,
              progress: Callable[[float], None] | None = None,
              cancel: Callable[[], bool] | None = None) -> list[Path]:
     """One stream-copy pass of the source PICTURE into ``out_dir/video_###.mp4``, split
-    at ``cuts`` (the sound is added per part by :func:`_add_sound`)."""
+    at the keyframes with these packet numbers (the sound is added per part by
+    :func:`_add_sound`)."""
     from app.pipeline.assemble import _run_ffmpeg
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.mp4"):
         old.unlink()
     cmd = [ffmpeg_bin(), "-y", "-i", str(src), "-map", "0:v:0", "-c", "copy",
-           "-f", "segment", "-segment_times", ",".join(f"{c:.3f}" for c in cuts),
+           "-f", "segment", "-segment_frames", ",".join(str(f) for f in frames),
            "-reset_timestamps", "1", "-segment_format_options", "movflags=+faststart",
            "video_%03d.mp4"]
     _run_ffmpeg(cmd, out_dir, total=total, progress=progress, cancel=cancel)
@@ -307,12 +310,11 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
     spans = vad.spans_for(src, job.work_dir, log=say)
     gaps = voice_gaps(spans, duration) if spans is not None else silence_gaps(src)
     offset = start_time(src)
-    dts_of: dict[float, float] = {}
+    index, first_frame = keyframe_index(src, offset=offset)
+    number = dict(index)
 
     def keyframes_in(lo: float, hi: float) -> list[float]:
-        found = keyframes(src, lo, hi, offset=offset)
-        dts_of.update(found)
-        return [pts for pts, _dts in found]
+        return [pts for pts, _n in index if lo <= pts <= hi]
 
     cuts = plan_cuts(duration, gaps, keyframes_in, target=target)
     for c in cuts:
@@ -320,21 +322,20 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
             say(f"⚠ Quanh {c.t / 60:.0f} phút không có chỗ lặng trùng keyframe — cắt ở "
                 f"{c.t:.1f} s, có thể giữa một câu")
     tmp = job.work_dir / "_parts"
-    # just before the keyframe's DTS: the segment muxer then cuts exactly at it
-    at = [min(c.t, dts_of.get(c.t, c.t)) - 0.002 for c in cuts]
-    files = _segment(src, tmp, at, total=duration, cancel=cancel,
+    files = _segment(src, tmp, [number[c.t] for c in cuts], total=duration, cancel=cancel,
                      progress=lambda f: tick(0.9 * f, f"Cắt video thành {n} phần · {int(f * 100)}%"))
     if len(files) != n:
         raise RuntimeError(f"Cắt video ra {len(files)} phần thay vì {n}.")
     vdurs = [_video_duration(f) for f in files]
-    real = [round(sum(vdurs[:k]), 3) for k in range(1, n)]   # where the parts really start
+    # where the parts really start, on the source's timeline (the picture may start late)
+    real = [round(first_frame + sum(vdurs[:k]), 3) for k in range(1, n)]
     for c, r in zip(cuts, real, strict=True):
-        if abs(c.t - r) > 0.3:
+        if abs(c.t - r) > 0.05:
             say(f"⚠ Điểm cắt thật {r:.2f} s lệch dự tính {c.t:.2f} s")
             c.in_gap = any(a <= r <= b for a, b in gaps)
     gid = job.id
     parts = []
-    starts = [0.0, *real]
+    starts = [max(0.0, first_frame), *real]
     for k, start in enumerate(starts):
         if cancel and cancel():
             raise InterruptedError("Đã hủy.")
@@ -405,6 +406,19 @@ def readiness(group: dict, storage: Path) -> list[dict]:
     return out
 
 
+def joined_is_current(group_dir: Path, storage: Path) -> bool:
+    """The joined video exists and no part was re-rendered (or un-rendered) since."""
+    out = group_dir / "output.mp4"
+    group = load_group(group_dir)
+    if not out.exists() or group is None:
+        return False
+    ready = readiness(group, storage)
+    if not ready or not all(r["rendered"] for r in ready):
+        return False
+    t = out.stat().st_mtime
+    return all((storage / r["id"] / "output.mp4").stat().st_mtime <= t for r in ready)
+
+
 def _streams(path: Path) -> list[dict]:
     r = subprocess.run([ffprobe_bin(), "-v", "error", "-show_entries",
                         "stream=codec_type,codec_name,profile,width,height,pix_fmt,r_frame_rate,"
@@ -457,13 +471,14 @@ def join(group_dir: Path, storage: Path, *,
     write_srt(merged, group_dir / "vi.srt")
 
     lst = group_dir / "join.txt"
-    lst.write_text("".join(f"file '{o.resolve().as_posix()}'\n" for o in outs), encoding="utf-8")
+    lst.write_text("".join("file '" + o.resolve().as_posix().replace("'", "'\\''") + "'\n"
+                           for o in outs), encoding="utf-8")
     total = sum(durations)
     if same_params(outs):
         say(f"Ghép {len(outs)} phần (không mã hóa lại)…")
         cmd = [ffmpeg_bin(), "-y", "-f", "concat", "-safe", "0", "-i", "join.txt",
                "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart",
-               "output.mp4"]
+               TMP_OUT]
     else:
         say(f"Các phần khác thông số mã hóa — ghép và mã hóa lại {len(outs)} phần…")
         first = next((s for s in _streams(outs[0]) if s.get("codec_type") == "video"), {})
@@ -480,9 +495,15 @@ def join(group_dir: Path, storage: Path, *,
         (group_dir / "join_graph.txt").write_text(graph, encoding="utf-8")
         cmd += ["-filter_complex_script", "join_graph.txt", "-map", "[v]", "-map", "[a]",
                 *assemble._video_args(assemble._video_encoder(), False),
-                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "output.mp4"]
-    assemble._run_ffmpeg(cmd, group_dir, total=total, cancel=cancel,
-                         progress=lambda f: tick(f, f"Ghép video · {int(f * 100)}%"))
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", TMP_OUT]
+    tmp = group_dir / TMP_OUT
+    try:
+        assemble._run_ffmpeg(cmd, group_dir, total=total, cancel=cancel,
+                             progress=lambda f: tick(f, f"Ghép video · {int(f * 100)}%"))
+    except BaseException:
+        tmp.unlink(missing_ok=True)         # a cancelled / failed join leaves no half file
+        raise
+    tmp.replace(group_dir / "output.mp4")   # the previous good join stays until now
     say(f"✓ Ghép xong: {len(outs)} phần · {total / 60:.0f} phút · {len(merged)} câu phụ đề")
     return group_dir / "output.mp4"
 

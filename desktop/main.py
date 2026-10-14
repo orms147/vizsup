@@ -96,6 +96,8 @@ class MainWindow(QMainWindow):
         self.input.queueRequested.connect(self._start_queue)
         self._queue: list[dict] = []     # E-9: opts waiting to run to the gate
         self._queue_total = 0
+        self._queue_ok = self._queue_failed = 0   # outcomes of this queue (for its summary)
+        self._queue_cancelled = False
         self._queue_job: Job | None = None   # the queued job running now (not self.job)
         self.settings_view.saved.connect(self._on_settings_saved)
         self.settings_view.closed.connect(
@@ -489,11 +491,18 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, self._run_next_queued)
             return
         if not self._queue:
-            if self._queue_total:
-                done = self._queue_total
-                self.status.set_status(f"Xong hàng đợi: {done} video — mở ở “Tiếp tục dự án”", "ok")
-                self._notify("Xong hàng đợi", f"{done} video đã tới bước duyệt")
+            ok, failed = self._queue_ok, self._queue_failed
+            if self._queue_cancelled:
+                self.status.set_status(f"Đã dừng hàng đợi — {ok} mục đã tới bước duyệt", "warn")
+            elif self._queue_total and (ok or failed):
+                tail = f" · {failed} mục lỗi" if failed else ""
+                self.status.set_status(f"Xong hàng đợi: {ok} mục tới bước duyệt{tail} — mở ở "
+                                       f"“Tiếp tục dự án”", "warn" if failed else "ok")
+                self._notify("Xong hàng đợi", f"{ok} mục đã tới bước duyệt{tail}",
+                             "err" if failed and not ok else "ok")
             self._queue_total, self._queue_job = 0, None
+            self._queue_ok = self._queue_failed = 0
+            self._queue_cancelled = False
             return
         opts = self._queue.pop(0)
         loaded = store.load_job(opts["_job_id"]) if opts.get("_job_id") else None
@@ -543,7 +552,7 @@ class MainWindow(QMainWindow):
             loaded = store.load_job(p["id"])
             if loaded is None or loaded[0].vi_srt.exists() or p["id"] in queued or p["id"] == running:
                 continue
-            opts = dict(loaded[1])
+            opts = dict(loaded[1] or group.get("opts") or {})   # a part saved without options
             opts["_job_id"] = p["id"]
             items.append(opts)
         if not items:
@@ -608,6 +617,7 @@ class MainWindow(QMainWindow):
             self.input.refresh_recent()
 
     def _on_queued_gate(self, job: Job, opts: dict) -> None:
+        self._queue_ok += 1
         self.input.set_done()
         store.save_job(job, opts, "await_edit")
         self.input.refresh_recent()
@@ -615,6 +625,10 @@ class MainWindow(QMainWindow):
         self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
 
     def _on_queued_failed(self, job: Job, opts: dict, msg: str) -> None:
+        if msg.strip().startswith("Đã hủy"):
+            self._queue_cancelled = True
+        else:
+            self._queue_failed += 1
         self.input.show_error(msg)
         self.input.refresh_recent()
         if not msg.strip().startswith("Đã hủy"):
@@ -665,6 +679,8 @@ class MainWindow(QMainWindow):
         # reset happens on the worker's failed/finished signal (cancel is only
         # honored between stages, so the current stage runs to completion).
         if self._busy() and self._worker:
+            if self._queue or self._queue_job is not None:
+                self._queue_cancelled = True
             if self._queue:                       # E-9: Hủy stops the whole queue
                 self.input.append_log(f"⏹ Bỏ {len(self._queue)} video còn chờ trong hàng đợi")
                 self._queue.clear()
