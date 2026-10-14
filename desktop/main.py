@@ -76,6 +76,9 @@ class MainWindow(QMainWindow):
         self.input.cancelRequested.connect(self._cancel)
         self.input.resumeRequested.connect(self._resume)
         self.input.deleteRequested.connect(self._delete_job)
+        self.input.groupResumeRequested.connect(self._resume_group)
+        self.input.groupJoinRequested.connect(self._start_join)
+        self.input.groupDeleteRequested.connect(self._delete_group)
         self.editor.dirtyChanged.connect(self._on_dirty)
         self.editor.saveFailed.connect(self._on_save_failed)
         self.editor.message.connect(self.status.set_status)
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
         self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
         self.render.approveRequested.connect(self._approve)
+        self.render.joinRequested.connect(self._start_join)
         self.editor.previewStyleRequested.connect(self._preview_style)
         self.editor.glossaryRequested.connect(lambda: self._open_glossary(job=True))
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
@@ -199,6 +203,7 @@ class MainWindow(QMainWindow):
             "log": self.input.append_log,
             "failed": self._on_gate_failed,
             "gate_reached": self._on_gate,
+            "split_done": self._on_split_done,
         })
 
     def _on_gate_failed(self, msg: str) -> None:
@@ -222,6 +227,8 @@ class MainWindow(QMainWindow):
         from pathlib import Path
 
         self.render.show_done(path)
+        if self.job is not None:
+            self.render.set_group(_group_status(self.job))
         quick = Path(path).name == "preview.mp4"
         self._notify("Bản xem nhanh đã sẵn sàng" if quick else "Đã dựng xong video",
                      Path(path).name)
@@ -236,6 +243,9 @@ class MainWindow(QMainWindow):
         try:
             if self._queue_job is None:          # the queue's progress card is not ours
                 self.input.set_done()
+            from app.pipeline import split
+
+            split.inherit_style(self.job, settings.vizsup_storage_dir)
             self.editor.load(self.job)
             self.editor.set_context(self.opts)  # tts/voice/translator for preview & shorten
             store.debug("on_gate: editor.load done")
@@ -369,6 +379,7 @@ class MainWindow(QMainWindow):
         from app.pipeline import speakers
 
         self.render.suggest_original(speakers.singing(self.job))
+        self.render.set_group(_group_status(self.job))
         self.render.set_style(self.editor.get_style(), self.editor.get_size_px(),
                               self.editor.get_font())
 
@@ -463,8 +474,11 @@ class MainWindow(QMainWindow):
 
     # --- worker plumbing -----------------------------------------------------
     # --- E-9: several videos, one after another ------------------------------------
-    def _start_queue(self, items: list[dict]) -> None:
-        self._queue.extend(items)
+    def _start_queue(self, items: list[dict], *, front: bool = False) -> None:
+        if front:                                 # a split video's parts run next
+            self._queue[:0] = items
+        else:
+            self._queue.extend(items)
         self._queue_total += len(items)
         self.status.set_status(f"Hàng đợi: {len(self._queue)} video chờ xử lý", "busy")
         if not self._busy():
@@ -482,13 +496,19 @@ class MainWindow(QMainWindow):
             self._queue_total, self._queue_job = 0, None
             return
         opts = self._queue.pop(0)
-        jid = uuid.uuid4().hex[:12]
-        job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
+        loaded = store.load_job(opts["_job_id"]) if opts.get("_job_id") else None
+        if loaded is not None:                    # a part of a split video: folder exists
+            job = loaded[0]
+        else:
+            jid = uuid.uuid4().hex[:12]
+            job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
         self._queue_job = job
         store.save_job(job, opts, "running")
         k = self._queue_total - len(self._queue)
         self.input.set_busy(True)
-        self.input.append_log(f"▶ Hàng đợi {k}/{self._queue_total}: {opts.get('url') or opts.get('file')}")
+        what = job.metadata.get("title") if opts.get("_job_id") else None
+        self.input.append_log(f"▶ Hàng đợi {k}/{self._queue_total}: "
+                              f"{what or opts.get('url') or opts.get('file')}")
         self.status.set_status(f"Hàng đợi {k}/{self._queue_total} — bạn vẫn mở được video đã xong",
                                "busy")
         self._run("run_to_gate", opts, {
@@ -497,7 +517,95 @@ class MainWindow(QMainWindow):
             "log": self.input.append_log,
             "failed": lambda m, j=job, o=opts: self._on_queued_failed(j, o, m),
             "gate_reached": lambda j=job, o=opts: self._on_queued_gate(j, o),
+            "split_done": self._on_split_done,
         }, job=job)
+
+    def _on_split_done(self, items: list) -> None:
+        """A long video became parts: queue them first, keep the app free meanwhile."""
+        self.input.set_done()
+        self.input.refresh_recent()
+        self._start_queue(list(items), front=True)
+        self.status.set_status(f"Đã chia {len(items)} phần — đang xử lý lần lượt, phần nào xong "
+                               f"sẽ báo để bạn duyệt", "busy")
+        self._notify("Đã chia video dài", f"{len(items)} phần ~30 phút — phần 1 xong sẽ báo")
+
+    def _resume_group(self, gid: str) -> None:
+        """Queue every part of a split video that has not reached the gate yet."""
+        from app.pipeline import split
+
+        group = split.load_group(settings.vizsup_storage_dir / gid)
+        if not group:
+            return
+        queued = {o.get("_job_id") for o in self._queue}
+        running = self._queue_job.id if self._queue_job is not None else None
+        items = []
+        for p in sorted(group["parts"], key=lambda x: x["index"]):
+            loaded = store.load_job(p["id"])
+            if loaded is None or loaded[0].vi_srt.exists() or p["id"] in queued or p["id"] == running:
+                continue
+            opts = dict(loaded[1])
+            opts["_job_id"] = p["id"]
+            items.append(opts)
+        if not items:
+            self.status.set_status("Mọi phần đã tới bước duyệt (hoặc đang chạy).", "ok")
+            return
+        self._start_queue(items)
+
+    def _start_join(self, gid: str) -> None:
+        """Join a split video's rendered parts into one MP4 (+ merged .srt)."""
+        from app.pipeline import split
+
+        if self._busy():
+            self.status.set_status("Đang bận — ghép video khi tác vụ hiện tại xong.", "warn")
+            return
+        group = split.load_group(settings.vizsup_storage_dir / gid)
+        if not group:
+            return
+        ready = split.readiness(group, settings.vizsup_storage_dir)
+        missing = [str(r["index"]) for r in ready if not r["rendered"]]
+        if missing:
+            self.status.set_status("Chưa ghép được — còn phần chưa duyệt/dựng: " + ", ".join(missing),
+                                   "warn")
+            return
+        n = len(ready)
+        self.render.set_project(group.get("title") or gid, f"Video đầy đủ · {n} phần")
+        self.stack.setCurrentIndex(RENDER)
+        self.render.start_join(n)
+        self._set_render_locked(True)
+        self._run("run_join", {"_group": gid}, {
+            "stage_started": self._on_render_stage,
+            "progress": self.render.set_progress,
+            "log": self.render.append_log,
+            "failed": self._on_render_failed,
+            "render_done": lambda path, t=group.get("title") or gid: self._on_join_done(path, t),
+        }, job=Job(id=gid, work_dir=settings.vizsup_storage_dir / gid))
+
+    def _on_join_done(self, path: str, title: str) -> None:
+        self.render.show_joined(path, title)
+        self.input.refresh_recent()
+        self._notify("Đã ghép xong video đầy đủ", title[:120])
+
+    def _delete_group(self, gid: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.pipeline import split
+
+        if self._busy():
+            self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
+            return
+        group = split.load_group(settings.vizsup_storage_dir / gid) or {"parts": []}
+        ids = [p["id"] for p in group["parts"]]
+        if self.job is not None and self.job.id in ids:
+            QMessageBox.information(self, "Xóa video", "Một phần của video này đang mở — quay lại "
+                                    "màn hình đầu trước khi xóa.")
+            return
+        if QMessageBox.question(self, "Xóa video",
+                                f"Xóa video gốc và cả {len(ids)} phần (phụ đề, bản dựng)?") \
+                == QMessageBox.StandardButton.Yes:
+            self._queue = [o for o in self._queue if o.get("_job_id") not in ids]
+            for jid in [*ids, gid]:
+                store.delete_job(jid)
+            self.input.refresh_recent()
 
     def _on_queued_gate(self, job: Job, opts: dict) -> None:
         self.input.set_done()
@@ -549,7 +657,7 @@ class MainWindow(QMainWindow):
         # single unlock point for EVERY render exit path (done/failed/cancelled) —
         # per-handler unlocks would risk a soft-locked app on a missed path
         self._set_render_locked(False)
-        if self._queue_job is not None:          # E-9: on to the next queued video
+        if self._queue_job is not None or self._queue:   # E-9: on to the next queued video
             QTimer.singleShot(400, self._run_next_queued)
 
     def _cancel(self) -> None:
@@ -706,6 +814,22 @@ def _install_exit_tracing(app) -> None:
     tick.start(500)
     app.aboutToQuit.connect(lambda: store.debug("app aboutToQuit"))
     atexit.register(lambda: store.debug("process exiting (atexit)"))
+
+
+def _group_status(job: Job) -> dict | None:
+    """``{id, index, total, rendered, approved}`` for a part of a split video, else None."""
+    from app.pipeline import split
+
+    g = split.group_info(job)
+    if not g:
+        return None
+    group = split.load_group(settings.vizsup_storage_dir / str(g["id"]))
+    if not group:
+        return None
+    ready = split.readiness(group, settings.vizsup_storage_dir)
+    return {"id": g["id"], "index": g.get("index"), "total": len(ready),
+            "rendered": sum(r["rendered"] for r in ready),
+            "approved": sum(r["approved"] for r in ready)}
 
 
 def main() -> int:

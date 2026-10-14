@@ -115,6 +115,9 @@ class InputView(QWidget):
     glossaryRequested = Signal()   # open the glossary dialog (global scope)
     settingsRequested = Signal()   # "Thêm khóa" on the missing-key card
     queueRequested = Signal(list)  # E-9: several links / files → run them one by one
+    groupResumeRequested = Signal(str)   # a split video: queue its unfinished parts
+    groupJoinRequested = Signal(str)     # a split video: join the rendered parts
+    groupDeleteRequested = Signal(str)   # a split video: delete it and all its parts
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
@@ -204,6 +207,9 @@ class InputView(QWidget):
         self.recent = RecentProjects()
         self.recent.openRequested.connect(self.resumeRequested)
         self.recent.deleteRequested.connect(self.deleteRequested)
+        self.recent.groupResumeRequested.connect(self.groupResumeRequested)
+        self.recent.groupJoinRequested.connect(self.groupJoinRequested)
+        self.recent.groupDeleteRequested.connect(self.groupDeleteRequested)
         aside = QWidget()
         aside.setFixedWidth(360)
         al = QVBoxLayout(aside)
@@ -432,9 +438,15 @@ class InputView(QWidget):
         g.addWidget(self.ai_frames, 7, 1)
         g.addWidget(self.extract_terms, 6, 0)
         g.addWidget(self.ocr_proofread, 6, 1)
+        self.split_long = QCheckBox("Chia video dài thành phần ~30 phút")
+        self.split_long.setToolTip(
+            "Video dài hơn 45 phút được cắt (ở chỗ lặng, không cắt giữa câu, không mã hóa lại) "
+            "thành các phần ~30 phút chạy lần lượt: duyệt phần 1 trong lúc phần sau còn chạy, "
+            "dựng từng phần rồi ghép lại thành một video. Dùng chung ngữ cảnh và thuật ngữ.")
+        g.addWidget(self.split_long, 8, 0, 1, 2)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
-        g.addWidget(self.asr_note, 8, 0, 1, 2)
+        g.addWidget(self.asr_note, 9, 0, 1, 2)
         for w in (self.draft, self.refine, self.asr, self.tts):
             w.currentIndexChanged.connect(self._update_defaults)
         return box
@@ -463,6 +475,7 @@ class InputView(QWidget):
         self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
+        self.split_long.setChecked(bool(st.get("split_long", True)))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -561,6 +574,7 @@ class InputView(QWidget):
             "auto_snap": self.auto_snap.isChecked(),
             "ai_review": self.ai_review.isChecked(),
             "ai_frames": self.ai_frames.isChecked(),
+            "split_long": self.split_long.isChecked(),
         }
         note = self.context_note.toPlainText().strip()
         if note:

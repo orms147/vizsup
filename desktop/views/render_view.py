@@ -156,6 +156,7 @@ class RenderView(QWidget):
     backRequested = Signal()
     cancelRequested = Signal()
     approveRequested = Signal()        # locked state → re-approve
+    joinRequested = Signal(str)        # a split video's group id → join the rendered parts
 
     def __init__(self) -> None:
         super().__init__()
@@ -164,6 +165,8 @@ class RenderView(QWidget):
         self._showing_quick = False    # the result pane holds preview.mp4, not output.mp4
         self._title = ""
         self._saved: str | None = None  # last copy saved with "Lưu video…"
+        self._group: dict | None = None  # this job is part k/n of a split video
+        self._joined: Path | None = None  # the result pane shows a joined full video
         self._job = None
         self._has_real_voices = False
         self._tts = "edge"             # provider key (registry)
@@ -332,6 +335,20 @@ class RenderView(QWidget):
         self.again_lbl = label("Lần dựng sau chỉ tạo lại giọng cho câu đã sửa.", "small")
         self.again_lbl.setVisible(False)
         fl.addWidget(self.again_lbl)
+        self.group_box = QFrame()
+        gb = QHBoxLayout(self.group_box)
+        gb.setContentsMargins(0, 4, 0, 0)
+        gb.setSpacing(8)
+        self.group_lbl = label("", "small")
+        self.group_lbl.setWordWrap(True)
+        gb.addWidget(self.group_lbl, 1)
+        self.join_btn = button("Ghép video đầy đủ", "Merge", variant="ghost", small=True,
+                               tip="Nối mọi phần đã dựng thành một video, phụ đề .srt nối theo")
+        self.join_btn.clicked.connect(
+            lambda: self._group and self.joinRequested.emit(str(self._group["id"])))
+        gb.addWidget(self.join_btn)
+        self.group_box.setVisible(False)
+        fl.addWidget(self.group_box)
         v.addWidget(foot)
         return panel
 
@@ -515,6 +532,7 @@ class RenderView(QWidget):
     def set_job(self, job, *, cues: int, tts: str = "") -> None:
         if job is not self._job:
             self._suggested = False
+            self._joined = None
             self._out = None
             self._out_frame = "source"
             self._saved = None
@@ -535,6 +553,37 @@ class RenderView(QWidget):
     def set_approved(self, on: bool) -> None:
         self._approved = on
         self._update_lock()
+
+    def set_group(self, status: dict | None) -> None:
+        """Part k/n of a split video: progress of the whole video + the join button."""
+        self._group = status
+        self.group_box.setVisible(bool(status))
+        if not status:
+            return
+        n, done = int(status.get("total") or 0), int(status.get("rendered") or 0)
+        self.group_lbl.setText(f"Phần {status.get('index')}/{n} của video dài · {done}/{n} phần "
+                               f"đã dựng · {int(status.get('approved') or 0)}/{n} đã duyệt")
+        self.join_btn.setEnabled(n > 0 and done == n)
+        self.join_btn.setToolTip("Nối mọi phần đã dựng thành một video, phụ đề .srt nối theo"
+                                 if done == n else f"Còn {n - done} phần chưa dựng (hoặc đã sửa sau "
+                                 f"khi dựng)")
+
+    def start_join(self, n: int) -> None:
+        self._start_progress({})
+        self.stage_rows["tts"].setVisible(False)
+        self.stage_rows["assemble"]._num = 1
+        self.stage_rows["assemble"].set_state("active", f"Nối {n} phần thành một video")
+        self.p_title.setText("Đang ghép video đầy đủ")
+        self.status.setText("Video đầy đủ được lưu trong thư mục của video gốc.")
+
+    def show_joined(self, path: str, title: str) -> None:
+        self.stage_rows["tts"].setVisible(True)
+        self.show_done(path)
+        self._joined = Path(path)
+        self._title = title
+        self._result_title.setText("Video đầy đủ đã sẵn sàng (đã ghép các phần)")
+        self.mkv_action.setEnabled(False)
+        self.mkv_action.setToolTip("Chưa hỗ trợ cho video ghép — dùng .srt ghép")
 
     def _update_lock(self) -> None:
         ok = self._approved
@@ -646,6 +695,7 @@ class RenderView(QWidget):
         self.renderRequested.emit(opts)
 
     def _start_progress(self, opts: dict) -> None:
+        self._joined = None
         self.log.clear()
         self.preview.pause()
         self.result.pause()
@@ -825,6 +875,16 @@ class RenderView(QWidget):
         self._bg.run(lambda: str(shutil.copyfile(src, dest)), done, fail)
 
     def _export(self, kind: str) -> None:
+        if self._joined is not None:                       # the joined full video
+            src = self._joined.parent / "vi.srt"
+            if kind != "srt":
+                self.res_status.setText("Video ghép chỉ có phụ đề .srt (đã nối các phần).")
+                return
+            dest = self._ask_dest(f"Xuất .{kind}", f".vi.{kind}", f"*.{kind}")
+            if dest is not None:
+                shutil.copyfile(src, dest)
+                self.res_status.setText(f"Đã xuất: {dest.name}")
+            return
         if self._job is None:
             return
         src = self._job.vi_srt if kind == "srt" else self._job.subs_ass

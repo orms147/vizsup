@@ -191,6 +191,23 @@ def cmd_retime(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_join(args: argparse.Namespace) -> int:
+    """Join a split long video's rendered parts (the parent folder holds group.json)."""
+    from app.pipeline import split
+
+    gdir = Path(args.group).resolve()
+    if split.load_group(gdir) is None:
+        print(f"error: no group.json in {gdir}", file=sys.stderr)
+        return 2
+    try:
+        out = split.join(gdir, gdir.parent, log=print)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"[join] done -> {out} (+ {gdir / 'vi.srt'})")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     work_dir = Path(args.workdir)
     if not work_dir.exists():
@@ -302,6 +319,9 @@ def build_parser() -> argparse.ArgumentParser:
     rt = sub.add_parser("retime", help="re-time an existing job's lines to the audio (text kept)")
     rt.add_argument("--workdir", required=True, help="job working directory")
     rt.set_defaults(func=cmd_retime)
+    jn = sub.add_parser("join", help="join a split long video's rendered parts into one MP4")
+    jn.add_argument("--group", required=True, help="the original video's folder (has group.json)")
+    jn.set_defaults(func=cmd_join)
 
     pr.set_defaults(func=cmd_providers)
 

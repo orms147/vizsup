@@ -1,6 +1,10 @@
 """"Tiếp tục dự án" (v2 start screen aside): recent projects with a thumbnail, a
 status badge (Chờ bạn duyệt / Đã duyệt / Đã dựng), a detail line and a ··· menu.
-Rows fill in their thumbnail + review counts from a background summary pass."""
+Rows fill in their thumbnail + review counts from a background summary pass.
+
+A long video split into parts is ONE row (_GroupRow): its progress (k/n đã duyệt ·
+m/n đã dựng), a click opens the part that needs you next, and the ··· menu lists the
+parts, re-queues unfinished ones and joins the rendered ones."""
 from __future__ import annotations
 
 import time
@@ -123,14 +127,129 @@ class _Row(QFrame):
         self.sub.setText(" · ".join(p for p in (first, dur, s.get("usage", "")) if p))
 
 
+class _GroupRow(QFrame):
+    """One split video: its parts behind a single row."""
+
+    openRequested = Signal(str)          # a part's job id
+    resumeRequested = Signal(str)        # group id
+    joinRequested = Signal(str)
+    deleteRequested = Signal(str)
+    folderRequested = Signal(str)
+
+    def __init__(self, info: dict) -> None:
+        super().__init__()
+        self.setObjectName("recentRow")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(
+            f"QFrame#recentRow{{background:transparent;border:none;border-bottom:1px solid "
+            f"{V2['line_soft']};border-radius:0;}}"
+            f"QFrame#recentRow:hover{{background:{V2['panel']};}}")
+        self._id = info["id"]
+        self._parts = info.get("parts") or []
+        self._total = int(info.get("total") or len(self._parts))
+        self._next = next((pt["id"] for pt in self._parts if pt.get("has_vi")), None)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 12, 0, 14)
+        h.setSpacing(12)
+        self.thumb = QLabel()
+        self.thumb.setFixedSize(THUMB_W, THUMB_H)
+        self.thumb.setAlignment(Qt.AlignCenter)
+        self.thumb.setPixmap(pixmap("FileVideo", V2["muted"], 18))
+        self.thumb.setStyleSheet(f"background:{V2['raised']};border-radius:5px;")
+        h.addWidget(self.thumb, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        title = label(short_title(info.get("title") or info["id"]), "h3")
+        title.setToolTip(info.get("title") or "")
+        title.setMaximumWidth(210)
+        col.addWidget(title)
+        ready = sum(1 for pt in self._parts if pt.get("has_vi"))
+        self.badge = (badge("Đã ghép video đầy đủ", "ok") if info.get("has_output") else
+                      badge(f"{self._total} phần · {ready}/{self._total} có phụ đề", "purple"))
+        col.addWidget(self.badge, 0, Qt.AlignLeft)
+        self.sub = label("Video dài, đã chia phần", "small")
+        col.addWidget(self.sub)
+        col.addWidget(label(_when(info.get("mtime") or time.time()), "small"))
+        h.addLayout(col, 1)
+        more = icon_button("MoreHorizontal", "Thao tác video")
+        self._menu = QMenu(more)
+        more.setMenu(self._menu)
+        more.setPopupMode(more.ToolButtonPopupMode.InstantPopup)
+        h.addWidget(more, 0, Qt.AlignTop)
+        self._status: dict[str, str] = {}
+        self._joinable = False
+        self._build_menu()
+
+    def _build_menu(self) -> None:
+        m = self._menu
+        m.clear()
+        for pt in self._parts:
+            k = pt.get("index") or "?"
+            note = self._status.get(pt["id"]) or ("có phụ đề" if pt.get("has_vi") else "đang xử lý")
+            act = m.addAction(f"Mở phần {k}/{self._total} — {note}",
+                              lambda jid=pt["id"]: self.openRequested.emit(jid))
+            act.setEnabled(bool(pt.get("has_vi") or pt.get("unfinished")))
+        m.addSeparator()
+        m.addAction("Chạy tiếp các phần chưa xong", lambda: self.resumeRequested.emit(self._id))
+        join = m.addAction("Ghép video đầy đủ", lambda: self.joinRequested.emit(self._id))
+        join.setEnabled(self._joinable)
+        m.addAction("Mở thư mục", lambda: self.folderRequested.emit(self._id))
+        m.addSeparator()
+        m.addAction(f"Xóa cả video ({self._total} phần)…", lambda: self.deleteRequested.emit(self._id))
+
+    def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() == Qt.LeftButton and self.rect().contains(ev.position().toPoint()):
+            if self._next:
+                self.openRequested.emit(self._next)
+            else:
+                self.resumeRequested.emit(self._id)
+        super().mouseReleaseEvent(ev)
+
+    def apply_group(self, s: dict) -> None:
+        if s.get("thumb"):
+            pm = QPixmap(s["thumb"])
+            if not pm.isNull():
+                pm = pm.scaled(THUMB_W, THUMB_H, Qt.KeepAspectRatioByExpanding,
+                               Qt.SmoothTransformation)
+                x = max(0, (pm.width() - THUMB_W) // 2)
+                y = max(0, (pm.height() - THUMB_H) // 2)
+                self.thumb.setPixmap(pm.copy(x, y, THUMB_W, THUMB_H))
+        parts = s.get("parts") or []
+        n = len(parts) or self._total
+        approved = sum(1 for r in parts if r["approved"])
+        rendered = sum(1 for r in parts if r["rendered"])
+        self._joinable = bool(parts) and rendered == n
+        for r in parts:
+            self._status[r["id"]] = ("đã dựng" if r["rendered"] else "đã duyệt" if r["approved"]
+                                     else "chờ bạn duyệt" if r["has_vi"] else "đang xử lý")
+        if s.get("next"):
+            self._next = s["next"]
+        if not s.get("joined"):
+            self.badge.setText(f"{n} phần · {approved}/{n} đã duyệt · {rendered}/{n} đã dựng")
+            if self._joinable:
+                self.badge.setObjectName("badgeOk")
+                self.badge.style().unpolish(self.badge)
+                self.badge.style().polish(self.badge)
+        sec = int(s.get("duration") or 0)
+        dur = f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else             (fmt_time(sec, 0) if sec else "")
+        hint = "Sẵn sàng ghép — ··· → Ghép video đầy đủ" if self._joinable and not s.get("joined") \
+            else "Video dài, đã chia phần"
+        self.sub.setText(" · ".join(p for p in (hint, dur) if p))
+        self._build_menu()
+
+
 class RecentProjects(QWidget):
     openRequested = Signal(str)
     deleteRequested = Signal(str)
+    groupResumeRequested = Signal(str)
+    groupJoinRequested = Signal(str)
+    groupDeleteRequested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self._bg = BgRunner(self)
         self._rows: dict[str, _Row] = {}
+        self._groups: dict[str, _GroupRow] = {}
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -168,26 +287,44 @@ class RecentProjects(QWidget):
             if w:
                 w.deleteLater()
         self._rows.clear()
-        jobs = store.list_jobs(limit=6)
+        self._groups.clear()
+        jobs = store.list_projects(limit=6)
         self.count.setText(f"{len(jobs)} dự án")
         self._empty.setVisible(not jobs)
         for j in jobs:
+            if j.get("kind") == "group":
+                g = _GroupRow(j)
+                g.openRequested.connect(self.openRequested)
+                g.resumeRequested.connect(self.groupResumeRequested)
+                g.joinRequested.connect(self.groupJoinRequested)
+                g.deleteRequested.connect(self.groupDeleteRequested)
+                g.folderRequested.connect(lambda gid: _open_folder(store._storage() / gid))
+                self._groups[j["id"]] = g
+                self._list.addWidget(g)
+                continue
             row = _Row(j)
             row.openRequested.connect(self.openRequested)
             row.deleteRequested.connect(self.deleteRequested)
             row.folderRequested.connect(lambda jid: _open_folder(store._storage() / jid))
             self._rows[j["id"]] = row
             self._list.addWidget(row)
-        ids = [j["id"] for j in jobs]
-        if ids:
-            self._bg.run(lambda: [store.project_summary(i) for i in ids], self._apply,
-                         lambda _m: None)
+        ids = list(self._rows)
+        gids = list(self._groups)
+        if ids or gids:
+            self._bg.run(lambda: ([store.project_summary(i) for i in ids],
+                                  [store.group_summary(g) for g in gids]),
+                         self._apply, lambda _m: None)
 
-    def _apply(self, summaries: list[dict]) -> None:
+    def _apply(self, result) -> None:
+        summaries, groups = result
         for s in summaries:
             row = self._rows.get(s["id"])
             if row is not None:
                 row.apply_summary(s)
+        for s in groups:
+            g = self._groups.get(s["id"])
+            if g is not None:
+                g.apply_group(s)
 
     def shutdown(self) -> None:
         self._bg.shutdown()

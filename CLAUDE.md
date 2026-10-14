@@ -9,6 +9,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 `input → download → hardsub-detect → (OCR | ASR) → translate(2-pass) → ⛔HUMAN EDIT GATE → TTS → fit+mix → render`
 
 - **download** — `yt-dlp` (cookies, domain-routed). Fallback: BBDown (Bilibili), TikTokDownloader (Douyin).
+- **split (long videos)** — > 45 min and "Chia video dài" on (default): `pipeline/split.py` cuts ~30-min parts with ffmpeg's segment muxer at keyframes inside voice gaps (VAD, silencedetect fallback; stream copy, exact). Each part is a normal job (`metadata.group`); the parent folder keeps `group.json` and is not a project. Parts run through the queue (review part 1 while part 2 runs), share the first part's brief, merged glossary suggestions and the subtitle style; `split.join` concatenates the rendered parts (copy, or re-encode when params differ) + a shifted vi.srt. Renders are pinned to the source length (`-t`, dub `apad`) so joins don't drift.
 - **hardsub-detect** — RapidOCR over ~16 sampled bottom-third crops; enough frames with recognized Chinese text ⇒ hardsubs → OCR path, else ASR ("Tự động" in the GUI, `--source auto` in the CLI; manual override always available).
 - **OCR** (hardsubs present) — RapidOCR (ONNX PP-OCRv5+) frame sampling → CN SRT with per-cue confidence (`ocr_report.json`) → optional LLM proofread (suspect lines only). Frames stream through a pipe (no PNG dump), progress/ETA, resumable via `ocr_frames.json`; CPU ~0.25–0.5 s/frame (GPU needs CUDA 13 + cuDNN 9 installed).
 - **ASR** (no hardsubs) — default **cloud** `audio_llm`: Qwen-Omni (OpenRouter) writes the transcript, Whisper word timestamps (cloud, or local faster-whisper if installed) time it. Local engines (`faster_whisper`, `funasr_aligned`) are optional extras and NOT installed on this machine (removed 2026-10-01). Benchmark: `docs/providers.md`.
@@ -52,6 +53,7 @@ docs/                 research, architecture, providers, dev-plan; docs/plan/ = 
 uv pip install -e .            # or: pip install -e .  (from backend/)
 python -m app.cli URL          # headless: download → subs → translate → gate; then `vizsup render`
 python -m app.cli retime --workdir ../storage/<id>   # re-time an old job's lines to the audio (text kept, backups made)
+python -m app.cli join --group ../storage/<id>       # join a split long video's rendered parts
 uvicorn app.main:app --reload  # FastAPI server (SRT/ASR path; OCR route desktop/CLI-only)
 python -m pytest -q            # from repo root (pytest.ini) — full headless suite
 

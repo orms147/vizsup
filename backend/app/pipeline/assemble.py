@@ -528,6 +528,7 @@ def _build_render(
     plan: tuple | None = None,  # (placements, sped, flagged) when already planned
     dub: str | None = f"{DUB_DIR}/list.txt",   # concat list of the dub windows
     encoder: str | None = None,
+    duration: float = 0.0,     # source length: the output is pinned to it (long-video join)
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -617,6 +618,11 @@ def _build_render(
             audio_map = "[outa]"
         else:  # replace
             audio_map = dub
+        if duration > 0:
+            # the dub ends with its last line; pad it so the audio lasts as long as the
+            # picture (with -t below) — parts then join without drifting
+            parts.append(f"{audio_map}apad[aout]")
+            audio_map = "[aout]"
     else:
         audio_map = "0:a?"
 
@@ -651,6 +657,7 @@ def _build_render(
         "-map", vmap, "-map", audio_map,
         *_video_args(encoder or _video_encoder(), preview),
         "-c:a", "aac", "-b:a", "128k" if preview else "192k", "-ar", "48000",
+        *(["-t", f"{duration:.3f}"] if duration > 0 else []),
         "preview.mp4" if preview else "output.mp4",
     ]
     return cmd
@@ -693,7 +700,8 @@ def assemble(
     while True:
         cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
                             dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
-                            frame=frame, plan=plan, dub=dub, encoder=encoder)
+                            frame=frame, plan=plan, dub=dub, encoder=encoder,
+                            duration=total)
         try:
             _run_ffmpeg(cmd, job.work_dir, total=total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
@@ -709,7 +717,8 @@ def assemble(
         return job.work_dir / "preview.mp4"
     # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
     (job.work_dir / RENDER_INFO).write_text(
-        json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode}),
+        json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode,
+                    "encoder": encoder, "duration": round(total, 3)}),
         encoding="utf-8")
     return job.output_video
 

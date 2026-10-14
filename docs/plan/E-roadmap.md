@@ -360,7 +360,15 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
   extras can't provide on Windows (`nvidia-cuda-nvrtc-cu13` has no real wheel) → a system
   install; `_preload_cuda()` then picks it up. Until then a 3-hour hardsub video ≈ 1.5–4 h of
   OCR (or use the ASR path).
-- Optional: split a long video into ~30-min parts through the queue, join at the end.
+- ✅ **Split long videos** (2026-10-14, `pipeline/split.py`): > 45 min → ~30-min parts cut by the
+  segment muxer at keyframes inside voice gaps — exact (on a synthetic video the parts' packets
+  add up to the source's; per-part `-ss/-t` copies overlapped 0.2–0.5 s per cut). Parts are
+  normal jobs created up front (survive a restart; "Chạy tiếp các phần chưa xong"), queued
+  first, one project row per video; part k>1 inherits the brief, merged glossary suggestions
+  and subtitle style. "Ghép video đầy đủ" when every part is rendered after its approval:
+  concat copy or re-encode + shifted vi.srt; CLI `join --group`. Renders are pinned to the
+  source length (`-t` + dub `apad`). Not done: rendering a part while the queue runs (one
+  worker slot — review/approve works meanwhile), a joined soft-sub .mkv / merged .ass.
 
 ## P2 — later (keep in mind, don't start yet)
 

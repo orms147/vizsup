@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from desktop import paths  # noqa: F401  (puts backend on sys.path)
 from desktop import store  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 
 
@@ -30,6 +31,7 @@ class PipelineWorker(QObject):
     failed = Signal(str)               # error message
     gate_reached = Signal()            # subtitles ready for editing
     render_done = Signal(str)          # output video path
+    split_done = Signal(list)          # long video → part opts to queue (no gate for the parent)
     finished = Signal()                # worker done (success or failure)
 
     def __init__(self, job: Job, opts: dict) -> None:
@@ -88,6 +90,60 @@ class PipelineWorker(QObject):
                 "(không dịch). Chọn OpenRouter/DeepSeek… ở bước 1 nếu muốn dịch sang tiếng Việt."
             )
 
+    def _split_if_long(self, job: Job, o: dict) -> bool:
+        """Long-video split (pipeline/split.py). True when the job became a group of
+        parts (split_done emitted, nothing else to do in this run)."""
+        from app.pipeline import split
+        from app.pipeline.assemble import probe_duration
+
+        if not o.get("split_long", True) or split.group_info(job) or job.cn_srt.exists():
+            return False
+        duration = probe_duration(job.source_video)
+        if not split.should_split(duration):
+            return False
+        self._check()
+        self.stage_started.emit("split")
+        title = (job.metadata.get("title") or (Path(o["file"]).stem if o.get("file") else "")
+                 or job.id)
+        group = split.split_job(job, settings.vizsup_storage_dir, title=title, log=self.log.emit,
+                                progress=lambda f, m: self.progress.emit(0.15 + 0.1 * f, m),
+                                cancel=lambda: self._cancel)
+        items = []
+        for part in group["parts"]:
+            loaded = store.load_job(part["id"])
+            if loaded is None:
+                continue
+            pjob, _ = loaded
+            popts = {k: v for k, v in o.items() if k not in ("file", "url")}
+            popts["_job_id"] = part["id"]
+            store.save_job(pjob, popts, "queued")
+            items.append(popts)
+        (job.work_dir / "job.json").unlink(missing_ok=True)   # the parent is a group now
+        self.log.emit(f"✓ Đã chia {len(items)} phần — chạy lần lượt; phần nào xong sẽ báo để bạn "
+                      f"duyệt trong lúc phần sau còn chạy")
+        self.split_done.emit(items)
+        return True
+
+    @Slot()
+    def run_join(self) -> None:
+        """Join a long video's rendered parts (opts["_group"] = group id)."""
+        from app.pipeline import split
+
+        gdir = settings.vizsup_storage_dir / str(self.opts.get("_group"))
+        try:
+            self.stage_started.emit("assemble")
+            out = split.join(gdir, settings.vizsup_storage_dir, log=self.log.emit,
+                             progress=lambda f, m: self.progress.emit(f, m),
+                             cancel=lambda: self._cancel)
+            self.progress.emit(1.0, "Hoàn tất")
+            self.render_done.emit(str(out))
+        except (_Cancelled, InterruptedError):
+            self.failed.emit("Đã hủy.")
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            self.finished.emit()
+
     # --- to the edit gate ----------------------------------------------------
     @Slot()
     def run_to_gate(self) -> None:
@@ -125,8 +181,14 @@ class PipelineWorker(QObject):
             store.debug("source ready (video on disk)")
             # persist metadata so the project is listed/resumable later
             import json as _json
+            if not job.metadata and (job.work_dir / "metadata.json").exists():
+                job.metadata = _json.loads((job.work_dir / "metadata.json").read_text(encoding="utf-8"))
             (job.work_dir / "metadata.json").write_text(
                 _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # 1.5) a long video becomes ~30-min parts that run through the queue
+            if self._split_if_long(job, o):
+                return
 
             # 2) Chinese subtitles — source chosen by the user in step 1
             self._check()
@@ -188,7 +250,6 @@ class PipelineWorker(QObject):
                         self.log.emit(f"✓ Đã rà soát {n} dòng OCR")
             else:
                 self.progress.emit(0.4, "Nhận dạng giọng nói (ASR)…")
-                from app.config import settings
                 asr_name = o.get("asr") or settings.vizsup_default_asr
                 self.log.emit(f"ASR: {asr_name}")
 
@@ -211,7 +272,10 @@ class PipelineWorker(QObject):
             # user's own note into a context sheet the translator reads with every
             # batch. Only when translate will actually run — a kept vi.srt needs none.
             note = (o.get("context_note") or "").strip()
-            if (o.get("auto_context") or note) and not job.vi_srt.exists():
+            from app.pipeline import split as _split
+            if not job.vi_srt.exists() and _split.inherit_brief(job, settings.vizsup_storage_dir):
+                self.log.emit("↷ Dùng ngữ cảnh của phần đầu (cùng người nói, cùng xưng hô)")
+            elif (o.get("auto_context") or note) and not job.vi_srt.exists():
                 self._check()
                 from app.pipeline import brief, speakers
                 self.progress.emit(0.7, "Đọc nhanh ngữ cảnh video…")
@@ -226,6 +290,7 @@ class PipelineWorker(QObject):
                     for ln in b.splitlines():
                         if ln.strip():
                             self.log.emit("   " + ln.rstrip())
+                    _split.share_brief(job, settings.vizsup_storage_dir)
             # 2.5) optional pre-pass: suggest a glossary of recurring names/brands so
             # they translate consistently (writes glossary.suggested.json; user wins)
             if o.get("extract_terms"):
@@ -237,6 +302,10 @@ class PipelineWorker(QObject):
                     context={"title": job.metadata.get("title"),
                              "platform": job.metadata.get("platform")},
                     log=self.log.emit)
+            if not job.vi_srt.exists() and _split.group_info(job):
+                n = _split.share_terms(job, settings.vizsup_storage_dir)
+                if n:
+                    self.log.emit(f"… thuật ngữ chung của cả video: {n} mục (phần trước được ưu tiên)")
             # 3) translate
             self._check()
             self.stage_started.emit("translate")

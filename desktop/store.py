@@ -21,7 +21,7 @@ def _storage() -> Path:
 # --- UI choices ------------------------------------------------------------
 _UI_KEYS = ("subtitle_source", "asr", "translator", "refine", "tts",
             "ocr_region", "ocr_proofread", "extract_terms", "auto_context", "options_open",
-            "auto_snap", "ai_review", "ai_frames")
+            "auto_snap", "ai_review", "ai_frames", "split_long")
 
 
 def load_ui_state() -> dict:
@@ -83,7 +83,7 @@ def list_jobs(limit: int = 8) -> list[dict]:
     if not base.exists():
         return out
     for d in base.iterdir():
-        if not d.is_dir():
+        if not d.is_dir() or (d / "group.json").exists():   # a split video's parent folder
             continue
         has_vi = (d / "vi.srt").exists()
         has_output = (d / "output.mp4").exists()
@@ -93,7 +93,7 @@ def list_jobs(limit: int = 8) -> list[dict]:
         newest = d / "vi.srt" if has_vi else d / "output.mp4" if has_output else partial[0]
         info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
                 "has_output": has_output, "unfinished": not (has_vi or has_output),
-                "url": None, "mtime": newest.stat().st_mtime}
+                "url": None, "mtime": newest.stat().st_mtime, "group": None}
         jf = d / "job.json"
         if jf.exists():
             try:
@@ -104,18 +104,66 @@ def list_jobs(limit: int = 8) -> list[dict]:
                 info["url"] = saved.get("url")
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+            info["group"] = meta.get("group") if isinstance(meta, dict) else None
+        except (OSError, ValueError):
+            pass
         out.append(info)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
 
 
+def list_projects(limit: int = 6) -> list[dict]:
+    """"Tiếp tục dự án" rows: plain projects, and ONE row per split video
+    (``kind="group"``, its parts in order) — six parts must not fill the list."""
+    rows: list[dict] = []
+    groups: dict[str, dict] = {}
+    for j in list_jobs(limit=10_000):
+        g = j.get("group")
+        if not g:
+            rows.append({**j, "kind": "job"})
+            continue
+        gid = str(g.get("id"))
+        row = groups.get(gid)
+        if row is None:
+            info = _group_file(gid) or {}
+            row = {"kind": "group", "id": gid, "title": info.get("title") or j["title"],
+                   "total": int(g.get("total") or len(info.get("parts") or [])), "parts": [],
+                   "mtime": 0.0, "has_output": (_storage() / gid / "output.mp4").exists(),
+                   "url": info.get("url")}
+            groups[gid] = row
+            rows.append(row)
+        row["parts"].append({**j, "index": g.get("index")})
+        row["mtime"] = max(row["mtime"], j["mtime"])
+    for row in groups.values():
+        row["parts"].sort(key=lambda x: x.get("index") or 0)
+    rows.sort(key=lambda x: x["mtime"], reverse=True)
+    return rows[:limit]
+
+
+def _group_file(gid: str) -> dict | None:
+    try:
+        data = json.loads((_storage() / gid / "group.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def known_urls() -> set[str]:
-    """Links already turned into a project (E-10: don't offer them from the clipboard)."""
+    """Links already turned into a project (E-10: don't offer them from the clipboard),
+    including a split video's original link."""
     out: set[str] = set()
     for j in list_jobs(limit=500):
         for u in (j.get("url"), (j.get("opts") or {}).get("url")):
             if u:
                 out.add(str(u).strip())
+    base = _storage()
+    if base.exists():
+        for g in base.glob("*/group.json"):
+            info = _group_file(g.parent.name) or {}
+            if info.get("url"):
+                out.add(str(info["url"]).strip())
     return out
 
 
@@ -229,3 +277,33 @@ def load_job(job_id: str) -> tuple[Job, dict] | None:
         except Exception:  # noqa: BLE001
             pass
     return job, opts
+
+
+def group_summary(gid: str) -> dict:
+    """Progress of a split video for its "Tiếp tục dự án" row: per part
+    (has_vi, approved, rendered), the part to open next, thumbnail, total duration.
+    Blocking (reads files, may run ffmpeg)."""
+    from app.pipeline import split
+
+    info: dict = {"id": gid, "parts": [], "next": None, "thumb": None, "duration": 0.0,
+                  "joined": (_storage() / gid / "output.mp4").exists()}
+    group = split.load_group(_storage() / gid)
+    if not group:
+        return info
+    info["duration"] = float(group.get("duration") or 0)
+    ready = split.readiness(group, _storage())
+    info["parts"] = ready
+    order = (lambda r: r["has_vi"] and not r["approved"],     # waiting for review
+             lambda r: r["approved"] and not r["rendered"],    # approved, not rendered
+             lambda r: not r["has_vi"])                         # still processing
+    for want in order:
+        hit = next((r for r in ready if want(r)), None)
+        if hit:
+            info["next"] = hit["id"]
+            break
+    if info["next"] is None and ready:
+        info["next"] = ready[0]["id"]
+    first = _storage() / ready[0]["id"] if ready else None
+    thumb = thumbnail(first) if first is not None and first.is_dir() else None
+    info["thumb"] = str(thumb) if thumb else None
+    return info
