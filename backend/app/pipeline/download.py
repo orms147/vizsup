@@ -179,5 +179,38 @@ def _ytdlp(job: Job, url: str) -> Job:
         "platform": platform_of(job.url),
         "downloaded_file": produced.name,
         "downloader": "yt-dlp",
+        **_source_fields(info, job.url),
     }
     return job
+
+
+def _source_fields(info: dict, url: str | None) -> dict:
+    """Who posted it and where — for crediting the source (F-1)."""
+    return {k: v for k, v in {
+        "uploader_id": info.get("uploader_id") or info.get("channel_id"),
+        "channel": info.get("channel"),
+        "webpage_url": info.get("webpage_url") or url,
+        "upload_date": info.get("upload_date"),            # YYYYMMDD
+        "video_id": info.get("id"),
+    }.items() if v}
+
+
+def probe(url: str) -> dict:
+    """Title, duration and poster of a link WITHOUT downloading it (yt-dlp metadata only)
+    — for the cost / time estimate before Start. Raises like download() does."""
+    import yt_dlp
+
+    url = normalize_url(url)
+    opts = {"quiet": True, "noprogress": True, "noplaylist": True, "skip_download": True,
+            "socket_timeout": 10, **_cookie_opts()}     # closing the app waits for it
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as exc:  # noqa: BLE001
+        friendly = _cookie_error(exc)
+        if friendly is not None:
+            raise friendly from exc
+        raise
+    return {"title": info.get("title"), "duration": info.get("duration"),
+            "uploader": info.get("uploader"), "platform": platform_of(url),
+            **_source_fields(info, url)}

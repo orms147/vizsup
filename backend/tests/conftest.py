@@ -57,6 +57,22 @@ def _no_vad_download(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_link_probe(monkeypatch):
+    """The start screen looks up a pasted link's length in the background (F-5 estimate).
+    Tests never reach the network: a real yt-dlp call left running in a worker thread
+    made the process crash on exit (0xC0000409) after every test had passed."""
+    try:
+        from app.pipeline import download
+    except Exception:  # noqa: BLE001
+        return
+
+    def offline(url):
+        raise RuntimeError("link probe disabled in tests")
+
+    monkeypatch.setattr(download, "probe", offline)
+
+
+@pytest.fixture(autouse=True)
 def _private_storage(tmp_path_factory, monkeypatch):
     """Tests never read or write the user's real storage/ (translation memory, style
     rules, ui_state, glossary…). A test may still point it elsewhere itself."""

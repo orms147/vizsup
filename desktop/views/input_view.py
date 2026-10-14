@@ -30,6 +30,7 @@ from desktop import store
 from desktop.cuemodel import fmt_time
 from desktop.icons import pixmap
 from desktop.theme import V2
+from desktop.ui_thread import BgRunner
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from desktop.widgets.provider_combo import ProviderCombo
 from desktop.widgets.recent_projects import RecentProjects, short_title
@@ -131,6 +132,15 @@ class InputView(QWidget):
         self._tick = QTimer(self)
         self._tick.setInterval(1000)
         self._tick.timeout.connect(self._on_tick)
+        # F-5: cost / time before Start — the video's length is looked up in the background
+        self._bg = BgRunner(self)
+        self._durations: dict[str, float | None] = {}   # url or file → seconds (None: failed)
+        self._probe_errors: dict[str, str] = {}
+        self._probing: set[str] = set()
+        self._est_timer = QTimer(self)
+        self._est_timer.setSingleShot(True)
+        self._est_timer.setInterval(700)                # don't probe every keystroke
+        self._est_timer.timeout.connect(self._update_estimate)
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -275,6 +285,9 @@ class InputView(QWidget):
         v.addLayout(foot)
         self.defaults = label("", "small")
         v.addWidget(self.defaults)
+        self.estimate = label("", "small")
+        self.estimate.setVisible(False)
+        v.addWidget(self.estimate)
         self.hint = label("", "small")
         self.hint.setVisible(False)
         v.addWidget(self.hint)
@@ -458,6 +471,10 @@ class InputView(QWidget):
         g.addWidget(self.asr_note, 9, 0, 1, 2)
         for w in (self.draft, self.refine, self.asr, self.tts):
             w.currentIndexChanged.connect(self._update_defaults)
+        for w in (self.draft, self.refine, self.asr, self.source, self.ocr_engine):
+            w.currentIndexChanged.connect(lambda *_a: self._est_timer.start())
+        for cb in (self.auto_context, self.ai_review, self.split_long):
+            cb.toggled.connect(lambda *_a: self._est_timer.start())
         return box
 
     def _toggle_note(self, on: bool) -> None:
@@ -549,6 +566,7 @@ class InputView(QWidget):
             self._file = None
             self.file_badge.setVisible(False)
         many = len(_ALL_URLS.findall(self.url.text()))
+        self._est_timer.start()
         if need_srt and has_src:
             self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
         elif many > 1:
@@ -926,7 +944,74 @@ class InputView(QWidget):
         if self._last_opts and not self._busy:
             self.startRequested.emit(dict(self._last_opts))
 
+    # --- F-5: cost and time before Start -----------------------------------------
+    def _estimate_source(self) -> str | None:
+        """The one video the next Start would process (a file, or exactly one link)."""
+        if self._file:
+            return self._file
+        urls = _ALL_URLS.findall(self.url.text())
+        return urls[0] if len(urls) == 1 else None
+
+    def _update_estimate(self) -> None:
+        key = self._estimate_source()
+        if not key or self._busy:
+            self.estimate.setVisible(False)
+            return
+        if key not in self._durations:
+            self.estimate.setText("Đang xem thời lượng video để ước tính chi phí…")
+            self.estimate.setVisible(True)
+            if key not in self._probing:
+                self._probing.add(key)
+                is_file = bool(self._file)
+
+                def work(k=key, f=is_file):
+                    if f:
+                        from app.pipeline.assemble import probe_duration
+
+                        return probe_duration(Path(k)) or None
+                    from app.pipeline import download
+
+                    return float(download.probe(k).get("duration") or 0) or None
+
+                def done(sec, k=key):
+                    self._probing.discard(k)
+                    self._durations[k] = sec
+                    self._update_estimate()
+
+                def fail(msg, k=key):
+                    self._probing.discard(k)
+                    self._durations[k] = None
+                    self._probe_errors[k] = msg
+                    self._update_estimate()
+
+                self._bg.run(work, done, fail)
+            return
+        sec = self._durations[key]
+        if not sec:
+            err = self._probe_errors.get(key, "")
+            if "cookie" in err.lower():      # the download would fail the same way: say so now
+                self.estimate.setText("⚠ Douyin cần cookie mới — cập nhật trong Cài đặt → Tải video "
+                                      "rồi hãy bắt đầu (lần tải này sẽ lỗi).")
+                self.estimate.setToolTip(err.split(": ", 1)[-1])
+            else:
+                self.estimate.setText("Chưa ước tính được chi phí (không đọc được thời lượng video) — "
+                                      "chi phí thật hiện sau khi chạy.")
+                self.estimate.setToolTip(err)
+            self.estimate.setVisible(True)
+            return
+        from app import estimate as est
+
+        e = est.estimate(sec, self._collect_opts(), history=est.history(store._storage()))
+        self.estimate.setText(e.label())
+        tip = [f"Ước tính {e.basis}: ~{e.lines[0]}–{e.lines[1]} câu phụ đề (bài hát ít câu, "
+               f"nói chuyện nhiều câu). Chi phí thật của từng video hiện ở “Tiếp tục dự án”.",
+               *e.notes]
+        self.estimate.setToolTip("\n".join(tip))
+        self.estimate.setVisible(True)
+
     def shutdown(self) -> None:
+        self._est_timer.stop()
+        self._bg.shutdown()
         self.recent.shutdown()
 
 
