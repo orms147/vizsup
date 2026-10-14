@@ -48,6 +48,9 @@ ROLES: dict[str, Role] = {r.key: r for r in (
          "Đọc lại cặp Trung–Việt, đánh dấu câu nghi sai. Khác hãng với nháp và tinh chỉnh."),
     Role("vision", "model_vision", "qwen/qwen3.7-flash", "Xem khung hình (tùy chọn)",
          "Chỉ dùng khi bật “AI xem khung hình” — gửi vài ảnh của video."),
+    Role("ocr", "model_ocr", "qwen/qwen3.7-flash", "Đọc phụ đề cháy (OCR qua mạng)",
+         "Chỉ dùng khi chọn “AI đọc chữ qua mạng”. 2026-10-14, 441 khung: flash sai 4, "
+         "qwen/qwen3.7-plus sai 0 (đắt ~10×), OCR trên máy sai ~31."),
 )}
 
 

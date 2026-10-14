@@ -229,10 +229,13 @@ class PipelineWorker(QObject):
                 from app.pipeline import ocr
 
                 region = o.get("ocr_region", "bottom-third")
+                engine = o.get("ocr_engine") or "rapidocr"
                 self.progress.emit(0.4, "Đọc chữ cháy trên video bằng OCR…")
-                self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region})")
+                self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region}"
+                              + (", AI đọc qua mạng" if engine != "rapidocr" else "") + ")")
                 ocr.extract_hardsubs(
-                    job, crop=region, cancel=lambda: self._cancel,     # long videos: ETA + resume
+                    job, crop=region, engine=engine, log=self.log.emit,
+                    cancel=lambda: self._cancel,                       # long videos: ETA + resume
                     progress=lambda f, m: self.progress.emit(0.4 + 0.15 * f, m))
                 self.log.emit("✓ OCR xong")
                 if o.get("ocr_proofread"):

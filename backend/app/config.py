@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     model_shorten: str = ""
     model_qa: str = ""
     model_vision: str = ""
+    model_ocr: str = ""
 
     # tts provider keys (edge-tts needs none)
     fpt_api_key: str = ""

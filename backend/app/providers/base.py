@@ -166,3 +166,21 @@ class ASRProvider(Provider):
         Cloud engines report per-chunk progress — a 5-minute video otherwise sits
         silent for over a minute and looks frozen."""
         ...
+
+
+class OCRProvider(Provider):
+    """Read the burned-in subtitle off cropped video frames (BGR numpy arrays)."""
+
+    batch_frames: int = 50       # frames per read call; the OCR stage checkpoints between calls
+    crop_to_band: bool = False   # wants only the detected text band (hardsub_region.json)
+
+    def cache_tag(self) -> str:
+        """Part of the OCR checkpoint key: reads from another engine/model are not reused."""
+        return self.name
+
+    @abstractmethod
+    def reader(self, *, log=None, cancel=None):
+        """Context manager for one OCR run, yielding ``read(images) -> lines per image``
+        where lines are ``[(text, confidence 0..1), …]`` (``[]`` = no text). Holds the
+        per-run state (engines, worker threads, HTTP client) for the whole video."""
+        ...

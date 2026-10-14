@@ -79,6 +79,23 @@ empty reply over audible speech (that chunk falls back to Whisper's text), and W
 > `WHISPER_MODEL=tiny|base|small|medium|large-v3`, weights 75 MB … 2.9 GB on first run)
 > and `.[asr-accurate]` (FunASR Paraformer).
 
+## OCR (burned-in Chinese subtitles)
+
+| Engine | Where | Notes |
+|---|---|---|
+| `rapidocr` (default) | local CPU | free, uploads nothing; ~0.25–0.5 s per frame; misses stylised captions |
+| `vision_llm` | OpenRouter, role `ocr` (default `qwen/qwen3.7-flash`) | **uploads the subtitle band** of every frame; opt-in in the GUI ("Cách đọc chữ") / `--ocr-engine vision_llm` |
+
+Benchmark 2026-10-14, 441 frames (2 fps) of two real Douyin vlogs with burned-in captions, every
+disagreement checked by eye: RapidOCR ~31 frames wrong (missed 心脏喷血, 就是这个巧克力外皮…,
+junk characters); `qwen/qwen3.7-flash` 4 (2 frames of song credits, 鍵 instead of 键 twice) for
+$0.0022; `qwen/qwen3.8-flash` 4 (credits, one 吃 short) for $0.0096; `qwen/qwen3.7-plus` 0 on the
+frames it returned, $0.022; `z-ai/glm-5.3-flash` 0 on one video (many dropped requests). Prices
+from the OpenRouter models API that day; images bill as prompt tokens. Real run of the stage on a
+137 s video: 83 cues, $0.002, 22 s with 16 requests in flight (≈ 30 min / $0.1 for 3 hours).
+Requests are ~50 KB tiles (numbered strips, cropped to the detected text band): bigger uploads to
+OpenRouter were dropped by this network often that day.
+
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.
 Implemented for the OpenAI-compatible base (OpenRouter / DeepSeek / Qwen) and for

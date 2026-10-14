@@ -88,7 +88,9 @@ def test_ocr_cues_progress_and_no_png_dump(job, monkeypatch):
 
 
 def test_cancelled_ocr_resumes_where_it_stopped(job, monkeypatch):
-    monkeypatch.setattr(ocr, "CHECKPOINT_EVERY", 5)
+    from app.providers.registry import get_ocr
+
+    monkeypatch.setattr(get_ocr("rapidocr"), "batch_frames", 5)
     starts = []
 
     def stream(src, vf, start=0.0):

@@ -218,3 +218,9 @@ def test_recent_projects_group_row(qapp, storage):
     join.trigger()
     assert joined == [group["id"]]
     rp.shutdown()
+
+
+def test_long_durations_read_as_hours():
+    from desktop.widgets.recent_projects import duration_label
+
+    assert duration_label(10800) == "3:00:00" and duration_label(328.7) == "05:28"

@@ -360,6 +360,13 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
   extras can't provide on Windows (`nvidia-cuda-nvrtc-cu13` has no real wheel) → a system
   install; `_preload_cuda()` then picks it up. Until then a 3-hour hardsub video ≈ 1.5–4 h of
   OCR (or use the ASR path).
+- ✅ **Cloud OCR** (2026-10-14, `providers/ocr/vision_llm.py`): the user asked for an API
+  instead of loading the GPU. OCR engines are providers now (`rapidocr` local default,
+  `vision_llm` opt-in — uploads the subtitle band). Benchmark on 441 real frames, disagreements
+  checked by eye: RapidOCR ~31 wrong, qwen3.7-flash 4, qwen3.7-plus 0 (10× price) →
+  default qwen3.7-flash (role `ocr`). Real stage run: 137 s video → 83 cues, $0.002, 22 s.
+  3 hours ≈ 30 min and ~$0.1 instead of 1.5–4 h of CPU. Checkpoint/resume, cost tracking,
+  retries for the dropped uploads seen that day.
 - ✅ **Split long videos** (2026-10-14, `pipeline/split.py`): > 45 min → ~30-min parts cut by the
   segment muxer at keyframes inside voice gaps — exact (on a synthetic video the parts' packets
   add up to the source's; per-part `-ss/-t` copies overlapped 0.2–0.5 s per cut). Parts are

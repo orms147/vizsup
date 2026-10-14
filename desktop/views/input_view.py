@@ -383,7 +383,16 @@ class InputView(QWidget):
         self._ocr_field = QWidget()
         self._ocr_field.setLayout(_field("Vùng đọc chữ trên video", self.ocr_region))
         self._ocr_field.layout().setContentsMargins(0, 0, 0, 0)
-        g.addWidget(self._ocr_field, 1, 0, 1, 2)
+        g.addWidget(self._ocr_field, 1, 0)
+        self.ocr_engine = ProviderCombo(providers.get("ocr") or [])
+        self.ocr_engine.setToolTip(
+            "Trên máy: miễn phí, không gửi gì đi, nhưng chậm (~0,3–0,5 s mỗi khung) và hay đọc sót "
+            "chữ nghệ thuật / nền rối. AI qua mạng: gửi dải phụ đề của từng khung lên OpenRouter, "
+            "đọc đúng hơn hẳn, ~$0,1 cho video 3 giờ, không dùng GPU của máy.")
+        self._ocr_engine_field = QWidget()
+        self._ocr_engine_field.setLayout(_field("Cách đọc chữ", self.ocr_engine))
+        self._ocr_engine_field.layout().setContentsMargins(0, 0, 0, 0)
+        g.addWidget(self._ocr_engine_field, 1, 1)
         srt_row = QHBoxLayout()
         self.srt_btn = button("Chọn tệp phụ đề .srt", "Upload", small=True)
         self.srt_btn.clicked.connect(self._pick_srt)
@@ -476,6 +485,7 @@ class InputView(QWidget):
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
+        self.ocr_engine.select(st.get("ocr_engine"))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
             self.ocr_region.setCurrentIndex(ix)
@@ -492,6 +502,7 @@ class InputView(QWidget):
         src = self._subtitle_source()
         # auto may end up on either path → keep both option groups live for it
         self._ocr_field.setVisible(src in ("auto", "ocr"))
+        self._ocr_engine_field.setVisible(src in ("auto", "ocr"))
         self.ocr_proofread.setEnabled(src in ("auto", "ocr"))
         self._asr_field.setEnabled(src in ("auto", "asr"))
         self._srt_field.setVisible(src == "srt")
@@ -568,6 +579,7 @@ class InputView(QWidget):
             "refine": self.refine.current_name(),
             "tts": self.tts.current_name(),
             "ocr_region": self.ocr_region.currentData(),
+            "ocr_engine": self.ocr_engine.current_name() or "rapidocr",
             "ocr_proofread": self.ocr_proofread.isChecked(),
             "extract_terms": self.extract_terms.isChecked(),
             "auto_context": self.auto_context.isChecked(),

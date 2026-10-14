@@ -35,6 +35,14 @@ def _when(mtime: float) -> str:
     return time.strftime("%d/%m", lt)
 
 
+def duration_label(sec: float) -> str:
+    """"05:28" for short videos, "3:00:00" from one hour (a long video read "180:00")."""
+    if sec >= 3600:
+        t = int(sec)
+        return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}"
+    return fmt_time(sec, 0)
+
+
 def short_title(raw: str) -> str:
     head = (raw or "").split("#", 1)[0].strip()
     return head or (raw or "").strip()
@@ -108,7 +116,7 @@ class _Row(QFrame):
                 x = max(0, (pm.width() - THUMB_W) // 2)
                 y = max(0, (pm.height() - THUMB_H) // 2)
                 self.thumb.setPixmap(pm.copy(x, y, THUMB_W, THUMB_H))
-        dur = fmt_time(s["duration"], 0) if s.get("duration") else ""
+        dur = duration_label(s["duration"]) if s.get("duration") else ""
         if s.get("usage"):
             self.setToolTip(s["usage"])
         if self._has_output:
@@ -230,8 +238,7 @@ class _GroupRow(QFrame):
                 self.badge.setObjectName("badgeOk")
                 self.badge.style().unpolish(self.badge)
                 self.badge.style().polish(self.badge)
-        sec = int(s.get("duration") or 0)
-        dur = f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else             (fmt_time(sec, 0) if sec else "")
+        dur = duration_label(s["duration"]) if s.get("duration") else ""
         hint = "Sẵn sàng ghép — ··· → Ghép video đầy đủ" if self._joinable and not s.get("joined") \
             else "Video dài, đã chia phần"
         self.sub.setText(" · ".join(p for p in (hint, dur) if p))

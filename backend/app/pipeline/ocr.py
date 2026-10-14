@@ -31,10 +31,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import threading
 import time
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -311,9 +309,8 @@ def group_frames(per_frame: list[tuple[float, str, float]], *,
     return [(c, cf, rf) for c, cf, rf in zip(cues, confs, reps) if c.duration >= min_dur]
 
 
-OCR_WORKERS = 2          # measured: 2 → ~15 % faster than 1; more only contends for the CPU
 CHECKPOINT = "ocr_frames.json"
-CHECKPOINT_EVERY = 50    # frames
+BAND_PAD = 0.6           # the cloud engine reads the detected text band ± this much of its height
 
 
 def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
@@ -345,9 +342,43 @@ def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
         proc.wait()
 
 
-def _checkpoint_key(src: Path, fps: float, vf: str, min_conf: float) -> str:
+def _checkpoint_key(src: Path, fps: float, vf: str, min_conf: float, engine: str = "rapidocr",
+                    band: tuple[float, float] | None = None) -> str:
     st = src.stat()
-    return f"{src.name}:{st.st_size}:{int(st.st_mtime)}|{fps}|{vf}|{min_conf}|v1"
+    tail = "" if engine == "rapidocr" and band is None else f"|{engine}|{band}"
+    return f"{src.name}:{st.st_size}:{int(st.st_mtime)}|{fps}|{vf}|{min_conf}|v1{tail}"
+
+
+def band_rows(region: dict | None, crop: str) -> tuple[float, float] | None:
+    """The detected text band (hardsub_region.json: normalized to the FULL frame) as a
+    fraction range (top, bottom) of the cropped strip, padded by BAND_PAD of its height.
+    None when there is no usable region. Pure."""
+    from app.pipeline.hardsub_detect import _CROP_FRAC
+
+    if not region or region.get("h", 0) <= 0:
+        return None
+    off, frac = _CROP_FRAC.get(crop, _CROP_FRAC["bottom-third"])
+    top = (float(region["y"]) - off) / frac
+    bot = (float(region["y"]) + float(region["h"]) - off) / frac
+    pad = (bot - top) * BAND_PAD
+    top, bot = max(0.0, top - pad), min(1.0, bot + pad)
+    return (round(top, 4), round(bot, 4)) if bot - top > 0.02 else None
+
+
+def _ensure_region(job: Job, crop: str, log) -> dict | None:
+    """The text band for an engine that wants it: saved by hardsub detection (auto mode),
+    else detected now from 16 sampled frames with the local OCR (a few seconds)."""
+    from app.pipeline import assemble, hardsub_detect
+
+    region = assemble._load_region(job)
+    if region is None:
+        try:
+            hardsub_detect.detect_hardsubs(job, crop=crop)
+            region = assemble._load_region(job)
+        except Exception as exc:  # noqa: BLE001 - the band is an optimisation only
+            if log:
+                log(f"⚠ Không dò được vùng phụ đề ({exc}) — gửi cả dải dưới")
+    return region
 
 
 def _load_checkpoint(path: Path, key: str) -> list[list]:
@@ -375,11 +406,22 @@ def _fmt_eta(sec: float) -> str:
 
 def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5,
+                     engine: str = "rapidocr",
                      progress: Callable[[float, str], None] | None = None,
-                     cancel: Callable[[], bool] | None = None) -> Job:
-    """OCR burned-in subtitles → job.cn_srt. Resumable (``ocr_frames.json``)."""
+                     cancel: Callable[[], bool] | None = None,
+                     log: Callable[[str], None] | None = None) -> Job:
+    """OCR burned-in subtitles → job.cn_srt with the OCR engine ``engine`` (a provider in
+    the registry: local RapidOCR, or a cloud vision model). Resumable (``ocr_frames.json``)."""
+    from contextlib import nullcontext
+
     from app.heavy import heavy_task
     from app.pipeline.assemble import probe_duration
+    from app.providers.registry import get_ocr
+
+    prov = get_ocr(engine)
+    if not prov.available():
+        raise RuntimeError(f"Chưa dùng được bộ đọc chữ “{prov.display_name}” "
+                           f"(thiếu khóa API hoặc chưa cài).")
 
     src = job.source_video
     vf = f"fps={fps}," + _CROP.get(crop, _CROP["bottom-third"])
@@ -388,28 +430,30 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         for old in old_frames.glob("*.png"):
             old.unlink(missing_ok=True)
 
+    band = band_rows(_ensure_region(job, crop, log), crop) if prov.crop_to_band else None
     ckpt = job.work_dir / CHECKPOINT
-    key = _checkpoint_key(src, fps, vf, min_conf)
+    key = _checkpoint_key(src, fps, vf, min_conf, prov.cache_tag(), band)
     done: list[list] = _load_checkpoint(ckpt, key)
     total = max(1, int((probe_duration(src) or 0.0) * fps))
     say = progress or (lambda _f, _m: None)
     if done:
         say(len(done) / total, f"OCR: chạy tiếp từ khung {len(done)}/{total}")
 
-    engines = threading.local()
-
-    def read(img) -> list:
-        if not hasattr(engines, "ocr"):
-            engines.ocr = _build_ocr()
-        text, conf = _clean_frame_conf(_to_lines(engines.ocr(img)), min_conf)
-        return [text, round(float(conf), 4)]
+    def cut(img):
+        if band is None:
+            return img
+        h = img.shape[0]
+        return img[int(band[0] * h):max(int(band[0] * h) + 1, int(round(band[1] * h)))]
 
     t0, start_n = time.monotonic(), len(done)
-    with heavy_task("OCR"), ThreadPoolExecutor(max_workers=OCR_WORKERS) as ex:
+    lock = heavy_task("OCR") if prov.local else nullcontext()
+    with lock, prov.reader(log=log, cancel=cancel) as read:
         batch: list = []
 
         def flush() -> None:
-            done.extend(ex.map(read, batch))
+            for lines in read([cut(im) for im in batch]):
+                text, conf = _clean_frame_conf(lines, min_conf)
+                done.append([text, round(float(conf), 4)])
             batch.clear()
             _save_checkpoint(ckpt, key, done)
             rate = (time.monotonic() - t0) / max(1, len(done) - start_n)
@@ -423,7 +467,7 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                     flush()
                 raise InterruptedError("Đã hủy.")
             batch.append(img)
-            if len(batch) >= CHECKPOINT_EVERY:
+            if len(batch) >= prov.batch_frames:
                 flush()
         if batch:
             flush()

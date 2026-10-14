@@ -110,7 +110,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             from app.pipeline import ocr
 
             print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
-            ocr.extract_hardsubs(job, crop=args.ocr_region)
+            ocr.extract_hardsubs(job, crop=args.ocr_region, engine=args.ocr_engine, log=print)
         else:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr)
@@ -278,6 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ocr-region", default="bottom-third",
                    choices=["bottom-third", "bottom-quarter", "bottom-half", "middle-third", "top-third", "full"],
                    help="crop region for OCR/detection (default: bottom-third)")
+    r.add_argument("--ocr-engine", default="rapidocr", choices=["rapidocr", "vision_llm"],
+                   help="OCR engine: rapidocr (local, default) or vision_llm (OpenRouter "
+                        "vision model — UPLOADS the subtitle band of every frame)")
     r.add_argument("--translator", default="passthrough", help="draft translator (default: passthrough)")
     r.add_argument("--refine", default=None, help="optional second-pass refiner (e.g. claude)")
     r.add_argument("--extract-terms", action="store_true",

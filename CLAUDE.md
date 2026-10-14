@@ -11,7 +11,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 - **download** — `yt-dlp` (cookies, domain-routed). Fallback: BBDown (Bilibili), TikTokDownloader (Douyin).
 - **split (long videos)** — > 45 min and "Chia video dài" on (default): `pipeline/split.py` cuts ~30-min parts with ffmpeg's segment muxer at keyframes inside voice gaps (VAD, silencedetect fallback; stream copy, exact). Each part is a normal job (`metadata.group`); the parent folder keeps `group.json` and is not a project. Parts run through the queue (review part 1 while part 2 runs), share the first part's brief, merged glossary suggestions and the subtitle style; `split.join` concatenates the rendered parts (copy, or re-encode when params differ) + a shifted vi.srt. Renders are pinned to the source length (`-t`, dub `apad`) so joins don't drift.
 - **hardsub-detect** — RapidOCR over ~16 sampled bottom-third crops; enough frames with recognized Chinese text ⇒ hardsubs → OCR path, else ASR ("Tự động" in the GUI, `--source auto` in the CLI; manual override always available).
-- **OCR** (hardsubs present) — RapidOCR (ONNX PP-OCRv5+) frame sampling → CN SRT with per-cue confidence (`ocr_report.json`) → optional LLM proofread (suspect lines only). Frames stream through a pipe (no PNG dump), progress/ETA, resumable via `ocr_frames.json`; CPU ~0.25–0.5 s/frame (GPU needs CUDA 13 + cuDNN 9 installed).
+- **OCR** (hardsubs present) — RapidOCR (ONNX PP-OCRv5+) frame sampling → CN SRT with per-cue confidence (`ocr_report.json`) → optional LLM proofread (suspect lines only). Frames stream through a pipe (no PNG dump), progress/ETA, resumable via `ocr_frames.json`; Engines are providers (`providers/ocr/`): `rapidocr` local (default; CPU ~0.25–0.5 s/frame, GPU needs CUDA 13 + cuDNN 9) or `vision_llm` — an OpenRouter vision model (role `ocr`, qwen3.7-flash) reads numbered strips of the text band, opt-in because it uploads them; far more accurate on stylised captions, ~$0.1 / 30 min per 3-hour video (docs/providers.md).
 - **ASR** (no hardsubs) — default **cloud** `audio_llm`: Qwen-Omni (OpenRouter) writes the transcript, Whisper word timestamps (cloud, or local faster-whisper if installed) time it. Local engines (`faster_whisper`, `funasr_aligned`) are optional extras and NOT installed on this machine (removed 2026-10-01). Benchmark: `docs/providers.md`.
 - **snap ("tự canh lời")** — local Silero VAD (`pipeline/vad.py`, ONNX, model downloaded once to `storage/_models`) → each fresh CN cue edge moves to the nearest voice start/stop of its OWN voice within ~1 s (`pipeline/snap.py`). Runs before translate (opt-out: GUI option / `--no-snap`); editor: A / Shift+A, one undo step. Singing under loud music fools VAD; `vad.voice_spans` fills those gaps from the saved Whisper word track (`asr_words.json`; old jobs: "Đo lại thời gian" fetches it).
 - **translate** — two-pass, provider-pluggable: CN-native draft → frontier refine. Strip timecodes locally; batch ~50 lines with context + glossary + video meta.
@@ -23,7 +23,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 ## Hard constraints (learned from research — respect these)
 
 - **Keep the human-edit gate AFTER translation and BEFORE TTS/render.** Never spend TTS credits or encode time on un-approved subtitles.
-- **Providers are pluggable and UI-selectable.** Every translation/TTS/ASR engine implements the interface in `backend/app/providers/base.py` and registers in `registry.py`. Adding one = one file + register. Never hardcode a single provider in pipeline code.
+- **Providers are pluggable and UI-selectable.** Every translation/TTS/ASR/OCR engine implements the interface in `backend/app/providers/base.py` and registers in `registry.py`. Adding one = one file + register. Never hardcode a single provider in pipeline code.
 - **ASR: timing ≠ accuracy.** WhisperX for word timestamps, a Chinese-native model (FunASR Paraformer) for the transcript. Don't use Whisper alone for Mandarin (CER 3–5× worse).
 - **OCR: crop to the bottom third** before detection/recognition. Keep Google-Lens mode opt-in (it uploads frames).
 - **Dub timing**: build VI audio on an **absolute timeline** with exact silence padding (no cumulative drift). Cap `atempo` at **~1.3×** (it skips samples above 2×); prefer shorter VI translations and `rubberband` over heavy speed-up.
@@ -37,7 +37,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 ```
 backend/app/          pipeline + providers + FastAPI (Python) — UI-agnostic core
   pipeline/           one module per stage
-  providers/          base.py, registry.py, translation/, tts/, asr/
+  providers/          base.py, registry.py, translation/, tts/, asr/, ocr/
 desktop/              PySide6 (Qt) GUI — PRIMARY, built (calls app.* directly, no HTTP)
 storage/              per-job working dirs (gitignored)
 samples/              test clips

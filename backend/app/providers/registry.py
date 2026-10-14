@@ -10,6 +10,8 @@ from app.providers.asr.cloud_stt import CloudSTT
 from app.providers.asr.faster_whisper import FasterWhisperASR
 from app.providers.asr.funasr_aligned import FunASRAligned
 from app.providers.asr.whisperx_funasr import WhisperXFunASR
+from app.providers.ocr.rapid import RapidOCRLocal
+from app.providers.ocr.vision_llm import VisionLLMOCR
 from app.providers.translation.claude import ClaudeOpus, ClaudeTranslator
 from app.providers.translation.deepl import DeepLTranslator
 from app.providers.translation.deepseek import DeepSeekFlash, DeepSeekPro
@@ -61,17 +63,27 @@ ASR_PROVIDERS = {
 }
 
 
+OCR_PROVIDERS = {
+    p.name: p
+    for p in (
+        RapidOCRLocal(),      # default: local, uploads nothing
+        VisionLLMOCR(),       # opt-in: uploads the subtitle band
+    )
+}
+
+
 def list_providers() -> dict:
     return {
         "translation": [p.info() for p in TRANSLATORS.values()],
         "tts": [p.info() for p in TTS_PROVIDERS.values()],
         "asr": [p.info() for p in ASR_PROVIDERS.values()],
+        "ocr": [p.info() for p in OCR_PROVIDERS.values()],
     }
 
 
 def find_provider(name: str):
     """Look up a provider by name across all stages (for Settings test/fetch)."""
-    for d in (TRANSLATORS, TTS_PROVIDERS, ASR_PROVIDERS):
+    for d in (TRANSLATORS, TTS_PROVIDERS, ASR_PROVIDERS, OCR_PROVIDERS):
         if name in d:
             return d[name]
     return None
@@ -93,3 +105,9 @@ def get_asr(name: str):
     if name not in ASR_PROVIDERS:
         raise KeyError(f"Unknown ASR provider '{name}'. Options: {sorted(ASR_PROVIDERS)}")
     return ASR_PROVIDERS[name]
+
+
+def get_ocr(name: str):
+    if name not in OCR_PROVIDERS:
+        raise KeyError(f"Unknown OCR engine '{name}'. Options: {sorted(OCR_PROVIDERS)}")
+    return OCR_PROVIDERS[name]
