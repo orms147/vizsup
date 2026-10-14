@@ -147,3 +147,48 @@ def test_cloud_reads_have_no_invented_confidence(fake, monkeypatch, tmp_path):
     rep = json.loads((job.work_dir / "ocr_report.json").read_text(encoding="utf-8"))
     assert rep and all(r["conf"] is None and r["suspect"] is False for r in rep)
     assert ocr._suspect_indexes(job, len(rep)) is None          # → proofread every line
+
+
+def test_auto_detection_uses_the_cloud_engine_without_local_ocr(fake, monkeypatch, tmp_path):
+    """Review: with no local OCR installed, "Tự động" fell back to ASR even when the user
+    picked the cloud reader. The sampled frames are now read by that reader."""
+    import shutil
+    import subprocess
+
+    from app.ffmpegutil import ffmpeg_bin
+    from app.pipeline import hardsub_detect
+
+    if shutil.which(ffmpeg_bin()) is None and not __import__("os").path.exists(ffmpeg_bin()):
+        pytest.skip("ffmpeg missing")
+    job = Job(id="d", work_dir=tmp_path / "d")
+    subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=5:duration=8", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", str(job.source_video)], check=True)
+
+    def no_local():
+        raise RuntimeError('OCR chưa được cài. Chạy: pip install -e ".[ocr]"')
+
+    monkeypatch.setattr(ocr, "_build_ocr", no_local)
+    with pytest.raises(RuntimeError):                       # local engine chosen: unchanged
+        hardsub_detect.detect_hardsubs(job, samples=4)
+    f = fake(lambda k: "这是字幕")
+    assert hardsub_detect.detect_hardsubs(job, samples=4, engine="vision_llm") is True
+    assert f.calls >= 1
+    fake(lambda k: "")
+    assert hardsub_detect.detect_hardsubs(job, samples=4, engine="vision_llm") is False
+
+
+def test_strips_the_model_keeps_skipping_are_reported(monkeypatch):
+    class Lazy(FakeOpenRouter):
+        def _chat(self, *, model, messages, **kw):
+            self.calls += 1
+            return _resp('{"1": "你好"}')                     # never answers for strip 2
+
+    lazy = Lazy(lambda k: "")
+    monkeypatch.setattr(vision_llm.VisionLLMOCR, "_client", lambda self: lazy)
+    monkeypatch.setattr(vision_llm.time, "sleep", lambda s: None)
+    logs = []
+    with get_ocr("vision_llm").reader(log=logs.append) as read:
+        out = read([np.zeros((94, 720, 3), np.uint8)] * 2)
+    assert out == [[("你好", 1.0)], []] and lazy.calls == vision_llm.ATTEMPTS
+    assert logs and "1 khung" in logs[0]

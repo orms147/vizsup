@@ -114,7 +114,7 @@ def _decide(flags: list[bool], *, min_hits: int = 3, min_ratio: float = 0.25) ->
 
 
 def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
-                    min_conf: float = 0.5) -> bool:
+                    min_conf: float = 0.5, engine: str = "rapidocr") -> bool:
     """Decide OCR vs ASR for ``job``. Returns True if burned-in Chinese subtitles
     were detected (and records it on ``job.has_hardsubs``).
 
@@ -124,7 +124,14 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
     from app.pipeline.assemble import probe_duration
     from app.pipeline.ocr import _CROP, _build_ocr
 
-    ocr = _build_ocr()
+    try:
+        ocr = _build_ocr()
+    except RuntimeError:
+        # no local OCR installed: when the user picked a cloud OCR engine, the samples
+        # are read by it instead (no text boxes → no band; the full strip is sent)
+        if engine == "rapidocr":
+            raise
+        ocr = None
 
     try:
         duration = probe_duration(job.source_video)
@@ -139,8 +146,11 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
 
     flags: list[bool] = []
     boxes: list[tuple[float, float, float, float]] = []
-    with heavy_task("dò hardsub"):
-        _detect_loop(job, ocr, duration, samples, vf, det_dir, min_conf, flags, boxes)
+    if ocr is None:
+        _detect_with_provider(job, engine, duration, samples, vf, det_dir, min_conf, flags)
+    else:
+        with heavy_task("dò hardsub"):
+            _detect_loop(job, ocr, duration, samples, vf, det_dir, min_conf, flags, boxes)
     job.has_hardsubs = _decide(flags)
 
     # ENG-5: when hardsubs are present, persist the ACTUAL text band (union of the
@@ -157,6 +167,33 @@ def detect_hardsubs(job: Job, *, samples: int = 16, crop: str = "bottom-third",
                 region_path.write_text(json.dumps(region, ensure_ascii=False, indent=1),
                                        encoding="utf-8")
     return job.has_hardsubs
+
+
+def _sample_crops(job, duration, samples, vf, det_dir) -> list:
+    """The sampled bottom-strip PNGs (missing timestamps skipped)."""
+    out = []
+    for i, t in enumerate(_sample_times(duration, samples)):
+        fp = det_dir / f"{i:03d}.png"
+        fp.unlink(missing_ok=True)
+        subprocess.run([ffmpeg_bin(), "-y", "-ss", f"{t:.2f}", "-i", str(job.source_video),
+                        "-frames:v", "1", "-vf", vf, str(fp)], check=False, capture_output=True)
+        if fp.exists():
+            out.append(fp)
+    return out
+
+
+def _detect_with_provider(job, engine, duration, samples, vf, det_dir, min_conf, flags) -> None:
+    import cv2
+
+    from app.pipeline.ocr import _cjk_count, _clean_frame_conf
+    from app.providers.registry import get_ocr
+
+    images = [img for img in (cv2.imread(str(p)) for p in
+                              _sample_crops(job, duration, samples, vf, det_dir)) if img is not None]
+    with get_ocr(engine).reader() as read:
+        for lines in read(images):
+            text, _ = _clean_frame_conf(lines, min_conf)
+            flags.append(_cjk_count(text) >= _MIN_CJK)
 
 
 def _detect_loop(job, ocr, duration, samples, vf, det_dir, min_conf, flags, boxes) -> None:

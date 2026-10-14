@@ -577,13 +577,17 @@ class RenderView(QWidget):
         self.status.setText("Video đầy đủ được lưu trong thư mục của video gốc.")
 
     def show_joined(self, path: str, title: str) -> None:
+        """The joined full video: its folder (the original's) holds output.mp4, vi.srt,
+        subs.ass and source.mp4, so every export below works on it like on one job."""
+        from app.models import Job
+
         self.stage_rows["tts"].setVisible(True)
+        gdir = Path(path).parent
+        self._job = Job(id=gdir.name, work_dir=gdir)
         self.show_done(path)
         self._joined = Path(path)
         self._title = title
         self._result_title.setText("Video đầy đủ đã sẵn sàng (đã ghép các phần)")
-        self.mkv_action.setEnabled(False)
-        self.mkv_action.setToolTip("Chưa hỗ trợ cho video ghép — dùng .srt ghép")
 
     def _update_lock(self) -> None:
         ok = self._approved
@@ -877,19 +881,6 @@ class RenderView(QWidget):
         self._bg.run(lambda: str(shutil.copyfile(src, dest)), done, fail)
 
     def _export(self, kind: str) -> None:
-        if self._joined is not None:                       # the joined full video
-            src = self._joined.parent / "vi.srt"
-            if kind != "srt":
-                self.res_status.setText("Video ghép chỉ có phụ đề .srt (đã nối các phần).")
-                return
-            dest = self._ask_dest(f"Xuất .{kind}", f".vi.{kind}", f"*.{kind}")
-            if dest is not None:
-                try:
-                    shutil.copyfile(src, dest)
-                    self.res_status.setText(f"Đã xuất: {dest.name}")
-                except OSError as e:
-                    self.res_status.setText(f"Không xuất được: {e}")
-            return
         if self._job is None:
             return
         src = self._job.vi_srt if kind == "srt" else self._job.subs_ass

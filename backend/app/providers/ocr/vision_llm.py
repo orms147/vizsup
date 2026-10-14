@@ -128,21 +128,29 @@ class VisionLLMOCR(OCRProvider):
             if attempt < ATTEMPTS - 1:
                 time.sleep(min(20.0, 1.5 * 2 ** attempt))
         if any(t is not None for t in texts):
+            self._skipped += sum(t is None for t in texts)   # read as "no subtitle" (warned)
             return [t or "" for t in texts]
         raise RuntimeError(f"Không gửi được khung hình tới {self.model} sau {ATTEMPTS} lần "
                            f"({type(last).__name__ if last else 'trả lời không đọc được'}). "
                            f"Bấm Bắt đầu lại để chạy tiếp từ khung đã đọc.")
 
+    _skipped = 0     # strips the model never answered for, this run (+= is under the GIL)
+
     @contextmanager
     def reader(self, *, log=None, cancel=None):
+        self._skipped = 0
         with ThreadPoolExecutor(max_workers=WORKERS) as ex:
             def read(images: list) -> list[list[tuple[str, float]]]:
                 if not images:
                     return []
                 n = per_tile(images[0].shape[0], images[0].shape[1])
                 groups = [images[i:i + n] for i in range(0, len(images), n)]
+                before = self._skipped
                 texts = [t for part in ex.map(lambda g: self._ask(g, cancel=cancel), groups)
                          for t in part]
+                if self._skipped > before and log:
+                    log(f"⚠ AI không trả lời cho {self._skipped - before} khung — coi như không có "
+                        f"phụ đề; nếu thiếu câu, xem lại đoạn đó trong trình sửa")
                 return [[(ln.strip(), 1.0) for ln in t.splitlines() if ln.strip()] for t in texts]
 
             yield read

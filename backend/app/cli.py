@@ -94,7 +94,8 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
 
             print("[run] detecting burned-in subtitles ...")
             try:
-                src = "ocr" if hardsub_detect.detect_hardsubs(job, crop=args.ocr_region) else "asr"
+                src = "ocr" if hardsub_detect.detect_hardsubs(
+                    job, crop=args.ocr_region, engine=args.ocr_engine) else "asr"
                 print(f"[run] hardsubs {'found -> OCR' if src == 'ocr' else 'not found -> ASR'}")
             except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
                 print(f"[run] detection unavailable ({exc}) -> ASR")

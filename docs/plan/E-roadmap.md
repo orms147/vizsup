@@ -383,9 +383,15 @@ edit 0.16 s) and edge-tts (3-way batch) were already fine.
   a join writes to a temp file (a cancelled join no longer shows as finished), goes stale when
   a part is re-rendered, survives a ' in the path; parts saved without options inherit the
   group's; orphaned groups stay listed; the queue summary counts outcomes; cloud OCR reports
-  no invented confidence (the OCR proofread then covers every line). Not fixed (low): auto
-  mode needs the local OCR for detection even with the cloud engine; a group row whose next
-  part was deleted by hand does nothing on click.
+  no invented confidence (the OCR proofread then covers every line).
+  Then (same day): a part can be RENDERED while the queue still runs (second worker slot, only
+  for renders/joins while the queue holds the main one); the joined video exports a soft-sub
+  .mkv (merged styled subs.ass, part 1's cover settings, the original picture); a user-supplied
+  whole-video .srt is sliced per part; auto mode detects hardsubs with the cloud reader when no
+  local OCR is installed; skipped strips are reported; a deleted part is skipped / reported.
+  End-to-end check through the real MainWindow + worker threads (offscreen) on a synthetic
+  50-min video: split at 1500.0 s in a gap → 2 parts to the gate (47 s) → render (57 s) →
+  "Ghép video đầy đủ" (1 s): 50.00 min, 300/300 lines, worst timing error 0 ms, .mkv OK.
 
 ## P2 — later (keep in mind, don't start yet)
 

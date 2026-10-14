@@ -245,3 +245,38 @@ def test_queue_summary_counts_outcomes_not_items(qapp, tmp_path, monkeypatch):
     seen.clear()
     win._run_next_queued()
     assert "Đã dừng hàng đợi" in win.status.text.text() and seen == []
+
+
+def test_a_part_renders_in_a_second_slot_while_the_queue_runs(qapp, tmp_path, monkeypatch):
+    """Review part 1 *and render it* while part 2 is still being transcribed: the queue
+    holds the main worker slot, so renders/joins get their own."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from app.config import settings
+    from app.models import Job
+    from desktop import main as main_mod
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    win = main_mod.MainWindow()
+    assert win._render_slot() == "main"                    # idle → the usual slot
+    monkeypatch.setattr(win, "_busy", lambda: True)
+    assert win._render_slot() is None                      # a gate run owns self.job
+    win._queue_job = Job(id="q", work_dir=tmp_path / "q")
+    assert win._render_slot() == "render"                  # the queue → second slot
+
+    fails = []
+    win._set_render_locked(True)
+    win._run("run_join", {"_group": "missing"}, {"failed": fails.append},
+             job=Job(id="g", work_dir=tmp_path / "g"), slot="render")
+    for _ in range(200):
+        QApplication.processEvents()
+        if fails and not win._render_busy():
+            break
+        time.sleep(0.02)
+    for _ in range(10):
+        QApplication.processEvents()
+    assert fails and "group.json" in fails[0]
+    assert win.render.render_btn.isEnabled()               # the second slot unlocked itself
+    assert win._thread is None                             # the main slot was never touched

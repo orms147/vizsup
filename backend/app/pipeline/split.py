@@ -406,6 +406,28 @@ def readiness(group: dict, storage: Path) -> list[dict]:
     return out
 
 
+def _prepare_softsub(group_dir: Path, jobs: list[Job], offsets: list[float], *, log) -> None:
+    """What the soft-subtitle .mkv export needs next to the joined video: a merged styled
+    subs.ass, how part 1 was rendered (cover mode → the same blur) and the fonts. The
+    picture comes from the original source.mp4 kept in the group folder. Best effort."""
+    import shutil
+
+    from app.pipeline import assemble
+
+    try:
+        texts = [(j.subs_ass.read_text(encoding="utf-8"), off)
+                 for j, off in zip(jobs, offsets, strict=True) if j.subs_ass.exists()]
+        if len(texts) == len(jobs):
+            (group_dir / "subs.ass").write_text(merge_ass(texts), encoding="utf-8")
+        for name in (assemble.RENDER_INFO, "hardsub_region.json"):
+            src = jobs[0].work_dir / name
+            if src.exists():
+                shutil.copyfile(src, group_dir / name)
+        assemble._ass_fonts(group_dir)
+    except OSError as exc:
+        log(f"⚠ Chưa chuẩn bị được phụ đề rời cho video ghép ({exc})")
+
+
 def joined_is_current(group_dir: Path, storage: Path) -> bool:
     """The joined video exists and no part was re-rendered (or un-rendered) since."""
     out = group_dir / "output.mp4"
@@ -434,6 +456,74 @@ def same_params(paths: list[Path]) -> bool:
     """True when every file has identical stream parameters (concat copy is safe)."""
     first = _streams(paths[0]) if paths else []
     return bool(first) and all(_streams(p) == first for p in paths[1:])
+
+
+def slice_subtitles(cues: list[Cue], start: float, end: float | None) -> list[Cue]:
+    """The cues of one part (their midpoint in [start, end)), shifted to the part's own
+    timeline and clipped to it; renumbered. For a whole-video .srt the user supplied. Pure."""
+    out: list[Cue] = []
+    span = None if end is None else end - start
+    for c in cues:
+        mid = (c.start + c.end) / 2
+        if mid < start or (end is not None and mid >= end):
+            continue
+        a, b = max(0.0, c.start - start), c.end - start
+        if span is not None:
+            b = min(b, span)
+        if b > a:
+            out.append(Cue(len(out) + 1, round(a, 3), round(b, 3), c.text))
+    return out
+
+
+_ASS_TIME = re.compile(r"^(\d+):(\d{2}):(\d{2})\.(\d{2})$")
+
+
+def _ass_seconds(text: str) -> float | None:
+    m = _ASS_TIME.match(text.strip())
+    if not m:
+        return None
+    h, mi, s, cs = (int(g) for g in m.groups())
+    return h * 3600 + mi * 60 + s + cs / 100
+
+
+def merge_ass(parts: list[tuple[str, float]]) -> str:
+    """One .ass from the parts' styled subs.ass texts, each part's Dialogue lines shifted
+    by its offset and its styles renamed ``P<k>_<name>`` so per-part looks never collide.
+    The [Script Info] (canvas size) comes from the first part. Pure."""
+    from app.pipeline.srt import _fmt_ass_time
+
+    info: list[str] = []
+    style_format = event_format = ""
+    styles: list[str] = []
+    events: list[str] = []
+    for k, (text, offset) in enumerate(parts, 1):
+        section = ""
+        for line in text.splitlines():
+            head = line.strip()
+            if head.startswith("[") and head.endswith("]"):
+                section = head.lower()
+                continue
+            if section == "[script info]" and k == 1 and head:
+                info.append(line)
+            elif section == "[v4+ styles]":
+                if head.startswith("Format:"):
+                    style_format = style_format or line
+                elif head.startswith("Style:"):
+                    name, rest = head[len("Style:"):].split(",", 1)
+                    styles.append(f"Style: P{k}_{name.strip()},{rest}")
+            elif section == "[events]":
+                if head.startswith("Format:"):
+                    event_format = event_format or line
+                elif head.startswith("Dialogue:"):
+                    fields = head[len("Dialogue:"):].split(",", 9)
+                    a, b = _ass_seconds(fields[1]), _ass_seconds(fields[2])
+                    if a is None or b is None or len(fields) < 10:
+                        continue
+                    fields[1], fields[2] = _fmt_ass_time(a + offset), _fmt_ass_time(b + offset)
+                    fields[3] = f"P{k}_{fields[3].strip()}"
+                    events.append("Dialogue:" + ",".join(fields))
+    return "\n".join(["[Script Info]", *info, "", "[V4+ Styles]", style_format, *styles, "",
+                      "[Events]", event_format, *events]) + "\n"
 
 
 def merge_subtitles(parts: list[tuple[list[Cue], float]]) -> list[Cue]:
@@ -504,6 +594,7 @@ def join(group_dir: Path, storage: Path, *,
         tmp.unlink(missing_ok=True)         # a cancelled / failed join leaves no half file
         raise
     tmp.replace(group_dir / "output.mp4")   # the previous good join stays until now
+    _prepare_softsub(group_dir, jobs, offsets, log=say)
     say(f"✓ Ghép xong: {len(outs)} phần · {total / 60:.0f} phút · {len(merged)} câu phụ đề")
     return group_dir / "output.mp4"
 

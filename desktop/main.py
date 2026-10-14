@@ -49,6 +49,10 @@ class MainWindow(QMainWindow):
         self.opts: dict = {}
         self._thread: QThread | None = None
         self._worker: PipelineWorker | None = None
+        # a second slot, only for renders/joins while the QUEUE holds the main one — a
+        # queued run has its own job, so part 1 can be rendered while part 2 transcribes
+        self._rthread: QThread | None = None
+        self._rworker: PipelineWorker | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -216,8 +220,9 @@ class MainWindow(QMainWindow):
     def _on_stage(self, s: str) -> None:
         self.input.append_log(f"• {s}")
         self.input.set_stage(s)
-        if s != "download" and self.job is not None:
-            md = dict(self.job.metadata)    # copy: the worker thread owns the dict
+        running = self._queue_job or self.job
+        if s != "download" and running is not None:
+            md = dict(running.metadata)     # copy: the worker thread owns the dict
             plat = {"douyin": "Douyin", "bilibili": "Bilibili"}.get(md.get("platform") or "", "")
             try:
                 dur = fmt_time(float(md.get("duration") or 0), 0) if md.get("duration") else ""
@@ -269,11 +274,13 @@ class MainWindow(QMainWindow):
             return
         # don't hijack self.job/self.opts from a running worker — a QUEUED run has its
         # own job, so a finished project can still be opened for editing meanwhile
-        if self._busy() and not queued:
+        if (self._busy() and not queued) or self._render_busy():
             self.status.setText("● Đang bận — đợi tác vụ hiện tại xong rồi mở dự án khác.")
             return
         loaded = store.load_job(job_id)
         if not loaded:
+            self.status.set_status("Không tìm thấy dự án này (thư mục đã bị xóa?).", "warn")
+            self.input.refresh_recent()
             return
         job, opts = loaded
         if job.vi_srt.exists():
@@ -288,7 +295,7 @@ class MainWindow(QMainWindow):
     def _delete_job(self, job_id: str) -> None:
         from PySide6.QtWidgets import QMessageBox
 
-        if self._busy():
+        if self._any_busy():
             self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
             return
         if self.job is not None and job_id == self.job.id:
@@ -435,10 +442,19 @@ class MainWindow(QMainWindow):
         lay.addWidget(lbl)
         dlg.exec()
 
+    def _render_slot(self) -> str | None:
+        """Where a render/join can run now: "main", "render" (the queue holds main), or
+        None (busy with something that owns self.job)."""
+        if self._render_busy():
+            return None
+        if not self._busy():
+            return "main"
+        return "render" if self._queue_job is not None else None
+
     def _start_render(self, ropts: dict) -> None:
-        if self._busy():
-            if self._queue_job is not None:
-                self.status.set_status("Đang chạy hàng đợi — dựng video khi hàng đợi xong.", "warn")
+        slot = self._render_slot()
+        if slot is None:
+            self.status.set_status("Đang bận — dựng video khi tác vụ hiện tại xong.", "warn")
             return
         from app.pipeline.srt import parse_srt
 
@@ -460,7 +476,7 @@ class MainWindow(QMainWindow):
             "log": self.render.append_log,
             "failed": self._on_render_failed,
             "render_done": self._on_render_done,
-        })
+        }, slot=slot)
 
     def _set_render_locked(self, on: bool) -> None:
         """One switch for everything that could mutate vi.srt or hijack the job
@@ -470,8 +486,9 @@ class MainWindow(QMainWindow):
         self.editor.setEnabled(not on)    # no edits landing in autosave mid-render
 
     def _cancel_render(self) -> None:
-        if self._busy() and self._worker:
-            self._worker.cancel()
+        worker = self._rworker if self._render_busy() else (self._worker if self._busy() else None)
+        if worker is not None and (worker is self._rworker or self._queue_job is None):
+            worker.cancel()
             self.render.set_cancelling()
 
     # --- worker plumbing -----------------------------------------------------
@@ -506,6 +523,11 @@ class MainWindow(QMainWindow):
             return
         opts = self._queue.pop(0)
         loaded = store.load_job(opts["_job_id"]) if opts.get("_job_id") else None
+        if opts.get("_job_id") and loaded is None:   # a part deleted by hand: skip it
+            self.input.append_log(f"⚠ Bỏ qua một phần đã bị xóa ({opts['_job_id']})")
+            self._queue_failed += 1
+            QTimer.singleShot(0, self._run_next_queued)
+            return
         if loaded is not None:                    # a part of a split video: folder exists
             job = loaded[0]
         else:
@@ -564,7 +586,8 @@ class MainWindow(QMainWindow):
         """Join a split video's rendered parts into one MP4 (+ merged .srt)."""
         from app.pipeline import split
 
-        if self._busy():
+        slot = self._render_slot()
+        if slot is None:
             self.status.set_status("Đang bận — ghép video khi tác vụ hiện tại xong.", "warn")
             return
         group = split.load_group(settings.vizsup_storage_dir / gid)
@@ -587,7 +610,7 @@ class MainWindow(QMainWindow):
             "log": self.render.append_log,
             "failed": self._on_render_failed,
             "render_done": lambda path, t=group.get("title") or gid: self._on_join_done(path, t),
-        }, job=Job(id=gid, work_dir=settings.vizsup_storage_dir / gid))
+        }, job=Job(id=gid, work_dir=settings.vizsup_storage_dir / gid), slot=slot)
 
     def _on_join_done(self, path: str, title: str) -> None:
         self.render.show_joined(path, title)
@@ -599,7 +622,7 @@ class MainWindow(QMainWindow):
 
         from app.pipeline import split
 
-        if self._busy():
+        if self._any_busy():
             self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
             return
         group = split.load_group(settings.vizsup_storage_dir / gid) or {"parts": []}
@@ -634,7 +657,8 @@ class MainWindow(QMainWindow):
         if not msg.strip().startswith("Đã hủy"):
             self._notify("Một video trong hàng đợi lỗi", msg[:160], "err")
 
-    def _run(self, method: str, opts: dict, connections: dict, *, job: Job | None = None) -> None:
+    def _run(self, method: str, opts: dict, connections: dict, *, job: Job | None = None,
+             slot: str = "main") -> None:
         """Build worker+thread, connect ALL signals BEFORE start (no emit races),
         then start. One run at a time (callers guard with _busy()).
 
@@ -645,32 +669,54 @@ class MainWindow(QMainWindow):
         corrupted memory and killed the app at random later points (an access
         violation inside subprocess for ffmpeg, or in pathlib), 2026-10-01. With the
         relay, bound methods and lambdas alike are queued onto the GUI thread."""
-        self._thread = QThread()
-        self._worker = PipelineWorker(job or self.job, opts)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(getattr(self._worker, method))
-        for relay in getattr(self, "_ui_calls", []):   # drop the previous run's relays
+        thread = QThread()
+        worker = PipelineWorker(job or self.job, opts)
+        worker.moveToThread(thread)
+        thread.started.connect(getattr(worker, method))
+        relays = "_r_ui_calls" if slot == "render" else "_ui_calls"
+        for relay in getattr(self, relays, []):        # drop that slot's previous relays
             relay.deleteLater()
-        self._ui_calls = [connect_on_ui(getattr(self._worker, name), slot, self)
-                          for name, slot in connections.items()]
-        self._worker.finished.connect(self._on_finished)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
-        self._thread.start()
+        setattr(self, relays, [connect_on_ui(getattr(worker, name), fn, self)
+                               for name, fn in connections.items()])
+        if slot == "render":
+            self._rthread, self._rworker = thread, worker
+            worker.finished.connect(self._on_render_finished)   # a QObject slot: GUI thread
+        else:
+            self._thread, self._worker = thread, worker
+            worker.finished.connect(self._on_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     def _busy(self) -> bool:
+        """The main slot is running (a gate run, the queue, or a render)."""
         try:
             return bool(self._thread and self._thread.isRunning())
         except RuntimeError:  # C++ thread object already deleted
             return False
 
+    def _render_busy(self) -> bool:
+        """The second slot is rendering/joining (only while the queue runs)."""
+        try:
+            return bool(self._rthread and self._rthread.isRunning())
+        except RuntimeError:
+            return False
+
+    def _any_busy(self) -> bool:
+        return self._busy() or self._render_busy()
+
+    def _on_render_finished(self) -> None:
+        self._set_render_locked(False)
+
     def _on_finished(self) -> None:
         # gate failed/cancelled → re-enable Start but KEEP the log/error visible
         self.input.idle()
         # single unlock point for EVERY render exit path (done/failed/cancelled) —
-        # per-handler unlocks would risk a soft-locked app on a missed path
-        self._set_render_locked(False)
+        # per-handler unlocks would risk a soft-locked app on a missed path; a render in
+        # the second slot unlocks itself (_on_render_finished)
+        if not self._render_busy():
+            self._set_render_locked(False)
         if self._queue_job is not None or self._queue:   # E-9: on to the next queued video
             QTimer.singleShot(400, self._run_next_queued)
 
@@ -692,21 +738,22 @@ class MainWindow(QMainWindow):
         # flush a pending debounced edit BEFORE teardown — but never while a render
         # worker might be reading vi.srt mid-run
         try:
-            if not self._busy():
+            if not self._any_busy():
                 self.editor.flush()
         except Exception:  # noqa: BLE001 - closing must never get stuck on a save
             pass
         # never let Python tear down a still-running QThread (hard crash) — cancel + join
-        try:
-            if self._thread and self._thread.isRunning():
-                if self._worker:
-                    self._worker.cancel()
-                self._thread.quit()
-                if not self._thread.wait(5000):
-                    self._thread.terminate()
-                    self._thread.wait()
-        except RuntimeError:
-            pass
+        for thread, worker in ((self._thread, self._worker), (self._rthread, self._rworker)):
+            try:
+                if thread and thread.isRunning():
+                    if worker:
+                        worker.cancel()
+                    thread.quit()
+                    if not thread.wait(5000):
+                        thread.terminate()
+                        thread.wait()
+            except RuntimeError:
+                pass
         try:
             self.editor.shutdown()  # join any preview/shorten task threads
             self.input.shutdown()   # recent-project summaries (thumbnails)

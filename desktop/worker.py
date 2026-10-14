@@ -108,13 +108,22 @@ class PipelineWorker(QObject):
         group = split.split_job(job, settings.vizsup_storage_dir, title=title, log=self.log.emit,
                                 progress=lambda f, m: self.progress.emit(0.15 + 0.1 * f, m),
                                 cancel=lambda: self._cancel)
+        whole_srt = None
+        if o.get("subtitle_source") == "srt" and o.get("srt"):   # the user's own .srt
+            from app.pipeline.srt import parse_srt, write_srt
+
+            whole_srt = parse_srt(Path(o["srt"]))
         items = []
         for part in group["parts"]:
             loaded = store.load_job(part["id"])
             if loaded is None:
                 continue
             pjob, _ = loaded
-            popts = {k: v for k, v in o.items() if k not in ("file", "url")}
+            if whole_srt is not None:      # each part gets ITS lines, on its own timeline
+                write_srt(split.slice_subtitles(whole_srt, part["start"], part["end"]
+                                                if part["index"] < len(group["parts"]) else None),
+                          pjob.cn_srt)
+            popts = {k: v for k, v in o.items() if k not in ("file", "url", "srt")}
             popts["_job_id"] = part["id"]
             store.save_job(pjob, popts, "queued")
             items.append(popts)
@@ -219,7 +228,8 @@ class PipelineWorker(QObject):
                 self.log.emit("Dò phụ đề cháy sẵn (OCR nhanh trên khung hình mẫu)…")
                 try:
                     has = hardsub_detect.detect_hardsubs(
-                        job, crop=o.get("ocr_region", "bottom-third"))
+                        job, crop=o.get("ocr_region", "bottom-third"),
+                        engine=o.get("ocr_engine") or "rapidocr")
                     src = "ocr" if has else "asr"
                     self.log.emit("✓ Có phụ đề cháy sẵn → đọc chữ bằng OCR" if has
                                   else "✓ Không thấy phụ đề cháy sẵn → nhận dạng giọng nói (ASR)")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -264,3 +265,69 @@ def test_orphan_group_still_listed_for_deletion(tmp_path, monkeypatch):
         encoding="utf-8")
     rows = store.list_projects()
     assert [r["kind"] for r in rows] == ["group"] and rows[0]["title"] == "Video dài"
+
+
+def test_a_whole_video_srt_is_sliced_per_part():
+    cues = [Cue(1, 10.0, 12.0, "một"), Cue(2, 1799.0, 1801.5, "giữa ranh"),
+            Cue(3, 1805.0, 1807.0, "hai"), Cue(4, 3700.0, 3702.0, "ba")]
+    p1 = split.slice_subtitles(cues, 0.0, 1800.0)
+    p2 = split.slice_subtitles(cues, 1800.0, 3600.0)
+    p3 = split.slice_subtitles(cues, 3600.0, None)
+    assert [c.text for c in p1] == ["một"] and (p1[0].start, p1[0].end) == (10.0, 12.0)
+    assert [c.text for c in p2] == ["giữa ranh", "hai"]        # midpoint 1800.25 → part 2
+    assert (p2[0].start, p2[0].end) == (0.0, 1.5) and (p2[1].start, p2[1].end) == (5.0, 7.0)
+    assert [(c.index, c.start) for c in p3] == [(1, 100.0)]
+
+
+def test_merge_ass_shifts_lines_and_keeps_each_parts_style():
+    from app.pipeline.srt import write_ass
+
+    import tempfile
+
+    d = Path(tempfile.mkdtemp())
+    write_ass([Cue(1, 1.0, 2.5, "một")], d / "a.ass", font="Be Vietnam Pro", size=60)
+    write_ass([Cue(1, 0.5, 1.0, "hai")], d / "b.ass", font="Be Vietnam Pro", size=80,
+              cover_hardsubs=True)
+    out = split.merge_ass([((d / "a.ass").read_text(encoding="utf-8"), 0.0),
+                           ((d / "b.ass").read_text(encoding="utf-8"), 3600.0)])
+    assert "PlayResX: 1920" in out
+    assert "Style: P1_Default,Be Vietnam Pro,60," in out and "Style: P2_Default,Be Vietnam Pro,80," in out
+    lines = [ln for ln in out.splitlines() if ln.startswith("Dialogue:")]
+    assert lines[0].startswith("Dialogue: 0,0:00:01.00,0:00:02.50,P1_Default,")
+    assert lines[1].startswith("Dialogue: 0,1:00:00.50,1:00:01.00,P2_Default,") and lines[1].endswith("hai")
+
+
+@needs_ffmpeg
+def test_joined_video_exports_a_soft_subtitle_mkv(tmp_path):
+    from app.pipeline import approval, export
+    from app.pipeline.srt import write_ass
+
+    storage = tmp_path / "storage"
+    gdir = storage / "g"
+    gdir.mkdir(parents=True)
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=160x120:rate=10:duration=4", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-shortest", str(gdir / "source.mp4")], check=True)
+    parts = []
+    for k in (1, 2):
+        j = Job(id=f"p{k}", work_dir=storage / f"p{k}")
+        j.vi_srt.write_text(f"1\n00:00:00,500 --> 00:00:01,500\ncâu {k}\n", encoding="utf-8")
+        write_ass([Cue(1, 0.5, 1.5, f"câu {k}")], j.subs_ass)
+        approval.approve(j)
+        subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=160x120:rate=10:duration=2", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-ar", "48000", "-shortest", str(j.output_video)], check=True)
+        parts.append({"id": j.id, "index": k})
+    (gdir / "group.json").write_text(json.dumps({"id": "g", "parts": parts}), encoding="utf-8")
+    split.join(gdir, storage)
+    ass = (gdir / "subs.ass").read_text(encoding="utf-8")
+    assert "P2_Default" in ass and "0:00:02.50" in ass             # part 2 shifted by ~2 s
+    mkv = export.export_softsub(Job(id="g", work_dir=gdir), tmp_path / "out" / "full.mkv")
+    from app.ffmpegutil import ffprobe_bin
+
+    probe = subprocess.run([ffprobe_bin(), "-v", "error", "-show_entries",
+                            "stream=codec_type", "-of", "csv=p=0", str(mkv)],
+                           capture_output=True, text=True).stdout.split()
+    assert probe.count("subtitle") == 1 and "video" in probe and "audio" in probe
