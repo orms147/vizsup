@@ -118,23 +118,28 @@ def start_time(src: Path) -> float:
         return 0.0
 
 
-def keyframes(src: Path, lo: float, hi: float, *, offset: float = 0.0) -> list[float]:
-    """Video keyframe times in [lo, hi] (relative to the file start) from packet flags —
-    no decoding, fast even on hours of video."""
+def keyframes(src: Path, lo: float, hi: float, *, offset: float = 0.0) -> list[tuple[float, float]]:
+    """Video keyframes in [lo, hi] as (pts, dts) seconds relative to the file start, from
+    packet flags — no decoding, fast even on hours of video. The DTS matters: with
+    B-frames it runs ~0.1 s ahead of the PTS, and the segment muxer compares cut times
+    against it (asked to cut at a keyframe's PTS it skipped to the NEXT keyframe, 7 s
+    later, on a real Douyin video)."""
     a, b = max(0.0, lo + offset), hi + offset
     r = subprocess.run([ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
                         "-read_intervals", f"{a:.3f}%{b:.3f}",
-                        "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(src)],
-                       capture_output=True, text=True)
-    out = []
+                        "-show_entries", "packet=pts_time,dts_time,flags", "-of", "csv=p=0",
+                        str(src)], capture_output=True, text=True)
+    out: dict[float, float] = {}
     for line in r.stdout.splitlines():
         parts = line.strip().split(",")
-        if len(parts) >= 2 and "K" in parts[1]:
+        if len(parts) >= 3 and "K" in parts[2]:
             try:
-                out.append(round(float(parts[0]) - offset, 3))
+                pts = round(float(parts[0]) - offset, 3)
+                dts = float(parts[1]) - offset if parts[1] not in ("", "N/A") else pts
             except ValueError:
-                pass
-    return sorted(set(out))
+                continue
+            out[pts] = round(dts, 3)
+    return sorted(out.items())
 
 
 _SILENCE = re.compile(r"silence_(start|end): (-?[\d.]+)")
@@ -153,6 +158,18 @@ def silence_gaps(src: Path) -> list[Span]:
             gaps.append((start, float(val)))
             start = None
     return gaps
+
+
+def _video_duration(path: Path) -> float:
+    """Length of the video stream (a part's container duration also counts the audio
+    tail running past the last frame, ~0.1 s, which would shift every later start)."""
+    r = subprocess.run([ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", str(path)],
+                       capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return _probe_duration(path)
 
 
 def _probe_duration(path: Path) -> float:
@@ -200,29 +217,43 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
     spans = vad.spans_for(src, job.work_dir, log=say)
     gaps = voice_gaps(spans, duration) if spans is not None else silence_gaps(src)
     offset = start_time(src)
-    cuts = plan_cuts(duration, gaps, lambda lo, hi: keyframes(src, lo, hi, offset=offset),
-                     target=target)
+    dts_of: dict[float, float] = {}
+
+    def keyframes_in(lo: float, hi: float) -> list[float]:
+        found = keyframes(src, lo, hi, offset=offset)
+        dts_of.update(found)
+        return [pts for pts, _dts in found]
+
+    cuts = plan_cuts(duration, gaps, keyframes_in, target=target)
     for c in cuts:
         if not c.in_gap:
             say(f"⚠ Quanh {c.t / 60:.0f} phút không có chỗ lặng trùng keyframe — cắt ở "
                 f"{c.t:.1f} s, có thể giữa một câu")
-    bounds = [0.0, *(c.t for c in cuts)]
     tmp = job.work_dir / "_parts"
-    files = _segment(src, tmp, [c.t for c in cuts], total=duration, cancel=cancel,
+    # just before the keyframe's DTS: the segment muxer then cuts exactly at it
+    at = [min(c.t, dts_of.get(c.t, c.t)) - 0.002 for c in cuts]
+    files = _segment(src, tmp, at, total=duration, cancel=cancel,
                      progress=lambda f: tick(f, f"Cắt video thành {n} phần · {int(f * 100)}%"))
     if len(files) != n:
         raise RuntimeError(f"Cắt video ra {len(files)} phần thay vì {n}.")
+    vdurs = [_video_duration(f) for f in files]
+    real = [round(sum(vdurs[:k]), 3) for k in range(1, n)]   # where the parts really start
+    for c, r in zip(cuts, real, strict=True):
+        if abs(c.t - r) > 0.3:
+            say(f"⚠ Điểm cắt thật {r:.2f} s lệch dự tính {c.t:.2f} s")
+            c.in_gap = any(a <= r <= b for a, b in gaps)
     gid = job.id
     parts = []
-    for k, start in enumerate(bounds):
-        end = bounds[k + 1] if k + 1 < len(bounds) else None
+    starts = [0.0, *real]
+    for k, start in enumerate(starts):
+        end = starts[k + 1] if k + 1 < len(starts) else duration
         pid = uuid.uuid4().hex[:12]
         pdir = storage / pid
         pdir.mkdir(parents=True, exist_ok=True)
         files[k].replace(pdir / "source.mp4")
         dur = _probe_duration(pdir / "source.mp4")
         info = {"id": pid, "index": k + 1, "start": round(start, 3),
-                "end": round(end if end is not None else duration, 3), "duration": round(dur, 3),
+                "end": round(end, 3), "duration": round(dur, 3),
                 "in_gap": True if k == 0 else cuts[k - 1].in_gap}
         meta = {"title": f"{title} · Phần {k + 1}/{n}", "duration": dur,
                 "platform": job.metadata.get("platform"),

@@ -97,13 +97,21 @@ def test_split_a_real_video_at_keyframes_in_silence(tmp_path, monkeypatch):
                     "-c:v", "libx264", "-g", "15", "-keyint_min", "15", "-sc_threshold", "0",
                     "-c:a", "aac", "-shortest", str(job.source_video)], check=True)
     storage = tmp_path / "storage"
+    kfs = split.keyframes(job.source_video, 100.0, 130.0)
+    assert any(dts < pts - 0.05 for pts, dts in kfs)    # B-frames: the DTS runs ahead
+    planned = []
+    real_segment = split._segment
+    monkeypatch.setattr(split, "_segment", lambda src, out, cuts, **kw:
+                        planned.extend(cuts) or real_segment(src, out, cuts, **kw))
     group = split.split_job(job, storage, title="Video thử", target=120.0)
     parts = group["parts"]
     assert len(parts) == 3 and json.loads((job.work_dir / "group.json").read_text())["id"] == "g"
-    for p in parts[1:]:
+    for p, asked in zip(parts[1:], planned, strict=True):
         assert p["in_gap"]
         assert 6.0 <= p["start"] % 7 <= 7.0                 # inside a pause
         assert abs(p["start"] - round(p["start"] / 1.5) * 1.5) < 0.05   # on a keyframe
+        # cut where planned, not at the NEXT keyframe (asked just before the keyframe's DTS)
+        assert 0 < p["start"] - asked < 0.3
     total = sum(p["duration"] for p in parts)
     assert abs(total - 360.0) < 0.15                        # no overlap at the cuts
     meta = json.loads((storage / parts[1]["id"] / "metadata.json").read_text(encoding="utf-8"))
