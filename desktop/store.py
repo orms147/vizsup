@@ -306,13 +306,14 @@ def group_summary(gid: str) -> dict:
     order = (lambda r: r["has_vi"] and not r["approved"],     # waiting for review
              lambda r: r["approved"] and not r["rendered"],    # approved, not rendered
              lambda r: not r["has_vi"])                         # still processing
+    alive = [r for r in ready if (_storage() / r["id"] / "job.json").exists()]  # not deleted
     for want in order:
-        hit = next((r for r in ready if want(r)), None)
+        hit = next((r for r in alive if want(r)), None)
         if hit:
             info["next"] = hit["id"]
             break
-    if info["next"] is None and ready:
-        info["next"] = ready[0]["id"]
+    if info["next"] is None and alive:
+        info["next"] = alive[0]["id"]
     first = _storage() / ready[0]["id"] if ready else None
     thumb = thumbnail(first) if first is not None and first.is_dir() else None
     info["thumb"] = str(thumb) if thumb else None

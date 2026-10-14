@@ -280,3 +280,21 @@ def test_a_part_renders_in_a_second_slot_while_the_queue_runs(qapp, tmp_path, mo
     assert fails and "group.json" in fails[0]
     assert win.render.render_btn.isEnabled()               # the second slot unlocked itself
     assert win._thread is None                             # the main slot was never touched
+
+
+def test_group_row_never_points_at_a_deleted_part(tmp_path, monkeypatch):
+    import json
+
+    from app.config import settings
+    from app.models import Job
+    from desktop import store
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    (tmp_path / "g").mkdir()
+    (tmp_path / "g" / "group.json").write_text(json.dumps(
+        {"id": "g", "parts": [{"id": "gone", "index": 1}, {"id": "here", "index": 2}]}),
+        encoding="utf-8")
+    j = Job(id="here", work_dir=tmp_path / "here")
+    j.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
+    store.save_job(j, {}, "await_edit")
+    assert store.group_summary("g")["next"] == "here"
