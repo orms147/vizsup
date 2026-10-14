@@ -681,6 +681,7 @@ def assemble(
     frame: str = "source",               # "source" | "tiktok"
     progress: Callable[[float, str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    overlays: list[dict] | None = None,  # F-1/F-2 corner notes (credit, "Lồng tiếng AI")
 ) -> Path:
     global _NVENC
     mode = cover_mode or ("box" if cover_hardsubs else "off")
@@ -688,7 +689,8 @@ def assemble(
     # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
     # (the soft-subtitle export pairs the two)
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
-              cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job))
+              cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job),
+              extra=overlays)
 
     say = progress or (lambda _f, _m: None)
     plan = _plan_segments(segments)

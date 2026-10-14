@@ -165,13 +165,15 @@ def write_ass(
     cover_hardsubs: bool = False,
     style: dict | None = None,
     cue_styles: dict[int, dict] | None = None,
+    extra: list[dict] | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
     top of the global one; identical merged styles are de-duplicated and the cues
     are routed to ``Default``/``Sub1``/``Sub2``… With ``cue_styles=None`` the output
     is byte-identical to the single-style path (locked by tests/test_write_ass.py).
-    ``cover_hardsubs=True`` forces an opaque box on every style."""
+    ``cover_hardsubs=True`` forces an opaque box on every style. ``extra``: corner notes
+    ``{start, end, text, align}`` (credit, "Lồng tiếng AI") in a small boxed "Tag" style."""
     base = {**DEFAULT_STYLE, **(style or {})}
     ordered: list[tuple[str, dict]] = []   # (name, merged style) — Default first
     seen: dict[str, str] = {}              # json(merged) → name
@@ -195,6 +197,13 @@ def write_ass(
         cue_prefixes.append(_inline_prefix(merged))
 
     style_block = "\n".join(_style_line(nm, st, font, size, cover_hardsubs) for nm, st in ordered)
+    if extra:
+        # margin_v ~9% of the height: below TikTok's / Douyin's top bar ("Following | For
+        # You", search) on a vertical video, which covers roughly the top 7-8%
+        tag = {**DEFAULT_STYLE, "border_style": 4, "box": "#000000", "box_alpha": 96,
+               "outline_w": 6, "bold": True, "alignment": 7, "margin_l": 36, "margin_r": 36,
+               "margin_v": 100}
+        style_block += "\n" + _style_line("Tag", tag, font, max(22, round(size * 0.42)), False)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
     for c, nm, pfx in zip(cues, cue_names, cue_prefixes):
@@ -202,5 +211,9 @@ def write_ass(
         lines.append(
             f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},{nm},,0,0,0,,{text}"
         )
+    for e in extra or []:
+        text = "{\\an%d}" % int(e.get("align", 7)) + str(e["text"]).replace("\n", "\\N")
+        lines.append(f"Dialogue: 1,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Tag,,"
+                     f"0,0,0,,{text}")
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return Path(path)

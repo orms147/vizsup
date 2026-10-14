@@ -17,6 +17,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -296,6 +297,41 @@ class RenderView(QWidget):
             lambda _i: store.update_ui_state(render_frame=self.frame.currentData()))
         ll.addWidget(self.frame)
         ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
+
+        # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md)
+        ll.addWidget(_hline())
+        ll.addWidget(label("Đăng tải", "h3"))
+        st = store.load_ui_state()
+        self.credit_cb = QCheckBox("Ghi nguồn trên video (5 giây đầu)")
+        self.credit_cb.setChecked(bool(st.get("credit_overlay", True)))
+        self.credit_cb.toggled.connect(lambda on: store.update_ui_state(credit_overlay=on))
+        self.ai_label_cb = QCheckBox("Nhãn “Lồng tiếng AI” (5 giây đầu)")
+        self.ai_label_cb.setChecked(bool(st.get("ai_label", True)))
+        self.ai_label_cb.setToolTip(
+            "Một nhãn nhỏ ở góc trên. TikTok yêu cầu gắn nhãn nội dung AI chân thực; Luật AI "
+            "134/2025 yêu cầu khi giọng AI mô phỏng người thật. Không ảnh hưởng chất lượng.")
+        self.ai_label_cb.toggled.connect(lambda on: store.update_ui_state(ai_label=on))
+        ll.addWidget(self.credit_cb)
+        ll.addWidget(self.ai_label_cb)
+        rrow = QHBoxLayout()
+        rrow.setSpacing(8)
+        cap = label("Quyền sử dụng", "secondary")
+        cap.setFixedWidth(116)
+        rrow.addWidget(cap)
+        from app.pipeline import disclosure
+
+        self.rights = QComboBox()
+        for key, text in disclosure.RIGHTS.items():
+            self.rights.addItem(text, key)
+        self.rights.currentIndexChanged.connect(self._on_rights)
+        rrow.addWidget(self.rights, 1)
+        self.proof_btn = button("Bằng chứng…", "Upload", variant="ghost", small=True,
+                                tip="Đính kèm ảnh chụp / email cho phép — được chép vào thư mục dự án")
+        self.proof_btn.clicked.connect(self._attach_proof)
+        rrow.addWidget(self.proof_btn)
+        ll.addLayout(rrow)
+        self.rights_note = label("", "small", wrap=True)
+        ll.addWidget(self.rights_note)
         ll.addStretch(1)
 
         scroll = QScrollArea()
@@ -512,9 +548,12 @@ class RenderView(QWidget):
                                    "thì hình được làm mờ y như bản dựng (lâu hơn).")
         menu.setToolTipsVisible(True)
         self.export_btn.setMenu(menu)
+        self.post_btn = button("Mô tả đăng bài", "Copy",
+                               tip="Mô tả có ghi nguồn + nhãn AI, và danh sách kiểm tra trước khi đăng")
+        self.post_btn.clicked.connect(self._show_post)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
-        for b in (self.save_btn, self.open_btn, self.export_btn, back):
+        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn, back):
             al.addWidget(b)
         al.addStretch(1)
         self.res_status = label("", "small")
@@ -545,6 +584,7 @@ class RenderView(QWidget):
             self._right_stack.setCurrentIndex(2 if self._out else 0)
         self._job = job
         self._cues = cues
+        self._load_posting()
         if tts:
             self._tts = tts
             self.voice_sub.setText(f"Tiếng Việt · {tts}")
@@ -608,6 +648,82 @@ class RenderView(QWidget):
         self.listen_btn.setToolTip("Nghe thử giọng này (một câu mẫu)" if ok else
                                    "Duyệt phụ đề trước khi tạo giọng")
 
+    def _load_posting(self) -> None:
+        """Credit preview + the recorded right to use, for the current job."""
+        from app.pipeline import disclosure
+
+        if self._job is None:
+            return
+        line = disclosure.credit_line(self._job)
+        self.credit_cb.setEnabled(bool(line))
+        self.credit_cb.setToolTip(f"Sẽ hiện: “{line}”" if line else
+                                  "Không có thông tin người đăng (video từ máy) — ghi nguồn trong "
+                                  "mô tả bài đăng.")
+        basis = disclosure.load_rights(self._job).get("basis", "unknown")
+        self.rights.blockSignals(True)
+        self.rights.setCurrentIndex(max(0, self.rights.findData(basis)))
+        self.rights.blockSignals(False)
+        self._show_rights_note(basis)
+
+    def _show_rights_note(self, basis: str) -> None:
+        from app.pipeline import disclosure
+
+        proof = disclosure.load_rights(self._job).get("proof") if self._job else ""
+        if basis == "unknown":
+            self.rights_note.setText(
+                "Chưa ghi quyền sử dụng. Đăng lại video của người khác khi chưa được phép có thể bị "
+                "gỡ hoặc tắt kiếm tiền — Douyin cấm đăng lại nội dung của họ ở nơi khác.")
+            self.rights_note.setStyleSheet(f"color:{V2['amber']};")
+        else:
+            self.rights_note.setText("Đã ghi" + (f" · bằng chứng: {Path(proof).name}" if proof else
+                                                 " — nên đính kèm bằng chứng nếu được cho phép."))
+            self.rights_note.setStyleSheet(f"color:{V2['muted']};")
+
+    def _on_rights(self, _i: int) -> None:
+        from app.pipeline import disclosure
+
+        if self._job is None:
+            return
+        disclosure.save_rights(self._job, self.rights.currentData() or "unknown")
+        self._show_rights_note(self.rights.currentData() or "unknown")
+
+    def _attach_proof(self) -> None:
+        from app.pipeline import disclosure
+
+        if self._job is None:
+            return
+        fn, _ = QFileDialog.getOpenFileName(self, "Bằng chứng được phép dùng video", "",
+                                            "Ảnh / tài liệu (*.png *.jpg *.jpeg *.pdf *.eml *.txt);;"
+                                            "Tất cả (*.*)")
+        if not fn:
+            return
+        basis = self.rights.currentData() or "unknown"
+        if basis == "unknown":
+            basis = "permission"
+            self.rights.blockSignals(True)
+            self.rights.setCurrentIndex(self.rights.findData(basis))
+            self.rights.blockSignals(False)
+        try:
+            disclosure.save_rights(self._job, basis, proof=Path(fn))
+        except OSError as e:
+            self.rights_note.setText(f"Không chép được tệp: {e}")
+            return
+        self._show_rights_note(basis)
+
+    def _show_post(self) -> None:
+        from app.pipeline import disclosure
+        from desktop.widgets.dialogs import PostDialog
+
+        if self._job is None:
+            return
+        ai = self._audio_mode() != "original"
+        text = disclosure.post_description(self._job, ai_voice=ai)
+        rights = disclosure.load_rights(self._job).get("basis", "unknown")
+        credit = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
+        PostDialog(self, text=text, checklist=disclosure.checklist(
+            ai_voice=ai, credit=credit or bool(disclosure.credit_line(self._job)),
+            rights=rights)).exec()
+
     def _sync_audio_enabled(self) -> None:
         mode = self._audio_mode()
         keep = mode not in ("replace", "original")
@@ -616,6 +732,8 @@ class RenderView(QWidget):
         dub = mode != "original"
         for w in (self.dub_vol, self.dub_vol_lbl, self.voice, self.speed, self.speed_lbl):
             w.setEnabled(dub)
+        if hasattr(self, "ai_label_cb"):           # built after the audio cards
+            self.ai_label_cb.setEnabled(dub)
 
     def suggest_original(self, singing: str | None) -> None:
         """E-8: a mostly-sung video starts on "Giữ giọng gốc" (once per job; the user's
@@ -693,6 +811,8 @@ class RenderView(QWidget):
             "cover_mode": self.cover.currentData(),
         }
         opts["frame"] = self.frame.currentData()   # E-16
+        opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
+        opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         self._start_progress(opts)

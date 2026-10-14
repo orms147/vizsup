@@ -18,7 +18,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 - **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.**
 - **TTS** — provider-pluggable; default edge-tts vi-VN.
 - **fit+mix** — place each VI segment at its absolute start, atempo to fit, pad silence; duck/replace original audio.
-- **render** — dub track built in ≤5-min / ≤100-line windows (`dub/win_###.flac`, cached, sample-exact; the final encode has 2–3 inputs, `-progress` %, real cancel; NVENC when a test encode works — `VIZSUP_VIDEO_ENCODER=auto|nvenc|cpu`). FFmpeg burns styled `.ass` (bundled fonts via `fontsdir`); "Xem nhanh" 640p proof first; frame: source or TikTok 9:16; exports: named MP4 copy, `.srt`/`.ass`, soft-sub `.mkv` (`pipeline/export.py`).
+- **render** — dub track built in ≤5-min / ≤100-line windows (`dub/win_###.flac`, cached, sample-exact; the final encode has 2–3 inputs, `-progress` %, real cancel; NVENC when a test encode works — `VIZSUP_VIDEO_ENCODER=auto|nvenc|cpu`). FFmpeg burns styled `.ass` (bundled fonts via `fontsdir`); "Xem nhanh" 640p proof first; frame: source or TikTok 9:16; exports: named MP4 copy, `.srt`/`.ass`, soft-sub `.mkv` (`pipeline/export.py`). Posting (`pipeline/disclosure.py`): optional burned corner notes for the first 5 s (source credit, "Lồng tiếng AI") as `Tag` events in the same `.ass`, a per-project rights note (`rights.json`, warns on unknown, never blocks), and a post-description + checklist dialog.
 
 ## Hard constraints (learned from research — respect these)
 

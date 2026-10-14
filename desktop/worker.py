@@ -380,7 +380,7 @@ class PipelineWorker(QObject):
             self._run_render()
 
     def _run_render(self) -> None:
-        from app.pipeline import assemble, tts
+        from app.pipeline import assemble, disclosure, tts
 
         job, o = self.job, self.opts
         try:
@@ -438,6 +438,9 @@ class PipelineWorker(QObject):
                 frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
                 progress=lambda f, m: self.progress.emit(0.6 + 0.4 * f, m),
                 cancel=lambda: self._cancel,        # a long encode stops on Hủy
+                overlays=disclosure.overlays(        # F-1/F-2: credit + AI-voice label
+                    job, credit=bool(o.get("credit_overlay")),
+                    ai_voice=bool(o.get("ai_label")) and not original),
             )
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")

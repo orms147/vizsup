@@ -157,3 +157,37 @@ class RetranslateDialog(VzDialog):
     def choice(self) -> str:
         b = self.group.checkedButton()
         return (b.property("text_value") or "") if b else ""
+
+
+class PostDialog(VzDialog):
+    """F-1/F-2/F-3: the post description (editable, one click to copy) and a short
+    checklist before posting."""
+
+    def __init__(self, parent, *, text: str, checklist: list[tuple[bool, str]]) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        super().__init__("Mô tả đăng bài", parent, width=560)
+        self.body.addWidget(label("Dán vào phần mô tả khi đăng. Sửa thoải mái — đây chỉ là bản "
+                                  "nháp tự tạo từ thông tin video gốc.", "secondary", wrap=True))
+        self.text = QPlainTextEdit(text)
+        self.text.setMinimumHeight(150)
+        self.body.addWidget(self.text)
+        self.body.addWidget(label("Trước khi đăng", "h3"))
+        for done, item in checklist:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(icon_label("CircleCheck" if done else "CircleAlert",
+                                     V2["green"] if done else V2["amber"], 14), 0, Qt.AlignTop)
+            row.addWidget(label(item, "small", wrap=True), 1)
+            self.body.addLayout(row)
+        self.status = label("", "small")
+        self.body.addWidget(self.status)
+        copy = button("Sao chép", "Copy", variant="primary")
+
+        def do_copy():
+            QApplication.clipboard().setText(self.text.toPlainText())
+            self.status.setText("Đã sao chép mô tả.")
+
+        copy.clicked.connect(do_copy)
+        self._buttons.addWidget(copy)
+        self.add_button("Đóng")

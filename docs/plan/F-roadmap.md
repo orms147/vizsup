@@ -74,12 +74,12 @@ long-video parts with consistent names · A/V sync < 1 ms.
 
 | # | Item | Why (evidence) | Size |
 |---|---|---|---|
-| F-1 | **Source credit** — auto text from metadata (creator, platform, link, date) for the post description + an optional end card / first-line caption | Meta "without crediting them"; VN IP Art. 19 naming right; YouTube credit alone isn't enough but helps (H) | S |
-| F-2 | **AI-voice disclosure** — optional burned label "Lồng tiếng AI" (corner, first seconds) + a description line; on by default when TTS is used | TikTok AIGC rule; VN AI Law Art. 11(4) / Decree 142 Art. 18 for imitated voices; cheap trust signal (H) | S |
-| F-3 | **Rights note per project** — own / permission (attach proof) / licensed / unknown; a visible warning on "unknown", never a hard block | Douyin terms, VN IP Art. 20, YouTube "even with permission" (H) | S |
+| F-1 | ✅ **Source credit** — auto text from metadata (creator, platform, link, date) for the post description + an optional end card / first-line caption. *Done 2026-10-14: `pipeline/disclosure.py`; "Ghi nguồn trên video" burns "Nguồn: người đăng · Douyin" top-left for 5 s; "Mô tả đăng bài" on the render page* | Meta "without crediting them"; VN IP Art. 19 naming right; YouTube credit alone isn't enough but helps (H) | S |
+| F-2 | ✅ **AI-voice disclosure** — optional burned label "Lồng tiếng AI" (corner, first seconds) + a description line; on by default when TTS is used. *Done: top-right, 5 s, off for "Giữ tiếng gốc"; corner notes sit ~9% down, below TikTok's top bar* | TikTok AIGC rule; VN AI Law Art. 11(4) / Decree 142 Art. 18 for imitated voices; cheap trust signal (H) | S |
+| F-3 | ✅ **Rights note per project** — own / permission (attach proof) / licensed / unknown; a visible warning on "unknown", never a hard block. *Done: `rights.json` + `rights/` proof copy; pre-post checklist in the description dialog* | Douyin terms, VN IP Art. 20, YouTube "even with permission" (H) | S |
 | F-4 | **Commentary track** — the user's own narration (typed → a *different* TTS voice, or recorded mic) at chosen points + intro/outro text; show the share of runtime that is original commentary | The one thing YouTube/Meta/TikTok all name as making reuse acceptable (H) | M |
-| F-5 | **Cost & time estimate before Start** — from duration: ASR/OCR/translate/TTS $ and minutes, per engine choice | #1 complaint about every competitor (H) | S |
-| F-6 | **Reading-speed check** — flag > 17 cps, > 42 chars/line, > 2 lines (Netflix VI); auto line breaking; a stricter "mobile" profile | Netflix VI guide (H); phone screens (M). Today "Quá dài" only checks the *dub* slot | S |
+| F-5 | ✅ **Cost & time estimate before Start** — from duration: ASR/OCR/translate/TTS $ and minutes, per engine choice. *Done: `app/estimate.py`, calibrated on two real runs, switches to the user's own history after 3 projects; expired cookies flagged* | #1 complaint about every competitor (H) | S |
+| F-6 | ✅ **Reading-speed check** — flag > 17 cps, > 42 chars/line, > 2 lines (Netflix VI); auto line breaking; a stricter "mobile" profile. *Done: "Đọc không kịp" flags > 25 cps or > 2 wrapped lines (real vlogs run a median 22–24 cps, so 17 would flag most lines); the inspector shows cps against 17* | Netflix VI guide (H); phone screens (M). Today "Quá dài" only checks the *dub* slot | S |
 | F-7 | **Audio mode by content type** — name the modes as viewers know them (*Phụ đề* / *Thuyết minh* / *Lồng tiếng*), suggest per video (singing → Phụ đề — already; drama → Thuyết minh; vlog/comedy → Lồng tiếng) | VN distributor quotes + 2017 dub backlash (L-M); no survey exists → keep user's choice | S |
 | F-8 | **Publish checklist + log** — per platform: AI toggle, credit present, commentary share, no third-party watermark; record the posted URL; note claims/strikes | YouTube 3 strikes/90 days; Meta duplicate distribution (H) | S-M |
 | F-9 | **Voices**: Southern + more Northern voices via the existing FPT.AI provider (lannhi, banmai, leminh…), then **one voice per speaker** (needs speaker labels per line) | 2017 regional backlash → A/B rather than guess (L); Rask speaker labels (M) | M-L |
@@ -93,7 +93,7 @@ long-video parts with consistent names · A/V sync < 1 ms.
 detection (fingerprinting catches them, and it is evasion); lip-sync (complaint-heavy); cloning a
 real person's voice (CLAUDE.md out of scope; labelled-impersonation rules).
 
-**Suggested order:** F-5, F-6, F-1, F-2, F-3 (all S, one sprint) → F-4 (the biggest real
+**Suggested order:** ~~F-5, F-6, F-1, F-2, F-3~~ (done 2026-10-14) → **F-4** (the biggest real
 difference for monetisable posts) → F-7, F-10, F-8 → F-9, F-12 → F-11, F-13.
 
 ## 4. Open questions (not findable on the web)
