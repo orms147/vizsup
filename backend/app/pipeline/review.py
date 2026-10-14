@@ -12,6 +12,12 @@ Pure, UI-agnostic. A cue is flagged for any of:
 - ``novoice`` — filler-only Chinese (呼呜 / 啊啊) with no voice under it: likely an
                 ASR hallucination on music
 - ``ai``      — the AI QA pass (pipeline/qa.py) flagged the line and it is unchanged since
+- ``read``    — too fast to READ (F-6): over READ_FLAG_CPS characters per second, or more
+                than MAX_LINES lines at CHARS_PER_LINE. The Netflix Vietnamese guide says
+                17 cps / 42 per line / 2 lines for TV; real translated Douyin vlogs run at a
+                median 22-24 cps, so 17 would flag 70-80 % of lines and drown the list — the
+                flag starts at 25 (≈ 1 line in 5 of a fast vlog, none of a song), and the
+                inspector shows every line's speed against 17
 
 OCR and glossary reports number cues by their position in cn.srt, which no longer
 matches vi.srt once translation deduped repeats and the user split/merged lines —
@@ -36,9 +42,34 @@ LABELS = {
     "guess": "Timing đoán",
     "novoice": "Không nghe thấy giọng",
     "ai": "AI nghi sai",
+    "read": "Đọc không kịp",
 }
-ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "ocr", "term")
+ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "read", "ocr", "term")
+READ_CPS = 17.0          # Netflix Vietnamese Timed Text Style Guide, adults (changelog 2025-12)
+READ_FLAG_CPS = 25.0     # flagged above this (see the module docstring)
+CHARS_PER_LINE = 42
+MAX_LINES = 2
 _FILLER = re.compile(r"^[呼呜啊哦嗯哈呀唔嘿喔哎诶噢嗷哇咿吖啦嘛哼\s，。！？、…~～.!?,-]*$")
+
+
+def _wrapped(line: str, width: int = CHARS_PER_LINE) -> int:
+    """Lines a greedy word wrap at ``width`` characters needs. Pure."""
+    n, cur = 0, 0
+    for word in line.split():
+        w = len(word)
+        if cur and cur + 1 + w <= width:
+            cur += 1 + w
+        else:
+            n += 1 + (max(0, w - 1) // width)
+            cur = w % width or width
+    return n
+
+
+def reading(text: str, seconds: float) -> tuple[float, int]:
+    """(characters per second, lines at CHARS_PER_LINE) of one subtitle. Pure."""
+    flat = " ".join((text or "").split())
+    lines = sum(_wrapped(part) for part in (text or "").splitlines() if part.strip())
+    return round(len(flat) / max(seconds, 0.1), 1), lines
 
 
 @dataclass(frozen=True)
@@ -80,6 +111,10 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
                 issues.append("ai")
         if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i)):
             issues.append("long")
+        if text.strip() and "short" not in issues:
+            cps, n_lines = reading(text, c.end - c.start)
+            if cps > READ_FLAG_CPS or n_lines > MAX_LINES:
+                issues.append("read")
         if ocr_spans and _overlaps(c.start, c.end, ocr_spans):
             issues.append("ocr")
         if term_spans and _overlaps(c.start, c.end, term_spans):

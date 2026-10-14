@@ -480,6 +480,9 @@ class EditorView(QWidget):
 
     def _refresh_lines_badge(self) -> None:
         self.inspector.set_lines(self._line_count(self._sel))
+        if 0 <= self._sel < len(self.cues):                  # F-6: speed follows the text
+            c = self.cues[self._sel]
+            self.inspector.set_reading(c.vi, c.end - c.start)
 
     def refresh_approval(self) -> None:
         self._update_listen()

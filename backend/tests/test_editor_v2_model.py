@@ -266,3 +266,19 @@ def test_vi_times_follow_retimed_chinese_only_when_lines_still_pair(job):
     write_srt([Cue(1, 0.0, 9.0, "một"), Cue(2, 9.0, 9.5, "hai")], job.vi_srt)
     assert asr.sync_vi_times(job)
     assert [(c.start, c.end) for c in parse_srt(job.vi_srt)] == [(1.0, 2.0), (3.0, 4.0)]
+
+
+def test_reading_speed_flag_and_line_wrap():
+    """F-6: Netflix VI says 17 cps / 42 per line / 2 lines; flags start at 25 cps."""
+    from app.models import Cue
+    from app.pipeline import review
+
+    assert review.reading("Xin chào các bạn", 2.0) == (8.0, 1)
+    long_text = "một " * 30                                  # 119 characters → 3 lines
+    assert review.reading(long_text, 10.0)[1] == 3
+    cues = [Cue(1, 0.0, 3.0, "Thật ra hôm qua mình ngủ không được mấy."),       # 13 cps
+            Cue(2, 3.0, 4.5, "Thật ra chủ yếu là hôm qua mình ngủ không được mấy."),  # 33 cps
+            Cue(3, 5.0, 25.0, long_text)]                   # slow but 3 lines
+    issues = review.cue_issues(cues)
+    assert "read" not in issues[0] and "read" in issues[1] and "read" in issues[2]
+    assert review.LABELS["read"] == "Đọc không kịp" and "read" in review.ORDER

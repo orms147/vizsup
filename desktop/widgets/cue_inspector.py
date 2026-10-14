@@ -255,6 +255,8 @@ class CueInspector(QFrame):
         lock_row.addStretch(1)
         self.lines_lbl = label("", "small")
         lock_row.addWidget(self.lines_lbl)
+        self.read_lbl = label("", "small")                 # F-6 reading speed
+        lock_row.addWidget(self.read_lbl)
         br = button("Xuống dòng", "AlignCenter", variant="ghost", small=True,
                     tip="Chèn ngắt dòng ở vị trí con trỏ · Shift+Enter")
         br.clicked.connect(self.lineBreakRequested)
@@ -384,6 +386,29 @@ class CueInspector(QFrame):
         self.gain.blockSignals(False)
         self.mute_cb.blockSignals(False)
         self.lines_lbl.setText(f"đang {lines} dòng" if lines else "")
+        self.set_reading(c.vi, c.end - c.start)
+
+    def set_reading(self, text: str, seconds: float) -> None:
+        """F-6: this line's reading speed against the Netflix Vietnamese 17 cps."""
+        from app.pipeline import review
+
+        if not (text or "").strip():
+            self.read_lbl.setText("")
+            return
+        cps, n = review.reading(text, seconds)
+        if cps <= review.READ_CPS:
+            note, color = "dễ đọc", V2["green"]
+        elif cps <= review.READ_FLAG_CPS:
+            note, color = "hơi nhanh", V2["amber"]
+        else:
+            note, color = "đọc không kịp — Rút gọn?", V2["red"]
+        self.read_lbl.setText(f"{cps:.0f} ký tự/giây · {note}")
+        self.read_lbl.setStyleSheet(f"color:{color};font-size:11px;")
+        self.read_lbl.setToolTip(
+            f"Chuẩn Netflix cho phụ đề tiếng Việt: ≤ {review.READ_CPS:.0f} ký tự/giây, "
+            f"≤ {review.CHARS_PER_LINE} ký tự/dòng, ≤ {review.MAX_LINES} dòng. Gắn cờ khi quá "
+            f"{review.READ_FLAG_CPS:.0f} ký tự/giây hoặc cần hơn {review.MAX_LINES} dòng "
+            f"(câu này: {n} dòng).")
 
     def refresh_timing(self, c: EditorCue) -> None:
         for which, val in (("start", c.start), ("end", c.end)):
@@ -391,6 +416,7 @@ class CueInspector(QFrame):
             if not f.hasFocus():
                 f.setText(fmt_time(val, 3))
         self.dur_lbl.setText(f"{c.dur:.2f} s")
+        self.set_reading(c.vi, c.end - c.start)
 
     def set_ai_finding(self, finding: dict | None) -> None:
         from app.pipeline import qa
