@@ -8,11 +8,17 @@ part 2 is still being transcribed.
 Cutting (2026-10-14):
 - A cut must not fall inside a sentence. Voice gaps come from local VAD (`vad.spans_for`,
   cached), or ffmpeg silencedetect when the VAD model is unavailable.
-- Parts are cut with stream copy (lossless, one read of the file) by ffmpeg's segment
-  muxer, which splits exactly at the given keyframes: the parts' packets add up to the
-  source's, nothing duplicated or lost (a per-part ``-ss/-t`` copy overlapped ~0.2-0.5 s
-  at every cut — B-frame reordering and audio pre-roll). A cut can only be a video
-  KEYFRAME. So each cut is a keyframe that lies inside a voice gap, as close as possible
+- The PICTURE is cut with stream copy (lossless, one read of the file) by ffmpeg's segment
+  muxer, which splits exactly at the given keyframes: the parts' video packets add up to
+  the source's, nothing duplicated or lost (a per-part ``-ss/-t`` copy overlapped
+  ~0.2-0.5 s at every cut — B-frame reordering). A cut can only be a video KEYFRAME.
+- The SOUND of each part is cut from the source sample-accurately over the same span and
+  re-encoded once (AAC), starting with the part's first frame. Copying it through the
+  segment muxer put part 1's picture 0.161 s behind its sound on a real Douyin video (the
+  source's B-frame delay lived in an edit list the cut dropped). Containers disagree on
+  where that first frame sits, so every part's sync is then MEASURED against the source
+  (cross-correlating its loudest seconds) and corrected once when off by > 10 ms — on that
+  video: part 1 −132 ms → 0, parts 2-3 0 ms as cut. So each cut is a keyframe that lies inside a voice gap, as close as possible
   to the planned boundary (±3 min). If no keyframe in reach lies in a gap, the keyframe
   nearest to one is used and the cut is reported as ``in_gap: false``.
 - All times are relative to the file start (ffmpeg -ss adds the container start_time).
@@ -181,18 +187,102 @@ def _probe_duration(path: Path) -> float:
 def _segment(src: Path, out_dir: Path, cuts: list[float], *, total: float,
              progress: Callable[[float], None] | None = None,
              cancel: Callable[[], bool] | None = None) -> list[Path]:
-    """One stream-copy pass of ``src`` into ``out_dir/part_###.mp4`` split at ``cuts``."""
+    """One stream-copy pass of the source PICTURE into ``out_dir/video_###.mp4``, split
+    at ``cuts`` (the sound is added per part by :func:`_add_sound`)."""
     from app.pipeline.assemble import _run_ffmpeg
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    for old in out_dir.glob("part_*.mp4"):
+    for old in out_dir.glob("*.mp4"):
         old.unlink()
-    cmd = [ffmpeg_bin(), "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+    cmd = [ffmpeg_bin(), "-y", "-i", str(src), "-map", "0:v:0", "-c", "copy",
            "-f", "segment", "-segment_times", ",".join(f"{c:.3f}" for c in cuts),
            "-reset_timestamps", "1", "-segment_format_options", "movflags=+faststart",
-           "part_%03d.mp4"]
+           "video_%03d.mp4"]
     _run_ffmpeg(cmd, out_dir, total=total, progress=progress, cancel=cancel)
-    return sorted(out_dir.glob("part_*.mp4"))
+    return sorted(out_dir.glob("video_*.mp4"))
+
+
+def _first_frame(path: Path) -> float:
+    """Presentation time of the first video frame (a cut part can start at ~0.16 s)."""
+    r = subprocess.run([ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
+                        "-read_intervals", "%+#1", "-show_entries", "frame=pts_time",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        return float(r.stdout.split()[0].strip(","))
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _add_sound(src: Path, video: Path, dst: Path, start: float, end: float | None,
+               offset: float | None = None) -> float:
+    """``video`` + the source's sound over [start, end), sample-accurate, placed so its
+    first sample plays with the first frame (or at ``offset``). Silent sources stay
+    silent. Returns the offset used."""
+    offset = _first_frame(video) if offset is None else offset
+    cmd = [ffmpeg_bin(), "-v", "error", "-y", "-i", str(video),
+           "-itsoffset", f"{offset:.6f}", "-ss", f"{start:.6f}"]
+    if end is not None:
+        cmd += ["-t", f"{end - start:.6f}"]
+    cmd += ["-i", str(src), "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0 or not dst.exists():
+        tail = (r.stderr or "").strip().splitlines()[-1:] or ["ffmpeg lỗi"]
+        raise RuntimeError(f"Ghép tiếng cho phần video lỗi: {tail[0]}")
+    return offset
+
+
+SYNC_RATE = 8000
+
+
+def _pcm(path: Path, *, start: float = 0.0, dur: float | None = None):
+    """Mono PCM on the file's presentation timeline (t=0 = ``start``; a sound that begins
+    later is preceded by silence, so samples line up with the picture)."""
+    import numpy as np
+
+    cmd = [ffmpeg_bin(), "-v", "error", "-ss", f"{start:.4f}"]
+    if dur is not None:
+        cmd += ["-t", f"{dur:.4f}"]
+    cmd += ["-i", str(path), "-vn", "-ac", "1",
+            "-af", f"aresample={SYNC_RATE}:async=1:first_pts=0", "-f", "s16le", "-"]
+    raw = subprocess.run(cmd, capture_output=True).stdout
+    return np.frombuffer(raw[: len(raw) // 2 * 2], np.int16).astype(np.float32)
+
+
+def sync_error(src: Path, part: Path, start: float) -> float | None:
+    """Seconds by which the part's sound runs EARLY against its picture, compared with
+    the source at the same moment (negative = late). None when there is no sound loud
+    enough in the part's first minute to tell."""
+    import numpy as np
+
+    mine = _pcm(part, dur=60.0)
+    if len(mine) < SYNC_RATE * 4:
+        return None
+    rms = [float(np.sqrt(np.mean(mine[i:i + SYNC_RATE * 3] ** 2)))
+           for i in range(0, len(mine) - SYNC_RATE * 3, SYNC_RATE // 2)]
+    if not rms or max(rms) < 200.0:
+        return None
+    w = rms.index(max(rms)) * (SYNC_RATE // 2)
+    probe = mine[w:w + SYNC_RATE * 3]
+    expected = start + w / SYNC_RATE - _first_frame_norm(part)
+    lo = max(0.0, expected - 1.0)
+    ref = _pcm(src, start=lo, dur=5.0)
+    if len(ref) < len(probe):
+        return None
+    corr = np.correlate(ref, probe, mode="valid")
+    found = lo + int(np.argmax(corr)) / SYNC_RATE
+    return round(found - expected, 4)
+
+
+def _first_frame_norm(path: Path) -> float:
+    """First frame on the timeline ffmpeg decodes with (pts − the file's start time)."""
+    r = subprocess.run([ffprobe_bin(), "-v", "error", "-show_entries", "format=start_time",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        st = float(r.stdout.strip() or 0)
+    except ValueError:
+        st = 0.0
+    return _first_frame(path) - st
 
 
 # --- split ----------------------------------------------------------------------------
@@ -233,7 +323,7 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
     # just before the keyframe's DTS: the segment muxer then cuts exactly at it
     at = [min(c.t, dts_of.get(c.t, c.t)) - 0.002 for c in cuts]
     files = _segment(src, tmp, at, total=duration, cancel=cancel,
-                     progress=lambda f: tick(f, f"Cắt video thành {n} phần · {int(f * 100)}%"))
+                     progress=lambda f: tick(0.9 * f, f"Cắt video thành {n} phần · {int(f * 100)}%"))
     if len(files) != n:
         raise RuntimeError(f"Cắt video ra {len(files)} phần thay vì {n}.")
     vdurs = [_video_duration(f) for f in files]
@@ -246,11 +336,21 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
     parts = []
     starts = [0.0, *real]
     for k, start in enumerate(starts):
+        if cancel and cancel():
+            raise InterruptedError("Đã hủy.")
         end = starts[k + 1] if k + 1 < len(starts) else duration
         pid = uuid.uuid4().hex[:12]
         pdir = storage / pid
         pdir.mkdir(parents=True, exist_ok=True)
-        files[k].replace(pdir / "source.mp4")
+        tick(0.9 + 0.1 * k / n, f"Ghép tiếng phần {k + 1}/{n}…")
+        stop = end if k + 1 < len(starts) else None
+        used = _add_sound(src, files[k], pdir / "source.mp4", start, stop)
+        err = sync_error(src, pdir / "source.mp4", start)
+        if err is not None and abs(err) > 0.01:
+            _add_sound(src, files[k], pdir / "source.mp4", start, stop, offset=used + err)
+            after = sync_error(src, pdir / "source.mp4", start)
+            say(f"… phần {k + 1}: chỉnh tiếng lệch hình {err * 1000:+.0f} ms"
+                + (f" → còn {after * 1000:+.0f} ms" if after is not None else ""))
         dur = _probe_duration(pdir / "source.mp4")
         info = {"id": pid, "index": k + 1, "start": round(start, 3),
                 "end": round(end, 3), "duration": round(dur, 3),

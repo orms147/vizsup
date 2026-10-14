@@ -92,7 +92,7 @@ def test_split_a_real_video_at_keyframes_in_silence(tmp_path, monkeypatch):
     job = Job(id="g", work_dir=tmp_path / "g")
     subprocess.run([_ffmpeg(), "-v", "error", "-y",
                     "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=360",
-                    "-f", "lavfi", "-i", "sine=frequency=300:sample_rate=16000:duration=360",
+                    "-f", "lavfi", "-i", "anoisesrc=d=360:c=pink:r=16000:a=0.4:seed=7",
                     "-af", "volume='if(lt(mod(t,7),6),1,0)':eval=frame",
                     "-c:v", "libx264", "-g", "15", "-keyint_min", "15", "-sc_threshold", "0",
                     "-c:a", "aac", "-shortest", str(job.source_video)], check=True)
@@ -112,6 +112,9 @@ def test_split_a_real_video_at_keyframes_in_silence(tmp_path, monkeypatch):
         assert abs(p["start"] - round(p["start"] / 1.5) * 1.5) < 0.05   # on a keyframe
         # cut where planned, not at the NEXT keyframe (asked just before the keyframe's DTS)
         assert 0 < p["start"] - asked < 0.3
+    for p in parts:                                     # sound and picture as in the source
+        err = split.sync_error(job.source_video, storage / p["id"] / "source.mp4", p["start"])
+        assert err is not None and abs(err) < 0.012, (p["index"], err)
     total = sum(p["duration"] for p in parts)
     assert abs(total - 360.0) < 0.15                        # no overlap at the cuts
     meta = json.loads((storage / parts[1]["id"] / "metadata.json").read_text(encoding="utf-8"))
