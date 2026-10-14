@@ -98,6 +98,73 @@ def with_retry(fn: Callable, *, attempts: int = 3, sleep: Callable[[float], None
     raise RuntimeError("unreachable")
 
 
+# --- uploads the network keeps dropping ----------------------------------------
+# 2026-10-14, this machine: requests to OpenRouter of ≤ 54 KB always went through, from
+# ~217 KB they were cut almost every time (same 1.4 MB to another host: fine) — the
+# 4-minute audio chunks (~1.4 MB) all failed and ASR was unusable. A chunk whose upload
+# is dropped is cut in two and sent again, down to MIN_SPLIT_SEC; the size that got
+# through is remembered for the session, so later chunks are cut up front.
+MIN_SPLIT_SEC = 15.0          # ≈ 60 KB at the 32 kbps used for split pieces
+_DROP_NAMES = {"APIConnectionError", "APITimeoutError", "ConnectError", "ConnectTimeout",
+               "ReadError", "WriteError", "WriteTimeout", "RemoteProtocolError",
+               "ConnectionError", "ConnectionResetError", "ConnectionAbortedError"}
+_upload_limit: int | None = None          # bytes; None until a drop was seen
+
+
+def is_upload_drop(exc: BaseException) -> bool:
+    """The request got no HTTP answer at all (the connection was cut), as opposed to an
+    error the server returned."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if status(exc) is not None:
+            return False
+        if type(exc).__name__ in _DROP_NAMES:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _cut(media: Path, span: tuple[float, float], out: Path) -> Path:
+    from app.ffmpegutil import ffmpeg_bin
+
+    s, e = span
+    subprocess.run([ffmpeg_bin(), "-y", "-ss", f"{s:.3f}", "-t", f"{e - s:.3f}", "-i", str(media),
+                    "-ac", "1", "-ar", "16000", "-b:a", "32k", str(out)],   # smaller: it's a retry
+                   check=True, capture_output=True)
+    return out
+
+
+def split_on_drop(media: Path | None, span: tuple[float, float], path: Path,
+                  call: Callable[[Path, tuple[float, float]], object], *,
+                  min_sec: float = MIN_SPLIT_SEC, log: Callable[[str], None] | None = None) -> list:
+    """``call(path, span)`` for one uploaded chunk → ``[(span, result), …]`` in time order.
+    When the network drops the upload (or the chunk is bigger than what got through
+    earlier), the span is halved and each half sent on its own, recursively. Without
+    ``media`` (no source to cut from) it is a plain call."""
+    global _upload_limit
+    lo, hi = span
+    can_split = media is not None and hi - lo >= 2 * min_sec
+    size = path.stat().st_size if path.exists() else 0
+    if not (can_split and _upload_limit is not None and size > _upload_limit):
+        try:
+            return [(span, call(path, span))]
+        except Exception as exc:
+            if not (can_split and is_upload_drop(exc)):
+                raise
+            _upload_limit = min(_upload_limit or size, max(1, size // 2))
+            if log:
+                log(f"… mạng ngắt khi gửi {size // 1024} KB — chia đoạn {lo:.0f}–{hi:.0f} s "
+                    f"làm đôi và gửi lại")
+    mid = round((lo + hi) / 2, 3)
+    out: list = []
+    with tempfile.TemporaryDirectory(prefix="vizsup_split_") as tmp:
+        for k, part in enumerate(((lo, mid), (mid, hi))):
+            piece = _cut(media, part, Path(tmp) / f"half_{k}.mp3")
+            out += split_on_drop(media, part, piece, call, min_sec=min_sec, log=log)
+    return out
+
+
 def test_models_endpoint() -> tuple[bool, str]:
     import httpx
 
@@ -338,7 +405,8 @@ def _words_of(resp, offset: float) -> list[Word]:
 
 
 def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
-                cache_dir: Path | None = None, audio_id: str = "") -> list[Word]:
+                cache_dir: Path | None = None, audio_id: str = "",
+                media: Path | None = None, log: Callable[[str], None] | None = None) -> list[Word]:
     """Word timestamps for each uploaded chunk from a /audio/transcriptions model
     (verbose_json + word granularity), shifted to absolute time. Measured 2026-10-01
     on a real 137 s vlog: openai/whisper-large-v3 → 691 words in 4.6 s.
@@ -352,12 +420,17 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
         path, (lo, _hi) = item
 
         def fetch() -> list[Word]:
-            def send():
-                with path.open("rb") as fh:
-                    return client().audio.transcriptions.create(
-                        file=fh, model=model, language=language, response_format="verbose_json",
-                        timestamp_granularities=["word", "segment"])
-            return _words_of(with_retry(send), lo)
+            def one_piece(p: Path, sp: tuple[float, float]) -> list[Word]:
+                def send():
+                    with p.open("rb") as fh:
+                        return client().audio.transcriptions.create(
+                            file=fh, model=model, language=language,
+                            response_format="verbose_json",
+                            timestamp_granularities=["word", "segment"])
+                return _words_of(with_retry(send), sp[0])
+
+            pieces = split_on_drop(media, (lo, _hi), path, one_piece, log=log)
+            return [w for _sp, words in pieces for w in words]
 
         key = f"words|{model}|{span_tag((lo, _hi))}|{audio_id}|{language}"
         # JSON gives lists back: rebuild the tuples so cached and fresh results are equal

@@ -178,3 +178,52 @@ def test_a_damaged_entry_is_recomputed_not_trusted(tmp_path):
     next(tmp_path.glob("transcript_*.json")).write_text("{not json", encoding="utf-8")
     assert _cloud.chunk_cache(tmp_path, "transcript", "k", lambda: "again") == "again"
     assert _cloud.chunk_cache(tmp_path, "transcript", "k", lambda: pytest.fail("x")) == "again"
+
+
+def test_dropped_uploads_are_split_and_the_limit_is_remembered(tmp_path, monkeypatch):
+    """2026-10-14: uploads of > ~200 KB to OpenRouter were cut by this network every time
+    and ASR died. A dropped chunk is halved and resent; later chunks are cut up front."""
+    import httpx
+
+    from app.providers.asr import _cloud
+
+    monkeypatch.setattr(_cloud, "_upload_limit", None)
+    cuts = []
+
+    def fake_cut(media, span, out):
+        cuts.append(span)
+        out.write_bytes(b"x" * int((span[1] - span[0]) * 1000))   # 1 KB per second
+        return out
+
+    monkeypatch.setattr(_cloud, "_cut", fake_cut)
+
+    def call(path, span):
+        if path.stat().st_size > 70_000:                          # "the network" cuts > 70 KB
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return f"{span[0]:.0f}-{span[1]:.0f}"
+
+    big = tmp_path / "chunk.mp3"
+    big.write_bytes(b"x" * 240_000)
+    pieces = _cloud.split_on_drop(tmp_path / "src.wav", (0.0, 240.0), big, call)
+    assert [r for _s, r in pieces] == ["0-60", "60-120", "120-180", "180-240"]
+    assert _cloud._upload_limit is not None and _cloud._upload_limit <= 120_000
+
+    cuts.clear()                                                  # next chunk: cut up front
+    nxt = tmp_path / "next.mp3"
+    nxt.write_bytes(b"x" * 240_000)
+    calls = []
+    out = _cloud.split_on_drop(tmp_path / "src.wav", (240.0, 480.0), nxt,
+                               lambda p, sp: calls.append(sp) or call(p, sp))
+    assert len(out) == 4 and all(sp[1] - sp[0] == 60 for sp in calls)   # no failed big send
+
+
+def test_server_errors_are_not_mistaken_for_drops(tmp_path):
+    import httpx
+
+    from app.providers.asr import _cloud
+
+    req = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    err = httpx.HTTPStatusError("400", request=req, response=httpx.Response(400, request=req))
+    err.status_code = 400
+    assert not _cloud.is_upload_drop(err)
+    assert _cloud.is_upload_drop(httpx.ReadError("reset"))

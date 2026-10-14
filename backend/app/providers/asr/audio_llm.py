@@ -141,9 +141,10 @@ class AudioLLM(ASRProvider):
             key = f"transcript|{self.model}|{_cloud.span_tag(span)}|{aid}|{language}|{instr}"
 
             def listen() -> str:
-                text = self._call(path, span[1] - span[0])
+                pieces = _cloud.split_on_drop(
+                    media, span, path, lambda p, sp: self._call(p, sp[1] - sp[0]), log=say)
                 sent.append(1)
-                return text
+                return "\n".join(str(t) for _sp, t in pieces)
             text = _cloud.chunk_cache(cache, "transcript", key, listen)
             say(f"  ✓ AI đã nghe xong đoạn {done.next()}/{n}")
             return text
@@ -161,7 +162,8 @@ class AudioLLM(ASRProvider):
                 say("Lấy mốc thời gian từng từ (faster-whisper trên máy)…")
             else:
                 say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
-                words = _cloud.cloud_words(items, language, cache_dir=cache, audio_id=aid)
+                words = _cloud.cloud_words(items, language, cache_dir=cache, audio_id=aid,
+                                           media=media, log=say)
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
         voice = _voice(media, say)
         cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words,

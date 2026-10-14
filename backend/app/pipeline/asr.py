@@ -119,7 +119,7 @@ def retime(job: Job, *, log=None, language: str = "zh") -> int:
         cache, aid = _cloud.cache_for(src)
         with _cloud.chunk_files(src, spans) as paths:
             words = _cloud.cloud_words(list(zip(paths, spans)), language,
-                                       cache_dir=cache, audio_id=aid)
+                                       cache_dir=cache, audio_id=aid, media=src, log=say)
     voice = vad.spans_for(src, job.work_dir, log=say)
     groups = [(sp, sents) for sp, sents in groups if sents]
     new = _cloud.reindex(_cloud.time_groups(src, groups, language, words=words, voice=voice))
