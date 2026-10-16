@@ -332,6 +332,8 @@ class RenderView(QWidget):
         ll.addLayout(rrow)
         self.rights_note = label("", "small", wrap=True)
         ll.addWidget(self.rights_note)
+        self.comment_lbl = label("", "small", wrap=True)          # F-4
+        ll.addWidget(self.comment_lbl)
         ll.addStretch(1)
 
         scroll = QScrollArea()
@@ -659,6 +661,7 @@ class RenderView(QWidget):
         self.credit_cb.setToolTip(f"Sẽ hiện: “{line}”" if line else
                                   "Không có thông tin người đăng (video từ máy) — ghi nguồn trong "
                                   "mô tả bài đăng.")
+        self._show_commentary()
         basis = disclosure.load_rights(self._job).get("basis", "unknown")
         self.rights.blockSignals(True)
         self.rights.setCurrentIndex(max(0, self.rights.findData(basis)))
@@ -710,6 +713,32 @@ class RenderView(QWidget):
             return
         self._show_rights_note(basis)
 
+    def _commentary_stats(self) -> tuple[int, float]:
+        """(notes, share of the runtime): measured by the last render when it had them,
+        otherwise estimated from the text."""
+        from app.pipeline import assemble, commentary
+
+        if self._job is None:
+            return 0, 0.0
+        notes = commentary.load(self._job)
+        info = assemble.load_render_info(self._job)
+        if notes and info.get("commentary_s"):
+            return len(notes), float(info.get("commentary_share") or 0.0)
+        dur = self.preview.duration() or float(info.get("duration") or 0.0)
+        return len(notes), commentary.estimate(notes, dur)[1] if notes else 0.0
+
+    def _show_commentary(self) -> None:
+        n, share = self._commentary_stats()
+        if n:
+            self.comment_lbl.setText(f"Bình luận của bạn: {n} đoạn · ~{share * 100:.1f}% thời "
+                                     "lượng — giọng khác giọng lồng tiếng.")
+            self.comment_lbl.setStyleSheet(f"color:{V2['secondary']};")
+        else:
+            self.comment_lbl.setText("Chưa có bình luận của bạn. Video đăng lại cần phần của "
+                                     "riêng bạn để được phân phối / kiếm tiền — thêm ở tab Bình "
+                                     "luận (màn Sửa phụ đề).")
+            self.comment_lbl.setStyleSheet(f"color:{V2['amber']};")
+
     def _show_post(self) -> None:
         from app.pipeline import disclosure
         from desktop.widgets.dialogs import PostDialog
@@ -722,7 +751,7 @@ class RenderView(QWidget):
         credit = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         PostDialog(self, text=text, checklist=disclosure.checklist(
             ai_voice=ai, credit=credit or bool(disclosure.credit_line(self._job)),
-            rights=rights)).exec()
+            rights=rights, commentary=self._commentary_stats())).exec()
 
     def _sync_audio_enabled(self) -> None:
         mode = self._audio_mode()
@@ -879,6 +908,7 @@ class RenderView(QWidget):
         quick = Path(path).name == "preview.mp4"
         if not quick:
             self._out = path
+            self._show_commentary()          # the share measured by this render (F-4)
             self._out_frame = self.frame.currentData()
             self._saved = None
         self._show_result_kind(quick=quick)

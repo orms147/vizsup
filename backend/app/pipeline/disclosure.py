@@ -131,8 +131,11 @@ def post_description(job: Job, *, ai_voice: bool, title: str = "") -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def checklist(*, ai_voice: bool, credit: bool, rights: str) -> list[tuple[bool, str]]:
-    """Before posting: [(done, item)] — reminders, not legal advice."""
+def checklist(*, ai_voice: bool, credit: bool, rights: str,
+              commentary: tuple[int, float] | None = None) -> list[tuple[bool, str]]:
+    """Before posting: [(done, item)] — reminders, not legal advice. ``commentary`` =
+    (notes, share of the runtime) of the user's own commentary (F-4)."""
+    n, share = commentary or (0, 0.0)
     return [
         (rights in ("own", "permission", "licensed"),
          "Có quyền dùng video (của bạn / được tác giả cho phép / có bản quyền). Douyin cấm "
@@ -142,6 +145,10 @@ def checklist(*, ai_voice: bool, credit: bool, rights: str) -> list[tuple[bool, 
          "Khi đăng, nếu nền tảng hỏi có dùng nội dung do AI tạo không: chọn Có cho giọng "
          "lồng tiếng AI (TikTok, YouTube, Facebook đều có mục này)." if ai_voice else
          "Không lồng tiếng AI — không cần nhãn AI cho giọng nói."),
-        (False, "Thêm phần của riêng bạn (bình luận, giới thiệu, góc nhìn): YouTube, Facebook và "
-                "TikTok đều giảm phân phối / tắt kiếm tiền với video đăng lại không thêm gì."),
+        (n > 0,
+         f"Có phần của riêng bạn: {n} đoạn bình luận · ~{share * 100:.1f}% thời lượng. Nền tảng "
+         "không công bố ngưỡng; càng nhiều góc nhìn của bạn càng tốt." if n else
+         "Thêm phần của riêng bạn (bình luận, giới thiệu, góc nhìn — tab Bình luận ở màn Sửa phụ "
+         "đề): YouTube, Facebook và TikTok đều giảm phân phối / tắt kiếm tiền với video đăng "
+         "lại không thêm gì."),
     ]

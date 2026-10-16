@@ -9,6 +9,8 @@ Every mutation of ``self.cues`` goes through ``_snapshot()`` first (undo/redo).
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -26,6 +28,7 @@ from desktop import cuemodel, store
 from desktop.cuemodel import EditorCue, fmt_time
 from desktop.ui_thread import connect_on_ui
 from desktop.widgets.chrome import ProjectBar, badge, button, icon_button, label
+from desktop.widgets.commentary_panel import CommentaryPanel
 from desktop.widgets.cue_inspector import CueInspector
 from desktop.widgets.cue_list import CueList
 from desktop.widgets.style_panel import StylePanel
@@ -112,6 +115,8 @@ class EditorView(QWidget):
         self.cue_list = CueList()
         self.style_panel = StylePanel()
         self.inspector = CueInspector(self.style_panel)
+        self.commentary = CommentaryPanel()                 # F-4: the user's own notes
+        self.commentary_tab = self.inspector.add_page("Bình luận", self.commentary)
         self.gain, self.mute_cb = self.inspector.gain, self.inspector.mute_cb
         self.timeline_panel = TimelinePanel()
         self.timeline = self.timeline_panel.timeline
@@ -184,6 +189,14 @@ class EditorView(QWidget):
         ins.editStyleRequested.connect(self._edit_style)
         ins.shortenRequested.connect(self._shorten)
         ins.listenRequested.connect(self._preview_dub)
+        cm_ = self.commentary
+        cm_.changed.connect(self._save_commentary)
+        cm_.addRequested.connect(self._add_note)
+        cm_.hereRequested.connect(self._note_to_playhead)
+        cm_.seekRequested.connect(lambda t: self.video.seek_seconds(t))
+        cm_.previewRequested.connect(self._preview_note)
+        cm_.importRequested.connect(self._import_note_audio)
+        cm_.list.currentRowChanged.connect(lambda _i: self._note_warning())
         ins.glossaryRequested.connect(self.glossaryRequested)
         self.gain.sliderPressed.connect(self._snapshot)   # once per slider gesture
         self.gain.valueChanged.connect(self._on_gain)
@@ -906,6 +919,137 @@ class EditorView(QWidget):
             self.cue_list.selectRow(0)
         self._load_waveform(job)
         self._load_speech(job)
+        self._load_commentary(job)
+
+    # --- F-4: the user's own commentary ------------------------------------------------
+    def _load_commentary(self, job) -> None:
+        from app.pipeline import commentary
+
+        notes = commentary.load(job)
+        self.commentary.set_notes(notes, self._duration() or 0.0)
+        self.timeline.set_notes([(n.at, n.mode) for n in notes])
+        tts_name, dub_voice = self._ctx.get("tts", "edge"), self._ctx.get("voice")
+
+        def voices():
+            from app.providers.registry import get_tts
+
+            return list(get_tts(tts_name).voices() or [])
+
+        self._run_async(voices, lambda vs: self.job is job and
+                        self.commentary.set_voices(vs, dub_voice), lambda _m: None)
+        self._note_warning()
+
+    def _save_commentary(self) -> None:
+        """Saved at once (not on the autosave timer): it is a separate file, and it
+        counts towards the approved revision, so the render page re-locks on its own."""
+        from app.pipeline import commentary
+
+        if self.job is None:
+            return
+        notes = self.commentary.notes()
+        commentary.save(self.job, notes)
+        self.timeline.set_notes([(n.at, n.mode) for n in notes])
+        self._note_warning()
+
+    def _note_time_here(self) -> float:
+        """The playhead — moved to the end of the sentence being spoken, so a pause never
+        cuts a line in half."""
+        t = self.video.current_time()
+        for c in self.cues:
+            if c.start < t < c.end:
+                return c.end
+        return t
+
+    def _add_note(self, kind: str) -> None:
+        from app.pipeline import commentary
+
+        if self.job is None:
+            return
+        self.video.pause()
+        dur = self._duration() or 0.0
+        at = {"intro": 0.0, "outro": dur}.get(kind)
+        if at is None:
+            at = self._note_time_here()
+        self.inspector.set_tab(self.commentary_tab)
+        self.commentary.add(commentary.Note(at=round(at, 2), text="", mode="pause"))
+
+    def _note_to_playhead(self) -> None:
+        self.commentary.update_selected(at=round(self._note_time_here(), 2))
+
+    def _note_warning(self) -> None:
+        """A note talking over a line, or freezing the picture in the middle of one."""
+        n = self.commentary.selected()
+        msg = ""
+        if n is not None:
+            end = n.at + max(1.0, n.est_seconds())
+            for i, c in enumerate(self.cues, 1):
+                if n.mode == "over" and c.start < end and c.end > n.at:
+                    msg = (f"Nói đè lên câu {i} ({fmt_time(c.start)}–{fmt_time(c.end)}) — chọn "
+                           "Dừng hình, hoặc dời sang chỗ không có lời thoại.")
+                    break
+                if n.mode == "pause" and c.start + 0.05 < n.at < c.end - 0.05:
+                    msg = (f"Video sẽ dừng giữa câu {i} — bấm “Đặt = vị trí phát” để đưa về "
+                           "cuối câu.")
+                    break
+        self.commentary.set_warning(msg)
+
+    def _preview_note(self) -> None:
+        from app.pipeline import commentary
+
+        n = self.commentary.selected()
+        if n is None or self.job is None or self._dub_player is None:
+            return
+        job, tts_name = self.job, self._ctx.get("tts", "edge")
+        dub_voice, rate = self._ctx.get("voice"), self._ctx.get("rate")
+        if n.audio:
+            from PySide6.QtCore import QUrl
+
+            self._dub_audio.setVolume(1.0)
+            self._dub_player.setSource(QUrl.fromLocalFile(str(job.work_dir / n.audio)))
+            self._dub_player.play()
+            return
+        if not n.text.strip():
+            return
+        note = commentary.Note(at=n.at, text=n.text, mode=n.mode, voice=n.voice)
+        self.commentary.listen_btn.setEnabled(False)
+
+        def work():
+            voiced = commentary.synthesize(job, [note], provider=tts_name, dub_voice=dub_voice,
+                                           rate=rate)
+            return str(voiced[0].path) if voiced else ""
+
+        def done(path):
+            from PySide6.QtCore import QUrl
+
+            self.commentary.listen_btn.setEnabled(True)
+            if path:
+                self._dub_audio.setVolume(1.0)
+                self._dub_player.setSource(QUrl.fromLocalFile(path))
+                self._dub_player.play()
+
+        def fail(msg):
+            self.commentary.listen_btn.setEnabled(True)
+            self._toast(f"Lỗi nghe thử bình luận: {msg}")
+
+        self._run_async(work, done, fail)
+
+    def _import_note_audio(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from app.pipeline import commentary
+
+        if self.job is None or self.commentary.selected() is None:
+            return
+        fn, _ = QFileDialog.getOpenFileName(self, "Chọn file ghi âm bình luận", "",
+                                            "Âm thanh (*.wav *.mp3 *.m4a *.aac *.ogg *.flac)")
+        if not fn:
+            return
+        try:
+            rel = commentary.import_audio(self.job, Path(fn))
+        except OSError as e:
+            self._toast(f"Không dùng được file: {e}")
+            return
+        self.commentary.update_selected(audio=rel)
 
     def _load_waveform(self, job) -> None:
         from app.pipeline import waveform
@@ -931,6 +1075,7 @@ class EditorView(QWidget):
     # --- project bar ------------------------------------------------------------
     def _on_duration(self, d: float) -> None:
         self._meta["dur"] = d
+        self.commentary.set_duration(d)
         self.timeline.set_duration(d)
         self._update_project()
 

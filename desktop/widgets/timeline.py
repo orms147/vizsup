@@ -45,6 +45,7 @@ class Timeline(QWidget):
         self._issues: list[list[str]] = []
         self._peaks: list[float] = []
         self._speech: list[tuple[float, float]] = []   # VAD spans (green band)
+        self._notes: list[tuple[float, str]] = []      # F-4 commentary (time, mode) flags
         self._per_sec = 50
         self._video_dur = 0.0
         self._dur = 1.0
@@ -72,6 +73,12 @@ class Timeline(QWidget):
     def set_speech(self, spans: list[tuple[float, float]] | None) -> None:
         """Where the voice is (app.pipeline.vad) — drawn under the waveform."""
         self._speech = list(spans or [])
+        self.update()
+
+    def set_notes(self, notes: list[tuple[float, str]]) -> None:
+        """The user's commentary notes (F-4): an amber flag on the ruler + a line through
+        the lanes — solid for "pause" (the video stops there), dashed for "over"."""
+        self._notes = list(notes or [])
         self.update()
 
     def set_duration(self, seconds: float) -> None:
@@ -127,6 +134,7 @@ class Timeline(QWidget):
         self._paint_wave(p, clip)
         self._paint_speech(p, clip)
         self._paint_blocks(p, clip)
+        self._paint_notes(p, clip)
         self._paint_playhead(p)
 
     def _paint_ruler(self, p: QPainter, clip) -> None:
@@ -179,6 +187,21 @@ class Timeline(QWidget):
             if x1 < clip.left() or x0 > clip.right():
                 continue
             p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0), 3), 1.5, 1.5)
+
+    def _paint_notes(self, p: QPainter, clip) -> None:
+        col = _c(V2["amber"])
+        for at, mode in self._notes:
+            x = at * self._pps
+            if x < clip.left() - 12 or x > clip.right() + 12:
+                continue
+            pen = QPen(col, 1.5)
+            if mode != "pause":
+                pen.setStyle(Qt.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, RULER_H - 6), QPointF(x, TOTAL_H - 4))
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawPolygon(QPolygonF([QPointF(x, 2), QPointF(x + 10, 6.5), QPointF(x, 11)]))
 
     def _peak_at(self, t: float, span: float) -> float | None:
         if not self._peaks:

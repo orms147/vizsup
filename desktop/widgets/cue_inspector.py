@@ -121,6 +121,11 @@ class CueInspector(QFrame):
     def set_tab(self, i: int) -> None:
         self.tabbar.setCurrentIndex(i)
 
+    def add_page(self, title: str, widget: QWidget) -> int:
+        """One more tab (F-4 "Bình luận"); returns its index."""
+        self._pages.addWidget(self._scroll(widget))
+        return self.tabbar.addTab(title)
+
     # --- cue tab --------------------------------------------------------------
     def _cue_page(self) -> QWidget:
         page = QWidget()
