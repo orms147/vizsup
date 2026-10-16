@@ -83,7 +83,7 @@ empty reply over audible speech (that chunk falls back to Whisper's text), and W
 
 | Engine | Where | Notes |
 |---|---|---|
-| `rapidocr` (default) | local CPU | free, uploads nothing; ~0.25–0.5 s per frame; misses stylised captions |
+| `rapidocr` (default) | local GPU via DirectML (Windows), else CPU | free, uploads nothing; GPU ~0.1–0.2 s per frame (137 s video: 25 s vs 68 s on CPU, 97/97 cues identical), CPU ~0.25–0.5 s; misses stylised captions |
 | `vision_llm` | OpenRouter, role `ocr` (default `qwen/qwen3.7-flash`) | **uploads the subtitle band** of every frame; opt-in in the GUI ("Cách đọc chữ") / `--ocr-engine vision_llm` |
 
 Benchmark 2026-10-14, 441 frames (2 fps) of two real Douyin vlogs with burned-in captions, every
@@ -114,7 +114,8 @@ the current output. CPU: AMD Ryzen 9 7945HX; GPU: RTX 4070 Laptop.
 | WeChat OCR wrappers | — | — | no licence, uses WeChat's binary → avoid |
 
 Bottom line: no free local trick gets near the API's accuracy on stylised captions; the one
-lossless free speed-up is DirectML (≈ 1 h of OCR per 3-hour video instead of 1.5–4 h).
+lossless free speed-up is DirectML (≈ 1 h of OCR per 3-hour video instead of 1.5–4 h) — adopted
+2026-10-16 (`onnxruntime-directml` replaces `onnxruntime-gpu`; Silero VAD output unchanged).
 
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.

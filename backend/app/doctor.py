@@ -138,12 +138,15 @@ def _check_ocr() -> list[Check]:
         try:
             import onnxruntime as ort
 
-            if "CUDAExecutionProvider" in ort.get_available_providers():
+            providers = ort.get_available_providers()
+            if "DmlExecutionProvider" in providers:
+                out.append(("ok", "OCR trên GPU", "onnxruntime-directml (DirectML, không cần CUDA)"))
+            elif "CUDAExecutionProvider" in providers:
                 out.append(("ok", "OCR trên GPU", "onnxruntime có CUDA"))
             else:
                 out.append(("info", "OCR trên GPU",
-                            "onnxruntime bản CPU — muốn GPU: pip uninstall -y onnxruntime && "
-                            "pip install onnxruntime-gpu"))
+                            "onnxruntime bản CPU — muốn GPU (Windows): pip uninstall -y onnxruntime "
+                            "&& pip install onnxruntime-directml"))
         except Exception as exc:  # noqa: BLE001
             out.append(("warn", "OCR trên GPU", f"onnxruntime lỗi khi nạp: {exc}"))
     # documented footgun: full opencv bundles Qt and crashes next to PySide6
@@ -152,10 +155,12 @@ def _check_ocr() -> list[Check]:
                     "bản FULL đứng cạnh PySide6 sẽ CRASH GUI — chạy: pip uninstall -y opencv-python "
                     "&& pip install opencv-python-headless"))
     # the other shared-dir landmine: both ORT builds fight over one package dir
-    if _dist_installed("onnxruntime") and _dist_installed("onnxruntime-gpu"):
+    builds = [d for d in ("onnxruntime", "onnxruntime-gpu", "onnxruntime-directml")
+              if _dist_installed(d)]
+    if len(builds) > 1:
         out.append(("fail", "onnxruntime ×2",
-                    "cả bản CPU lẫn GPU cùng cài — chúng ghi đè file của nhau. Chạy: "
-                    "pip uninstall -y onnxruntime && pip install --force-reinstall onnxruntime-gpu"))
+                    f"{' + '.join(builds)} cùng cài — chúng ghi đè file của nhau. Chạy: pip "
+                    f"uninstall -y {' '.join(builds)} && pip install onnxruntime-directml"))
     return out
 
 

@@ -37,16 +37,18 @@ asr-accurate = [
 asr-align = [
     "whisperx>=3.1",
 ]
-# Hardcoded-subtitle OCR (burned-in Chinese subs → SRT). RapidOCR = ONNX PP-OCRv5
-# models, no PaddlePaddle — far easier to install on Windows. Runs on CPU by default;
-# for the 4070 add CUDA:  pip uninstall -y onnxruntime && pip install onnxruntime-gpu
-# (ocr.py auto-detects and falls back to CPU if the GPU libs are absent).
+# Hardcoded-subtitle OCR (burned-in Chinese subs → SRT). RapidOCR = ONNX PP-OCRv5+
+# models, no PaddlePaddle — far easier to install on Windows. On Windows the DirectML
+# build runs it on any DirectX 12 GPU with no CUDA / cuDNN install (2026-10-16: same
+# output as CPU, detection 420 → 80 ms per frame on an RTX 4070 Laptop). The three ORT
+# builds share one package dir — never install two of them.
 # IMPORTANT: rapidocr pulls `opencv-python` (full), which bundles Qt and CRASHES
 # alongside PySide6 in the same process. Use the headless build instead — after
 # installing this extra, run:  pip uninstall -y opencv-python && pip install opencv-python-headless
 ocr = [
     "rapidocr>=3.0",          # v3 integrates PP-OCRv5; new API (RapidOCROutput, params={...})
-    "onnxruntime>=1.17",      # CPU inference engine — swap for onnxruntime-gpu to use CUDA
+    "onnxruntime-directml>=1.24; sys_platform == 'win32'",   # GPU via DirectML
+    "onnxruntime>=1.17; sys_platform != 'win32'",
     "opencv-python-headless>=4.9",
 ]
 # LLM translation providers.
