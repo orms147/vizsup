@@ -233,9 +233,15 @@ def cmd_render(args: argparse.Namespace) -> int:
     print(f"[render] synthesizing Vietnamese voice (tts={args.tts}) ...")
     segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print)
     print(f"[render] {len(segments)} segments; assembling with FFmpeg ...")
+    from app.pipeline import commentary
+
+    notes = commentary.load(job)       # F-4: the user's own commentary, if any
+    voiced = commentary.synthesize(job, notes, provider=args.tts, dub_voice=args.voice,
+                                   log=print) if notes else []
     out = assemble.assemble(
         job,
         segments,
+        commentary=voiced,
         audio_mode=audio_mode,
         cover_hardsubs=args.cover_hardsubs,
         cover_mode=args.cover,

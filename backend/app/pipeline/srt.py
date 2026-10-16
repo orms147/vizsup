@@ -166,6 +166,7 @@ def write_ass(
     style: dict | None = None,
     cue_styles: dict[int, dict] | None = None,
     extra: list[dict] | None = None,
+    comments: list[Cue] | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
@@ -173,7 +174,9 @@ def write_ass(
     are routed to ``Default``/``Sub1``/``Sub2``… With ``cue_styles=None`` the output
     is byte-identical to the single-style path (locked by tests/test_write_ass.py).
     ``cover_hardsubs=True`` forces an opaque box on every style. ``extra``: corner notes
-    ``{start, end, text, align}`` (credit, "Lồng tiếng AI") in a small boxed "Tag" style."""
+    ``{start, end, text, align}`` (credit, "Lồng tiếng AI") in a small boxed "Tag" style.
+    ``comments``: the user's own commentary (F-4), in the same look but warm yellow italic
+    so viewers can tell it from the translation."""
     base = {**DEFAULT_STYLE, **(style or {})}
     ordered: list[tuple[str, dict]] = []   # (name, merged style) — Default first
     seen: dict[str, str] = {}              # json(merged) → name
@@ -204,6 +207,9 @@ def write_ass(
                "outline_w": 6, "bold": True, "alignment": 7, "margin_l": 36, "margin_r": 36,
                "margin_v": 100}
         style_block += "\n" + _style_line("Tag", tag, font, max(22, round(size * 0.42)), False)
+    if comments:
+        note = {**base, "primary": "#FFD966", "italic": True}
+        style_block += "\n" + _style_line("Comment", note, font, size, cover_hardsubs)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
     for c, nm, pfx in zip(cues, cue_names, cue_prefixes):
@@ -211,6 +217,10 @@ def write_ass(
         lines.append(
             f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},{nm},,0,0,0,,{text}"
         )
+    for c in comments or []:
+        text = c.text.replace("\n", "\\N")
+        lines.append(f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Comment,,"
+                     f"0,0,0,,{text}")
     for e in extra or []:
         text = "{\\an%d}" % int(e.get("align", 7)) + str(e["text"]).replace("\n", "\\N")
         lines.append(f"Dialogue: 1,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Tag,,"

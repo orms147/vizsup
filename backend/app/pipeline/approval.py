@@ -7,7 +7,8 @@ with the current one, so an edit made AFTER approving locks rendering again unti
 the user re-approves — even across screens or restarts.
 
 A revision is a hash of everything that changes what gets voiced or burned in:
-vi.srt, the per-cue overrides (gain / mute), per-cue styles and the global style.
+vi.srt, the per-cue overrides (gain / mute), per-cue styles, the global style and the
+user's own commentary notes.
 Editor-only review bookkeeping (lock, "Đã xem") is excluded — marking a line
 reviewed must not revoke an approval.
 """
@@ -40,7 +41,8 @@ def _overrides_bytes(job: Job) -> bytes:
 
 def revision(job: Job) -> str:
     h = hashlib.sha256()
-    for name in ("vi.srt", "style_overrides.json", "style.json"):
+    # commentary.json (F-4): the user's own notes are voiced and burned too
+    for name in ("vi.srt", "style_overrides.json", "style.json", "commentary.json"):
         p = job.work_dir / name
         h.update(name.encode())
         h.update(p.read_bytes() if p.exists() else b"")

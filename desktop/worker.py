@@ -417,6 +417,21 @@ class PipelineWorker(QObject):
                                           cancel=lambda: self._cancel)  # per-cue cancel (N-10)
                 self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
 
+            # F-4: the user's own commentary — a voice other than the dub's, or their recording
+            from app.pipeline import commentary
+
+            notes = commentary.load(job)
+            voiced = []
+            if notes:
+                self._check()
+                self.progress.emit(0.5, f"Đang tạo giọng cho {len(notes)} đoạn bình luận…")
+                voiced = commentary.synthesize(job, notes, provider=o.get("tts", "edge"),
+                                               dub_voice=o.get("voice"), rate=o.get("rate"),
+                                               log=self.log.emit)
+            # keeping the original voice but adding commentary: the original ducks under it
+            audio_mode = ("duck" if voiced else "replace") if original else \
+                o.get("audio_mode", "replace")
+
             self._check()
             self.stage_started.emit("assemble")
             self.progress.emit(0.6, "Đang ghép video (ffmpeg)…")
@@ -425,8 +440,8 @@ class PipelineWorker(QObject):
             out = assemble.assemble(
                 job, segments,
                 burn_cues=o.get("burn_cues"),  # N-13 snapshot: subs match what TTS spoke
-                audio_mode="replace" if original else o.get("audio_mode", "replace"),
-                orig_volume=o.get("orig_volume", 1.0),
+                audio_mode=audio_mode,
+                orig_volume=1.0 if original else o.get("orig_volume", 1.0),
                 dub_volume=o.get("dub_volume", 1.0),
                 cover_hardsubs=o.get("cover_hardsubs", False),
                 cover_mode=o.get("cover_mode"),
@@ -440,7 +455,8 @@ class PipelineWorker(QObject):
                 cancel=lambda: self._cancel,        # a long encode stops on Hủy
                 overlays=disclosure.overlays(        # F-1/F-2: credit + AI-voice label
                     job, credit=bool(o.get("credit_overlay")),
-                    ai_voice=bool(o.get("ai_label")) and not original),
+                    ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
+                commentary=voiced,
             )
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")

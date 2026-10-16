@@ -1003,7 +1003,9 @@ class RenderView(QWidget):
     def _export(self, kind: str) -> None:
         if self._job is None:
             return
-        src = self._job.vi_srt if kind == "srt" else self._job.subs_ass
+        rendered = self._job.work_dir / "output.srt"     # matches the video (F-4 pauses)
+        src = ((rendered if rendered.exists() and self._out else self._job.vi_srt)
+               if kind == "srt" else self._job.subs_ass)
         if not src.exists():
             self.res_status.setText("Chưa có tệp .ass — dựng video trước.")
             return

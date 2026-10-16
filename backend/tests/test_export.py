@@ -61,7 +61,7 @@ def test_softsub_repeats_the_blur_cover_of_the_render(tmp_path, monkeypatch):
     cmd = export.softsub_cmd(job, tmp_path / "o.mkv")
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "crop=iw*0.8000:ih*0.1000:iw*0.1000:ih*0.8000,boxblur" in graph
-    assert cmd[cmd.index("-map") + 1] == "[v]" and "libx264" in cmd and "copy" in cmd   # audio still copied
+    assert cmd[cmd.index("-map") + 1] == "[vb]" and "libx264" in cmd and "copy" in cmd   # audio still copied
 
 
 def test_full_render_records_how_it_was_made(tmp_path, monkeypatch):

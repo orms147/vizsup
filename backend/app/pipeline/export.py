@@ -39,16 +39,26 @@ def _fonts(job: Job) -> list[Path]:
 
 def softsub_cmd(job: Job, dest: Path) -> list[str]:
     """ffmpeg argv (cwd = job dir): video from source.mp4 (no burned subs), audio from
-    the rendered output.mp4 (the dub mix), subs.ass as the default subtitle track."""
+    the rendered output.mp4 (the dub mix), subs.ass as the default subtitle track. Re-
+    encodes the picture only when the render changed it (blur cover, F-4 pauses)."""
     from app.pipeline import assemble
 
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4", "-i", "output.mp4", "-i", "subs.ass"]
-    if assemble.load_render_info(job).get("cover_mode") == "blur":
+    info = assemble.load_render_info(job)
+    ins = [tuple(x) for x in info.get("inserts") or []]
+    parts: list[str] = []
+    v = "[0:v]"
+    if ins:          # F-4 pause notes: the picture freezes exactly like output.mp4's
+        pre, v, _a = assemble._pause_graph(ins, float(info.get("duration") or 0), v, [])
+        parts += pre
+    if info.get("cover_mode") == "blur":
         crop_expr, overlay_pos = assemble._blur_band_filters(assemble._load_region(job))
-        cmd += ["-filter_complex",
-                f"[0:v]split[vsrc][vband];[vband]{crop_expr},boxblur=10:2[vblur];"
-                f"[vsrc][vblur]{overlay_pos}[v]",
-                "-map", "[v]", "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+        parts += [f"{v}split[vsrc][vband]", f"[vband]{crop_expr},boxblur=10:2[vblur]",
+                  f"[vsrc][vblur]{overlay_pos}[vb]"]
+        v = "[vb]"
+    if parts:
+        cmd += ["-filter_complex", ";".join(parts), "-map", v,
+                "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
     else:
         cmd += ["-map", "0:v:0", "-c:v", "copy"]
     cmd += ["-map", "1:a:0?", "-map", "2:0", "-c:a", "copy", "-c:s", "ass",

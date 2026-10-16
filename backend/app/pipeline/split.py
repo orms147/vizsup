@@ -406,6 +406,11 @@ def readiness(group: dict, storage: Path) -> list[dict]:
     return out
 
 
+def _rendered_srt(job: Job) -> Path:
+    out = job.work_dir / "output.srt"
+    return out if out.exists() else job.vi_srt
+
+
 def _prepare_softsub(group_dir: Path, jobs: list[Job], offsets: list[float], *, log) -> None:
     """What the soft-subtitle .mkv export needs next to the joined video: a merged styled
     subs.ass, how part 1 was rendered (cover mode → the same blur) and the fonts. The
@@ -557,7 +562,9 @@ def join(group_dir: Path, storage: Path, *,
     outs = [j.output_video for j in jobs]
     durations = [_probe_duration(o) for o in outs]
     offsets = [sum(durations[:k]) for k in range(len(outs))]
-    merged = merge_subtitles([(parse_srt(j.vi_srt), off) for j, off in zip(jobs, offsets, strict=True)])
+    # output.srt = a part's subtitles as rendered (F-4 pauses shift them; vi.srt doesn't)
+    merged = merge_subtitles([(parse_srt(_rendered_srt(j)), off)
+                              for j, off in zip(jobs, offsets, strict=True)])
     write_srt(merged, group_dir / "vi.srt")
 
     lst = group_dir / "join.txt"

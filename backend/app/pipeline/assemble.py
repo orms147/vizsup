@@ -486,6 +486,65 @@ def _run_ffmpeg(cmd: list[str], cwd: Path, *, total: float,
         raise RuntimeError("ffmpeg: " + " | ".join(tail or ["lỗi không rõ"]))
 
 
+def _pause_graph(ins: list[tuple[float, float]], src_dur: float, video: str,
+                 audios: list[str]) -> tuple[list[str], str, list[str]]:
+    """F-4 "pause" notes: freeze the picture and silence the audio while the user's
+    note is spoken. The source is cut at the pause points; each piece gets its pause
+    appended (tpad clones the last frame, apad adds silence) — a pause at 0 is
+    prepended to the first piece — and the pieces are concatenated. Returns (graph
+    parts, new video label, new audio labels). Pure."""
+    eps = 0.01
+    intro = sum(d for at, d in ins if at <= eps)
+    outro = sum(d for at, d in ins if src_dur > 0 and at >= src_dur - eps)
+    inner: dict[float, float] = {}
+    for at, d in ins:
+        if at > eps and not (src_dur > 0 and at >= src_dur - eps):
+            inner[round(at, 3)] = inner.get(round(at, 3), 0.0) + d
+    cuts = sorted(inner)
+    n = len(cuts) + 1
+    parts: list[str] = []
+
+    def piece(i: int, video_kind: bool) -> str:
+        lo = cuts[i - 1] if i > 0 else None
+        hi = cuts[i] if i < len(cuts) else None
+        rng = ":".join(x for x in (f"start={lo:.3f}" if lo is not None else "",
+                                   f"end={hi:.3f}" if hi is not None else "") if x)
+        post = inner[hi] if hi is not None else outro
+        pre = intro if i == 0 else 0.0
+        if video_kind:
+            f = [f"trim={rng}" if rng else "null", "setpts=PTS-STARTPTS"]
+            # ONE tpad for both ends: a second chained tpad silently drops its stop
+            # padding (measured: 13.1 s instead of 15 s, 2026-10-16)
+            pads = [x for x in (f"start_mode=clone:start_duration={pre:.3f}" if pre > 0 else "",
+                                f"stop_mode=clone:stop_duration={post:.3f}" if post > 0 else "")
+                    if x]
+            if pads:
+                f.append("tpad=" + ":".join(pads))
+        else:
+            f = [f"atrim={rng}" if rng else "anull", "asetpts=PTS-STARTPTS"]
+            if pre > 0:
+                f.append(f"adelay={int(round(pre * 1000))}:all=1")
+            if post > 0:
+                f.append(f"apad=pad_dur={post:.3f}")
+        return ",".join(f)
+
+    def stage(label: str, kind: str, video_kind: bool) -> str:
+        if n == 1:
+            parts.append(f"{label}{piece(0, video_kind)}[{kind}fz]")
+            return f"[{kind}fz]"
+        split = "split" if video_kind else "asplit"
+        parts.append(f"{label}{split}={n}" + "".join(f"[{kind}s{i}]" for i in range(n)))
+        for i in range(n):
+            parts.append(f"[{kind}s{i}]{piece(i, video_kind)}[{kind}p{i}]")
+        tail = "v=1:a=0" if video_kind else "v=0:a=1"
+        parts.append("".join(f"[{kind}p{i}]" for i in range(n)) + f"concat=n={n}:{tail}[{kind}fz]")
+        return f"[{kind}fz]"
+
+    v = stage(video, "v", True)
+    a = [stage(lbl, f"a{k}", False) for k, lbl in enumerate(audios)]
+    return parts, v, a
+
+
 def _load_region(job: Job) -> dict | None:
     """The detected hardsub band ({x,y,w,h} normalized) written by hardsub_detect,
     or None (old job / SRT source / detection failed)."""
@@ -529,6 +588,7 @@ def _build_render(
     dub: str | None = f"{DUB_DIR}/list.txt",   # concat list of the dub windows
     encoder: str | None = None,
     duration: float = 0.0,     # source length: the output is pinned to it (long-video join)
+    inserts: list[tuple[float, float]] | None = None,   # F-4 pause notes (source time, length)
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -572,6 +632,7 @@ def _build_render(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     parts: list[str] = []
+    src_v, src_a, bg_a = "[0:v]", "[0:a]", f"[{bg_idx}:a]"
 
     if log:
         if sped:
@@ -582,10 +643,27 @@ def _build_render(
             for cue, sd, sp in flagged[:6]:
                 log(f"   • [{cue.start:6.1f}s] cần ~{sd:.1f}s nhưng chỉ có {sp:.1f}s")
 
-    if audio_mode in ("mix", "duck") and not _has_audio_stream(job.source_video):
+    has_audio = _has_audio_stream(job.source_video)
+    if audio_mode in ("mix", "duck") and not has_audio:
         if log:
             log("⚠ Video nguồn không có track âm thanh — chuyển sang chế độ thay (replace).")
         audio_mode = "replace"
+
+    out_len = duration + sum(d for _at, d in inserts or [])
+    if inserts:
+        # F-4: freeze picture + original sound (and the instrumental) at the pause notes
+        uses = []
+        if has_audio and (audio_mode in ("mix", "duck") or not dubbed):
+            uses.append(("orig", "[0:a]"))
+        if audio_mode == "keep_music" and dubbed:
+            uses.append(("bg", f"[{bg_idx}:a]"))
+        pre, src_v, labels = _pause_graph(inserts, duration, "[0:v]", [lbl for _k, lbl in uses])
+        parts += pre
+        for (kind, _lbl), new in zip(uses, labels):
+            if kind == "orig":
+                src_a = new
+            else:
+                bg_a = new
 
     if dubbed:
         # consistent dub level across voices/clips; before mixing with the original
@@ -598,17 +676,17 @@ def _build_render(
         if audio_mode == "keep_music":
             # background = the Demucs instrumental (last input), dub on top; orig_volume
             # rides the instrumental. Speech is gone with the vocals stem, so no ducking.
-            parts.append(f"[{bg_idx}:a]aresample=48000,volume={orig_volume:.3f}[bg]")
+            parts.append(f"{bg_a}aresample=48000,volume={orig_volume:.3f}[bg]")
             parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
             audio_map = "[outa]"
         elif audio_mode == "mix":
-            parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
+            parts.append(f"{src_a}volume={orig_volume:.3f}[bg]")
             parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
             audio_map = "[outa]"
         elif audio_mode == "duck":
             # original ducks only while the dub plays (sidechain), then returns
             parts.append(f"{dub}asplit=2[scin][dubv]")
-            parts.append(f"[0:a]volume={orig_volume:.3f}[bg]")
+            parts.append(f"{src_a}volume={orig_volume:.3f}[bg]")
             # the key ends with the last dub line; padded with silence so the ducked
             # original keeps playing to the end (it used to stop there)
             parts.append("[scin]apad[scpad]")
@@ -624,16 +702,16 @@ def _build_render(
             parts.append(f"{audio_map}apad[aout]")
             audio_map = "[aout]"
     else:
-        audio_map = "0:a?"
+        audio_map = src_a if inserts and src_a != "[0:a]" else "0:a?"
 
     ass = _ass_name(preview)
-    vsrc = "[0:v]"
+    vsrc = src_v
     if cover_mode == "blur":
         # blur the hardsub band (the detected region if we have one, else the
         # bottom-third) before burning the VI subs on top — softer than the opaque
         # box, still hides the original
         crop_expr, overlay_pos = _blur_band_filters(_load_region(job))
-        parts.append("[0:v]split[vsrc][vband]")
+        parts.append(f"{src_v}split[vsrc][vband]")
         parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         vsrc = "[vbg]"
@@ -657,7 +735,7 @@ def _build_render(
         "-map", vmap, "-map", audio_map,
         *_video_args(encoder or _video_encoder(), preview),
         "-c:a", "aac", "-b:a", "128k" if preview else "192k", "-ar", "48000",
-        *(["-t", f"{duration:.3f}"] if duration > 0 else []),
+        *(["-t", f"{out_len:.3f}"] if duration > 0 else []),
         "preview.mp4" if preview else "output.mp4",
     ]
     return cmd
@@ -682,15 +760,25 @@ def assemble(
     progress: Callable[[float, str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
     overlays: list[dict] | None = None,  # F-1/F-2 corner notes (credit, "Lồng tiếng AI")
+    commentary: list | None = None,      # F-4 commentary.Voiced — the user's own notes
 ) -> Path:
     global _NVENC
+    from app.pipeline import commentary as cm
+
     mode = cover_mode or ("box" if cover_hardsubs else "off")
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
+    voiced = commentary or []
+    ins = cm.inserts(voiced)
+    # everything below lives on the OUTPUT timeline (pause notes push the rest later)
+    cues_for_subs = cm.shift_cues(cues_for_subs, ins)
+    note_subs = cm.subtitle_cues(voiced, ins)
+    segments = [(c, p) for c, p in zip(cm.shift_cues([c for c, _p in segments], ins),
+                                       [p for _c, p in segments])] + cm.speech_cues(voiced, ins)
     # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
     # (the soft-subtitle export pairs the two)
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job),
-              extra=overlays)
+              extra=overlays, comments=note_subs)
 
     say = progress or (lambda _f, _m: None)
     plan = _plan_segments(segments)
@@ -698,14 +786,15 @@ def assemble(
                       cancel=cancel,
                       progress=lambda f: say(0.2 * f, f"Ghép lồng tiếng · {int(f * 100)}%"))
     total = probe_duration(job.source_video) if job.source_video.exists() else 0.0
+    out_total = total + sum(d for _at, d in ins)
     encoder = _video_encoder()
     while True:
         cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
                             dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
-                            duration=total)
+                            duration=total, inserts=ins)
         try:
-            _run_ffmpeg(cmd, job.work_dir, total=total, cancel=cancel,
+            _run_ffmpeg(cmd, job.work_dir, total=out_total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
             break
         except RuntimeError:
@@ -718,10 +807,20 @@ def assemble(
     if preview:
         return job.work_dir / "preview.mp4"
     # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
+    note_secs = sum(v.dur for v in voiced)
     (job.work_dir / RENDER_INFO).write_text(
         json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode,
-                    "encoder": encoder, "duration": round(total, 3)}),
+                    "encoder": encoder, "duration": round(total, 3),
+                    "inserts": [[round(a, 3), round(d, 3)] for a, d in ins],
+                    "commentary_s": round(note_secs, 2),
+                    "commentary_share": round(cm.share(note_secs, total, out_total - total), 4)}),
         encoding="utf-8")
+    # the subtitles exactly as burned (output timeline, the user's notes included) — what
+    # "Xuất .srt" and the long-video join use, since vi.srt stays on the source timeline
+    from app.pipeline.srt import write_srt
+
+    write_srt(sorted([*cues_for_subs, *note_subs], key=lambda c: c.start),
+              job.work_dir / OUTPUT_SRT)
     return job.output_video
 
 
@@ -737,6 +836,7 @@ def _with_gains(job: Job, segments: list[tuple[Cue, Path]], placements: list[dic
 
 
 RENDER_INFO = "render.json"
+OUTPUT_SRT = "output.srt"
 
 
 def load_render_info(job: Job) -> dict:
