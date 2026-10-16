@@ -96,6 +96,26 @@ from the OpenRouter models API that day; images bill as prompt tokens. Real run 
 Requests are ~50 KB tiles (numbered strips, cropped to the detected text band): bigger uploads to
 OpenRouter were dropped by this network often that day.
 
+### Free / local speed-ups — research + measurements 2026-10-16
+Two web passes (Chinese repos & posts: videocr-PaddleOCR, VideOCR, RapidVideOCR + VideoSubFinder,
+video-subtitle-extractor, Umi-OCR, PaddleOCR-json; RapidOCR/ORT/OpenVINO docs), then every idea
+measured here on the same 441 real frames (2 Douyin vlogs, 2 fps, bottom-third strips) against
+the current output. CPU: AMD Ryzen 9 7945HX; GPU: RTX 4070 Laptop.
+
+| Idea (source) | Speed | Output vs current | Verdict |
+|---|---|---|---|
+| **DirectML** (`onnxruntime-directml` 1.24.4 instead of `onnxruntime-gpu`, `EngineConfig.onnxruntime.use_dml`) | 432→166 / 173→129 ms per frame; det 420→80 ms | **identical, 441/441 frames** | lossless; needs the package swap (the three ORT packages share one module) |
+| Change-gated OCR on a binarised band (videocr-PaddleOCR, VideOCR) | saves 3–4 % of calls at a safe threshold | stricter thresholds lose real lines | useless on vlogs (moving bright backgrounds); fine for static backgrounds |
+| Recognition-only on the subtitle row found once (RapidOCR `use_det=False`) | 11 ms per frame (~45×) | vlog 1: 34/34 lines, 92 % chars, some first chars lost; vlog 2: **no fixed row** (stylised captions move) → nothing | only with a per-frame fallback to full det |
+| Smaller detection scale + 24 px padding + `unclip_ratio` 2.0 / `box_thresh` 0.3 (RapidOCR/PaddleOCR docs) | ~3× | adds junk from background patterns ("制 哈喽闺蜜们 福"), still drops end characters ("…换上" → "…换") | rejected |
+| OpenVINO (RapidOCR `engine_type: openvino`) | PP-OCRv6 paper: ~3 % for v6 small; officially Intel-only | — | skipped (AMD CPU here) |
+| VideoSubFinder → RapidOCR (RapidVideOCR) | VSF step ~10–30 min per 2 h film (third-party) | not measured | GPL-2.0 exe, CPU-only, last update 2023 |
+| Chinese cloud free tiers (Baidu 1,000/mo, Tencent 1,000/mo, Alibaba 200/mo) | — | — | need Chinese real-name verification; paid rates exceed OpenRouter |
+| WeChat OCR wrappers | — | — | no licence, uses WeChat's binary → avoid |
+
+Bottom line: no free local trick gets near the API's accuracy on stylised captions; the one
+lossless free speed-up is DirectML (≈ 1 h of OCR per 3-hour video instead of 1.5–4 h).
+
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.
 Implemented for the OpenAI-compatible base (OpenRouter / DeepSeek / Qwen) and for
