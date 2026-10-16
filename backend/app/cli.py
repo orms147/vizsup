@@ -111,7 +111,8 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             from app.pipeline import ocr
 
             print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
-            ocr.extract_hardsubs(job, crop=args.ocr_region, engine=args.ocr_engine, log=print)
+            ocr.extract_hardsubs(job, crop=args.ocr_region, engine=args.ocr_engine, log=print,
+                                 fps=args.ocr_fps)
         else:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr)
@@ -285,6 +286,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ocr-region", default="bottom-third",
                    choices=["bottom-third", "bottom-quarter", "bottom-half", "middle-third", "top-third", "full"],
                    help="crop region for OCR/detection (default: bottom-third)")
+    r.add_argument("--ocr-fps", type=float, default=2.0,
+                   help="frames per second to OCR (1 = twice as fast; fine for films, may miss "
+                        "captions shorter than ~1 s)")
     r.add_argument("--ocr-engine", default="rapidocr", choices=["rapidocr", "vision_llm"],
                    help="OCR engine: rapidocr (local, default) or vision_llm (OpenRouter "
                         "vision model — UPLOADS the subtitle band of every frame)")

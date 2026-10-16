@@ -155,3 +155,9 @@ def test_main_runs_the_queue_one_by_one(qapp, tmp_path, monkeypatch):
     assert [u for u, _j, _c in runs][-1] == "https://v.douyin.com/b/"
     win._run_next_queued()                                              # queue empty → done
     assert win._queue_job is None and win._queue_total == 0
+
+
+def test_ocr_fast_rides_in_the_options(view):
+    assert view._collect_opts()["ocr_fast"] is False
+    view.ocr_fast.setChecked(True)
+    assert view._collect_opts()["ocr_fast"] is True

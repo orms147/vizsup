@@ -257,6 +257,7 @@ class PipelineWorker(QObject):
                               + (", AI đọc qua mạng" if engine != "rapidocr" else "") + ")")
                 ocr.extract_hardsubs(
                     job, crop=region, engine=engine, log=self.log.emit,
+                    fps=1.0 if o.get("ocr_fast") else 2.0,             # "OCR nhanh"
                     cancel=lambda: self._cancel,                       # long videos: ETA + resume
                     progress=lambda f, m: self.progress.emit(0.4 + 0.15 * f, m))
                 self.log.emit("✓ OCR xong")

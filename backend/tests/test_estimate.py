@@ -105,3 +105,15 @@ def test_an_expired_cookie_is_flagged_before_start(monkeypatch):
         time.sleep(0.02)
     assert "cookie mới" in view.estimate.text()
     view.shutdown()
+
+
+def test_local_ocr_time_follows_the_gpu_and_the_fast_option(monkeypatch):
+    ocr_job = {**USUAL, "subtitle_source": "ocr"}
+    monkeypatch.setattr(est, "_local_ocr_speed", lambda: est.OCR_LOCAL_SEC_PER_MIN)
+    cpu = est.estimate(1800, ocr_job)
+    monkeypatch.setattr(est, "_local_ocr_speed", lambda: est.OCR_GPU_SEC_PER_MIN)
+    gpu = est.estimate(1800, ocr_job)
+    fast = est.estimate(1800, {**ocr_job, "ocr_fast": True})
+    assert cpu.seconds[1] > gpu.seconds[1] > fast.seconds[1]
+    ocr_part = est.OCR_GPU_SEC_PER_MIN[1] * 30
+    assert gpu.seconds[1] - fast.seconds[1] == pytest.approx(ocr_part / 2)

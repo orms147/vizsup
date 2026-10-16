@@ -117,6 +117,17 @@ Bottom line: no free local trick gets near the API's accuracy on stylised captio
 lossless free speed-up is DirectML (≈ 1 h of OCR per 3-hour video instead of 1.5–4 h) — adopted
 2026-10-16 (`onnxruntime-directml` replaces `onnxruntime-gpu`; Silero VAD output unchanged).
 
+**Follow-up, same day, on the GPU build.** Ground truth: a synthetic "film" — 40 real Chinese lines
+burned white-with-outline in a fixed bottom row over real moving footage (148 s).
+- *Hybrid row reader* (recognition-only on the subtitle row as a change detector, full OCR on
+  every change and every 8th frame, back to full OCR when lines leave the row): film 43.9 → 32.4 s
+  (−26 %), 34/40 lines vs 35/40 for full OCR; vlogs −9/−10 % with 81/97 and 31/34 cues identical.
+  On DirectML a rec-only call still costs ~30 ms and rec readings flicker as the background
+  changes, so most frames still trigger a full read. **Not shipped.**
+- *1 frame/s instead of 2*: film 45 → 23 s, 36/40 lines (2 fps: 35/40), start error median 0.28 s,
+  max 0.8 s; vlog with short captions 97 → 82 cues. **Shipped as the opt-in "OCR nhanh: 1
+  khung/giây"** (`ocr_fast`, CLI `--ocr-fps 1`) for films / series.
+
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.
 Implemented for the OpenAI-compatible base (OpenRouter / DeepSeek / Qwen) and for

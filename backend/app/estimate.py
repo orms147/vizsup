@@ -33,7 +33,8 @@ SEC_FIXED = (5.0, 15.0)
 ASR_SEC_PER_MIN = (6.0, 18.0)
 TRANSLATE_SEC_PER_MIN = (10.0, 22.0)   # draft + refine + AI review, batches in parallel
 BRIEF_SEC = (8.0, 20.0)
-OCR_LOCAL_SEC_PER_MIN = (30.0, 60.0)   # 2 fps × 0.25-0.5 s per frame
+OCR_LOCAL_SEC_PER_MIN = (30.0, 60.0)   # 2 fps × 0.25-0.5 s per frame (CPU)
+OCR_GPU_SEC_PER_MIN = (10.0, 20.0)     # DirectML, 2026-10-16: 137 s in 23 s, 148 s in 45 s
 OCR_CLOUD_SEC_PER_MIN = (8.0, 15.0)    # 137 s video in 22 s
 
 
@@ -67,6 +68,15 @@ def _span(lo: float, hi: float) -> str:
         return f"{max(1, round(x / 60))} phút" if x >= 90 else f"{max(10, round(x / 10) * 10)} giây"
     a, b = m(lo), m(hi)
     return a if a == b else f"{a.split()[0]}–{b}" if a.split()[1:] == b.split()[1:] else f"{a}–{b}"
+
+
+def _local_ocr_speed() -> tuple[float, float]:
+    try:
+        from app.pipeline.ocr import accelerator
+
+        return OCR_GPU_SEC_PER_MIN if accelerator() != "cpu" else OCR_LOCAL_SEC_PER_MIN
+    except Exception:  # noqa: BLE001
+        return OCR_LOCAL_SEC_PER_MIN
 
 
 def estimate(duration_s: float, opts: dict, *, history: list[dict] | None = None) -> Estimate:
@@ -111,7 +121,9 @@ def estimate(duration_s: float, opts: dict, *, history: list[dict] | None = None
         if opts.get("auto_context") or (opts.get("context_note") or "").strip():
             secs = (secs[0] + BRIEF_SEC[0], secs[1] + BRIEF_SEC[1])
     if src in ("ocr", "auto"):
-        per = OCR_CLOUD_SEC_PER_MIN if cloud_ocr else OCR_LOCAL_SEC_PER_MIN
+        per = OCR_CLOUD_SEC_PER_MIN if cloud_ocr else _local_ocr_speed()
+        if opts.get("ocr_fast"):                       # 1 frame/s instead of 2
+            per = (per[0] / 2, per[1] / 2)
         if src == "ocr":
             secs = (secs[0] + per[0] * minutes, secs[1] + per[1] * minutes)
         else:                                          # auto: OCR only if hardsubs are found

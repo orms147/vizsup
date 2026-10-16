@@ -465,7 +465,13 @@ class InputView(QWidget):
             "Video dài hơn 45 phút được cắt (ở chỗ lặng, không cắt giữa câu, không mã hóa lại) "
             "thành các phần ~30 phút chạy lần lượt: duyệt phần 1 trong lúc phần sau còn chạy, "
             "dựng từng phần rồi ghép lại thành một video. Dùng chung ngữ cảnh và thuật ngữ.")
-        g.addWidget(self.split_long, 8, 0, 1, 2)
+        g.addWidget(self.split_long, 8, 0)
+        self.ocr_fast = QCheckBox("OCR nhanh: 1 khung/giây")
+        self.ocr_fast.setToolTip(
+            "Đọc phụ đề cháy sẵn nhanh gấp đôi. Hợp phim / phim bộ (câu dài): đo trên phim mẫu "
+            "không sót câu nào, mốc thời gian lệch tối đa ~0,8 s (tự canh lời theo giọng sửa "
+            "lại). Vlog chữ ngắn có thể sót câu dưới 1 giây.")
+        g.addWidget(self.ocr_fast, 8, 1)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
         g.addWidget(self.asr_note, 9, 0, 1, 2)
@@ -502,6 +508,7 @@ class InputView(QWidget):
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
+        self.ocr_fast.setChecked(bool(st.get("ocr_fast", False)))
         self.ocr_engine.select(st.get("ocr_engine"))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
@@ -521,6 +528,7 @@ class InputView(QWidget):
         self._ocr_field.setVisible(src in ("auto", "ocr"))
         self._ocr_engine_field.setVisible(src in ("auto", "ocr"))
         self.ocr_proofread.setEnabled(src in ("auto", "ocr"))
+        self.ocr_fast.setEnabled(src in ("auto", "ocr"))
         self._asr_field.setEnabled(src in ("auto", "asr"))
         self._srt_field.setVisible(src == "srt")
         if src != "srt":
@@ -605,6 +613,7 @@ class InputView(QWidget):
             "ai_review": self.ai_review.isChecked(),
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),
+            "ocr_fast": self.ocr_fast.isChecked(),
         }
         note = self.context_note.toPlainText().strip()
         if note:
