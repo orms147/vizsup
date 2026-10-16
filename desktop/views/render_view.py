@@ -713,6 +713,19 @@ class RenderView(QWidget):
             return
         self._show_rights_note(basis)
 
+    def _show_late(self) -> None:
+        """F-10: how many dub lines started noticeably after their subtitle."""
+        from app.pipeline import review
+
+        late = review.load_late(self._job) if self._job is not None else []
+        if late:
+            worst = max(float(r.get("carry_s", 0)) for r in late)
+            self.res_status.setText(f"{len(late)} câu lồng tiếng vào trễ hơn 0,2 s (chậm nhất "
+                                    f"{worst:.1f} s) — xem cờ “Lồng tiếng trễ” ở màn Sửa phụ đề.")
+            self.res_status.setStyleSheet(f"color:{V2['amber']};")
+        else:
+            self.res_status.setStyleSheet("")
+
     def _commentary_stats(self) -> tuple[int, float]:
         """(notes, share of the runtime): measured by the last render when it had them,
         otherwise estimated from the text."""
@@ -912,6 +925,7 @@ class RenderView(QWidget):
             self._out_frame = self.frame.currentData()
             self._saved = None
         self._show_result_kind(quick=quick)
+        self._show_late()                    # after: _show_result_kind clears the status
         self._tick.stop()
         size = ""
         try:

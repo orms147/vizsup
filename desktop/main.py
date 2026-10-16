@@ -236,6 +236,7 @@ class MainWindow(QMainWindow):
         self.render.show_done(path)
         if self.job is not None:
             self.render.set_group(_group_status(self.job))
+            self.editor.reload_fit_report()             # F-10: late dub lines
         quick = Path(path).name == "preview.mp4"
         self._notify("Bản xem nhanh đã sẵn sàng" if quick else "Đã dựng xong video",
                      Path(path).name)

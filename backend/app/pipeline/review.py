@@ -43,8 +43,9 @@ LABELS = {
     "novoice": "Không nghe thấy giọng",
     "ai": "AI nghi sai",
     "read": "Đọc không kịp",
+    "late": "Lồng tiếng trễ",
 }
-ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "read", "ocr", "term")
+ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "late", "read", "ocr", "term")
 READ_CPS = 17.0          # Netflix Vietnamese Timed Text Style Guide, adults (changelog 2025-12)
 READ_FLAG_CPS = 25.0     # flagged above this (see the module docstring)
 CHARS_PER_LINE = 42
@@ -82,12 +83,42 @@ def _overlaps(a_start: float, a_end: float, spans: list[Span]) -> bool:
     return any(min(a_end, s.end) - max(a_start, s.start) > 0.05 for s in spans)
 
 
+def load_late(job: Job) -> list[dict]:
+    """The last render's late dub lines (fit_report.json), [] when none / no render."""
+    import json
+
+    try:
+        rows = json.loads((job.work_dir / "fit_report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    late = rows.get("late") if isinstance(rows, dict) else None
+    return [r for r in late or [] if isinstance(r, dict) and "index" in r]
+
+
+def late_lines(cues, late: list[dict]) -> dict[int, float]:
+    """0-based cue position → seconds late, for report rows that still describe the same
+    line (same number AND same text): after a split / merge / rewrite the old measurement
+    no longer applies and is dropped. Pure."""
+    out: dict[int, float] = {}
+    for r in late or []:
+        k = int(r.get("index", 0)) - 1
+        if 0 <= k < len(cues):
+            c = cues[k]
+            text = getattr(c, "vi", None)
+            text = getattr(c, "text", "") if text is None else text
+            if text[:60] == str(r.get("text", "")):
+                out[k] = float(r.get("carry_s", 0.0))
+    return out
+
+
 def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
                guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None,
-               qa_findings: list[dict] = ()) -> list[list[str]]:
+               qa_findings: list[dict] = (), late: list[dict] = ()) -> list[list[str]]:
     """``cues``: objects with ``start``, ``end``, and Vietnamese text in ``vi`` (editor
     cues) or ``text`` (+ optional Chinese ``zh``). ``voice``: VAD spans, when known.
-    Returns, per cue, its issue keys in ORDER."""
+    ``late``: fit_report.json "late" rows from the last render (F-10). Returns, per cue,
+    its issue keys in ORDER."""
+    late_at = late_lines(cues, late)
     out: list[list[str]] = []
     for i, c in enumerate(cues):
         text = getattr(c, "vi", None)
@@ -111,6 +142,8 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
                 issues.append("ai")
         if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i)):
             issues.append("long")
+        if i in late_at:
+            issues.append("late")
         if text.strip() and "short" not in issues:
             cps, n_lines = reading(text, c.end - c.start)
             if cps > READ_FLAG_CPS or n_lines > MAX_LINES:

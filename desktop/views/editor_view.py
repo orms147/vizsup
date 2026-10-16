@@ -602,7 +602,15 @@ class EditorView(QWidget):
         ocr, term = self._spans
         return review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term,
                                  guess_spans=self._guess, voice=self._speech,
-                                 qa_findings=self._qa)
+                                 qa_findings=self._qa, late=getattr(self, "_late", []))
+
+    def reload_fit_report(self) -> None:
+        """F-10: after a render (or a quick preview), flag lines whose dub came in late."""
+        if self.job is None:
+            return
+        self._late = review.load_late(self.job)
+        if self.cues:
+            self._refresh_issues()
 
     def _set_speech(self, spans: list | None, why: str = "") -> None:
         had = self._speech
@@ -894,8 +902,9 @@ class EditorView(QWidget):
             from app.pipeline import qa
 
             self._qa = qa.load(job)
+            self._late = review.load_late(job)
         except Exception:  # noqa: BLE001 - flags are hints; never block opening a job
-            self._spans, self._guess, self._qa = ([], []), [], []
+            self._spans, self._guess, self._qa, self._late = ([], []), [], [], []
         self._meta = {"title": _job_title(job), "platform": job.metadata.get("platform") or
                       _job_field(job, "platform") or "", "dur": 0.0, "dims": (0, 0)}
         self._update_project()

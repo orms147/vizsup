@@ -55,6 +55,7 @@ def _load_cue_styles(job: Job) -> dict[int, dict] | None:
 SPEED_ACCEPT = 1.15   # below this, speed-up is inaudible → no warning
 SPEED_MAX = 1.30      # hard cap; beyond this speech turns "auctioneer"
 MAX_CARRY = 1.5       # don't let the dub drift more than this behind the picture
+LATE_S = 0.2          # F-10: a dub starting this much after its subtitle gets flagged
 TRIM_BUDGET = 0.4     # tail we'll fade-trim to avoid pushing the next line
 
 _RUBBERBAND: bool | None = None
@@ -627,6 +628,12 @@ def _build_render(
                     for c, sd, sp in flagged],
         "total_trim_s": round(sum(p["trim_s"] for p in placements), 3),
         "max_carry_s": round(max((p["carry_s"] for p in placements), default=0.0), 3),
+        # F-10: lines whose dub starts noticeably after their subtitle (= the speech) —
+        # an earlier line ran long and pushed it; ITU-R BT.1359 tolerates ~0.2 s
+        "late": [{"index": c.index, "text": c.text[:60], "carry_s": p["carry_s"]}
+                 for p in placements
+                 for c in [segments[p["inp"] - 1][0]]
+                 if p["carry_s"] > LATE_S and c.index < 100_000],    # not F-4 notes
     }
     (wd / "fit_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

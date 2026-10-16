@@ -80,10 +80,10 @@ long-video parts with consistent names · A/V sync < 1 ms.
 | F-4 | ✅ **Commentary track** — the user's own narration (typed → a *different* TTS voice, or recorded mic) at chosen points + intro/outro text; show the share of runtime that is original commentary. *Done 2026-10-16: editor tab "Bình luận" (Tại vị trí phát → end of the sentence being spoken, Mở đầu, Kết thúc), "Dừng hình" freezes picture + original sound and shifts the rest, "Nói đè" speaks over with ducking (warns on dialogue), auto voice ≠ dub voice, own recording import (no in-app mic yet), yellow italic subtitles, share on the render page + post checklist. Real job: frozen picture, dub lines after the pauses at 0 samples* | The one thing YouTube/Meta/TikTok all name as making reuse acceptable (H) | M |
 | F-5 | ✅ **Cost & time estimate before Start** — from duration: ASR/OCR/translate/TTS $ and minutes, per engine choice. *Done: `app/estimate.py`, calibrated on two real runs, switches to the user's own history after 3 projects; expired cookies flagged* | #1 complaint about every competitor (H) | S |
 | F-6 | ✅ **Reading-speed check** — flag > 17 cps, > 42 chars/line, > 2 lines (Netflix VI); auto line breaking; a stricter "mobile" profile. *Done: "Đọc không kịp" flags > 25 cps or > 2 wrapped lines (real vlogs run a median 22–24 cps, so 17 would flag most lines); the inspector shows cps against 17* | Netflix VI guide (H); phone screens (M). Today "Quá dài" only checks the *dub* slot | S |
-| F-7 | **Audio mode by content type** — name the modes as viewers know them (*Phụ đề* / *Thuyết minh* / *Lồng tiếng*), suggest per video (singing → Phụ đề — already; drama → Thuyết minh; vlog/comedy → Lồng tiếng) | VN distributor quotes + 2017 dub backlash (L-M); no survey exists → keep user's choice | S |
+| F-7 | ✗ *Dropped by the user 2026-10-16.* **Audio mode by content type** — name the modes as viewers know them (*Phụ đề* / *Thuyết minh* / *Lồng tiếng*), suggest per video (singing → Phụ đề — already; drama → Thuyết minh; vlog/comedy → Lồng tiếng) | VN distributor quotes + 2017 dub backlash (L-M); no survey exists → keep user's choice | S |
 | F-8 | **Publish checklist + log** — per platform: AI toggle, credit present, commentary share, no third-party watermark; record the posted URL; note claims/strikes | YouTube 3 strikes/90 days; Meta duplicate distribution (H) | S-M |
 | F-9 | **Voices**: Southern + more Northern voices via the existing FPT.AI provider (lannhi, banmai, leminh…), then **one voice per speaker** (needs speaker labels per line) | 2017 regional backlash → A/B rather than guess (L); Rask speaker labels (M) | M-L |
-| F-10 | **Dub onset drift flag** — show lines whose dub starts > 200 ms after the speech (fit_report already has `carry_s`) | BT.1359 / arXiv 2212.01686 (M) | S |
+| F-10 | ✅ **Dub onset drift flag** — show lines whose dub starts > 200 ms after the speech (fit_report already has `carry_s`). *Done 2026-10-16: fit_report.json "late" rows (number + text + seconds), editor flag "Lồng tiếng trễ" (dropped once the line is split/merged/rewritten; tooltip: shorten the line before), render result summary. Real 329 s job: 9 lines late, up to 4.5 s (the pre-E-1 stacked lines at 240 s)* | BT.1359 / arXiv 2212.01686 (M) | S |
 | F-11 | **Short-episode export** — 1–3-min clips with "Phần k/n" cards cut at voice gaps (reuses the split machinery) | VN short-drama format (M). Only for content you have rights to — split reposts are exactly what regulators describe | M |
 | F-12 | **Keep background music** — make "Giữ nhạc nền" work out of the box (Demucs not installed here; or a cloud separation API) | ElevenLabs keeps it; dub-over-silence sounds cheap (M) | M |
 | F-13 | **Hardsub inpainting (STTN)** as a third cover option next to box/blur — Chinese subtitle band only, never logos/watermarks | 13k★ OSS demand (M); 8 GB VRAM → STTN only | M-L |
@@ -93,8 +93,8 @@ long-video parts with consistent names · A/V sync < 1 ms.
 detection (fingerprinting catches them, and it is evasion); lip-sync (complaint-heavy); cloning a
 real person's voice (CLAUDE.md out of scope; labelled-impersonation rules).
 
-**Suggested order:** ~~F-5, F-6, F-1, F-2, F-3~~ (done 2026-10-14) → ~~F-4~~ (done 2026-10-16) →
-F-7, F-10, F-8 → F-9, F-12 → F-11, F-13.
+**Suggested order:** ~~F-5, F-6, F-1, F-2, F-3~~ (done 2026-10-14) → ~~F-4, F-10~~ (done
+2026-10-16; F-7 dropped) → F-8 → F-9, F-12 → F-11, F-13.
 
 **Voices note (2026-10-16):** J2TEAM Text-to-Speech (github.com/J2TEAM-dev/text-to-speech, v2.0.0
 for Windows/macOS/Linux, binaries only, README-only repo) has free voices — very likely Microsoft

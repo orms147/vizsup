@@ -446,6 +446,9 @@ class CueInspector(QFrame):
         self.fit_icon.setStyleSheet("background:transparent;")
         self.fit_lbl.setText("Vừa thời lượng" if ok else
                              " · ".join(review.LABELS.get(k, k) for k in issues[:2]))
+        self.fit_lbl.setToolTip(
+            "Lần dựng trước, giọng câu này vào trễ so với phụ đề vì câu trước đọc lâu quá. "
+            "Rút gọn câu trước (hoặc câu này) rồi dựng lại." if "late" in issues else "")
         self.fit_lbl.setStyleSheet(f"color:{color};font-weight:600;font-size:12px;"
                                    f"background:transparent;")
 
