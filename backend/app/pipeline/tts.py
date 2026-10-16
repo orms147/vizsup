@@ -69,6 +69,17 @@ def _unvoiceable(exc: Exception) -> bool:
     return type(exc).__name__ == "NoAudioReceived"
 
 
+def _explain(exc: Exception) -> Exception:
+    """edge-tts answered with HTTP 403: Microsoft changed the handshake and this client is
+    too old (2026-10-16: 7.2.8 refused, 7.3.1 fine) — say what to do instead of the raw
+    aiohttp error."""
+    if "403" in str(exc) and "Handshake" in type(exc).__name__:
+        return RuntimeError("Dịch vụ giọng đọc miễn phí của Microsoft từ chối kết nối (403) — "
+                            "thường do edge-tts đã cũ. Vào Cài đặt → Thư mục và công cụ → "
+                            "Cập nhật edge-tts, khởi động lại vizsup rồi dựng lại.")
+    return exc
+
+
 def _synth_retry(tts, text: str, seg: Path, *, voice, rate, sleep) -> None:
     for delay in (*_RETRY_DELAYS, None):
         try:
@@ -127,7 +138,7 @@ def synthesize(
                         log(f"⚠ Câu {c.index}: giọng đọc không phát âm được văn bản này "
                             f"— bỏ lồng tiếng câu này (phụ đề vẫn hiện).")
                     continue
-                raise
+                raise _explain(exc) from exc
             manifest[key] = want
             _save_manifest(job, manifest)   # write-after-each: a crash keeps progress
             made += 1
@@ -193,7 +204,7 @@ def _synthesize_batch(
                             on_done=_done, cancel=cancel)
     _save_manifest(job, manifest)            # persists mute-drops even when nothing made
     if fatal is not None:
-        raise fatal
+        raise _explain(fatal) from fatal
     # Dubbed segments in cue order (assemble re-sorts by start, but keep it
     # deterministic). A cue is dubbed iff its manifest entry matches — kept or made;
     # cancelled/unvoiceable/muted cues have no matching entry and are excluded.

@@ -110,3 +110,23 @@ def test_check_group_can_be_shown_by_key(qapp):
     view.show_group("check")
     assert view._stack.currentIndex() == 4
     assert view._nav_btns[4].isChecked()
+
+
+def test_update_edge_tts_runs_pip_for_edge_tts(monkeypatch):
+    seen = _fake_run(monkeypatch, versions=["7.2.8", "7.3.1"])
+    ok, msg = tools.update_edge_tts()
+    assert ok and "7.2.8 → 7.3.1" in msg
+    assert [c for c in seen if "pip" in c] == [
+        [sys.executable, "-m", "pip", "install", "-U", "edge-tts"]]
+
+
+def test_an_edge_tts_403_becomes_advice():
+    from app.pipeline import tts
+
+    class WSServerHandshakeError(Exception):
+        pass
+
+    out = tts._explain(WSServerHandshakeError("403, message='Invalid response status'"))
+    assert isinstance(out, RuntimeError) and "Cập nhật edge-tts" in str(out)
+    other = ValueError("boom")
+    assert tts._explain(other) is other

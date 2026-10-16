@@ -14,7 +14,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "python-dotenv>=1.0",
     "yt-dlp>=2025.1.1",
-    "edge-tts>=7",   # 7.x adds Communicate(connector=…) — shared pool for synthesize_many (API-10)
+    "edge-tts>=7.3.1",   # 7.x: Communicate(connector=…) for API-10; 7.2.8 got HTTP 403 on 2026-10-16
     "httpx>=0.27",
     "websockets>=12.0",
     "openai>=1.40",   # OpenAI-compatible providers: OpenRouter / DeepSeek / Qwen

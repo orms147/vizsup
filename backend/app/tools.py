@@ -3,6 +3,8 @@
 - ``update_ytdlp``   — ``pip install -U yt-dlp`` into the interpreter running vizsup.
   Douyin changes its anti-bot checks often, so a stale yt-dlp is the usual reason a
   download suddenly fails.
+- ``update_edge_tts`` — the same for edge-tts: Microsoft changes the free voice service's
+  handshake now and then and old clients get HTTP 403 (seen 2026-10-16: 7.2.8 → 7.3.1).
 - ``cookie_age_days`` — how old the exported cookies.txt is. Douyin cookies last roughly
   three weeks, so the page warns once the file gets old.
 
@@ -19,10 +21,11 @@ _DAY = 86400.0
 _PIP_TIMEOUT = 300  # seconds
 
 
-def _fresh_ytdlp_version() -> str:
-    """yt-dlp version as a NEW interpreter sees it. This process keeps the old module
-    loaded after an update, so it cannot report the new version itself. "" if absent."""
-    code = "import importlib.metadata as m;print(m.version('yt-dlp'))"
+def _fresh_version(dist: str) -> str:
+    """A package's version as a NEW interpreter sees it. This process keeps the old
+    module loaded after an update, so it cannot report the new version itself. "" if
+    absent."""
+    code = f"import importlib.metadata as m;print(m.version('{dist}'))"
     try:
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=60)
@@ -37,19 +40,27 @@ def _tail(r: subprocess.CompletedProcess, lines: int = 3) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-def update_ytdlp() -> tuple[bool, str]:
-    """Upgrade yt-dlp in place. Returns (ok, message) and never raises."""
-    old = _fresh_ytdlp_version() or "chưa cài"
+def update_package(dist: str) -> tuple[bool, str]:
+    """``pip install -U <dist>`` in place. Returns (ok, message) and never raises."""
+    old = _fresh_version(dist) or "chưa cài"
     try:
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", dist],
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=_PIP_TIMEOUT)
     except Exception as exc:  # noqa: BLE001 - timeout, missing pip, …
-        return False, f"yt-dlp {old}: không chạy được pip ({type(exc).__name__}: {exc})"
+        return False, f"{dist} {old}: không chạy được pip ({type(exc).__name__}: {exc})"
     if r.returncode != 0:
-        return False, f"yt-dlp {old}: cập nhật thất bại (mã {r.returncode})\n{_tail(r)}"
-    new = _fresh_ytdlp_version() or "?"
-    return True, f"yt-dlp {old} → {new}"
+        return False, f"{dist} {old}: cập nhật thất bại (mã {r.returncode})\n{_tail(r)}"
+    new = _fresh_version(dist) or "?"
+    return True, f"{dist} {old} → {new}"
+
+
+def update_ytdlp() -> tuple[bool, str]:
+    return update_package("yt-dlp")
+
+
+def update_edge_tts() -> tuple[bool, str]:
+    return update_package("edge-tts")
 
 
 def cookie_age_days(path: str | None) -> float | None:

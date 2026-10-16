@@ -37,7 +37,7 @@ from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from app.config import settings  # noqa: E402
 from app.doctor import run_checks  # noqa: E402
 from app.providers.registry import find_provider  # noqa: E402
-from app.tools import cookie_age_days, update_ytdlp  # noqa: E402
+from app.tools import cookie_age_days, update_edge_tts, update_ytdlp  # noqa: E402
 
 # (env var, display name, settings attr, provider name)
 KEYS = [
@@ -160,8 +160,12 @@ def _card() -> QFrame:
 
 
 def _ytdlp_installed_version() -> str:
+    return _installed_version("yt-dlp")
+
+
+def _installed_version(dist: str) -> str:
     try:
-        return version("yt-dlp")
+        return version(dist)
     except PackageNotFoundError:
         return "chưa cài"
 
@@ -385,6 +389,8 @@ class SettingsView(QWidget):
         v.addWidget(label(sub, "secondary"))
         if group == "download":
             v.addWidget(self._ytdlp_card())
+        if group == "paths":
+            v.addWidget(self._edge_card())
         if group == "ai":
             v.addWidget(self._model_card())
             self.promo_state = label("", "small")
@@ -461,6 +467,42 @@ class SettingsView(QWidget):
         cl.addWidget(self.ytdlp_status)
         self._refresh_ytdlp_version()
         return card
+
+    # --- edge-tts (the free voices): same upkeep as yt-dlp ------------------------------
+    def _edge_card(self) -> QFrame:
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(6)
+        head = QHBoxLayout()
+        head.addWidget(label("Giọng đọc miễn phí (edge-tts)", "h3"), 1)
+        self.edge_ver = label(f"Phiên bản: {_installed_version('edge-tts')}", "secondary")
+        head.addWidget(self.edge_ver)
+        self.edge_btn = button("Cập nhật edge-tts", "RefreshCw", variant="ghost", small=True)
+        self.edge_btn.clicked.connect(self._update_edge)
+        self._buttons.append(self.edge_btn)
+        head.addWidget(self.edge_btn)
+        cl.addLayout(head)
+        cl.addWidget(label("Microsoft thỉnh thoảng đổi cách kết nối — lồng tiếng báo lỗi 403 "
+                           "thì cập nhật rồi khởi động lại vizsup.", "small", wrap=True))
+        self.edge_status = label("", "small", wrap=True)
+        self.edge_status.setVisible(False)
+        cl.addWidget(self.edge_status)
+        return card
+
+    def _update_edge(self) -> None:
+        self.edge_status.setVisible(True)
+        self.edge_status.setStyleSheet(f"color:{V2['muted']};")
+        self.edge_status.setText("Đang cập nhật edge-tts…")
+        self._bg(update_edge_tts, self._update_edge_done)
+
+    def _update_edge_done(self, res) -> None:
+        self._set_busy(False)
+        ok, msg = (False, f"{type(res).__name__}: {res}") if isinstance(res, Exception) else res
+        self.edge_ver.setText(f"Phiên bản: {_installed_version('edge-tts')}")
+        self.edge_status.setText(f"✓ {msg} — khởi động lại vizsup để dùng bản mới." if ok
+                                 else f"✗ {msg}")
+        self.edge_status.setStyleSheet(f"color:{V2['green'] if ok else V2['red']};")
 
     def _refresh_ytdlp_version(self) -> None:
         self.ytdlp_ver.setText(f"Phiên bản: {_ytdlp_installed_version()}")
