@@ -40,7 +40,8 @@ from desktop.cuemodel import fmt_time
 from desktop.icons import icon, pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
-from desktop.widgets.chrome import ProjectBar, badge, button, icon_label, label
+from desktop.widgets.chrome import ProjectBar, badge, button, compact_combo, icon_label, label
+from desktop.widgets.pointer import glow
 from desktop.widgets.video_panel import VideoPanel
 
 try:
@@ -104,6 +105,7 @@ class ModeCard(QPushButton):
         self._ic.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.toggled.connect(self._paint_state)
         self._paint_state(False)
+        glow(self, corner=7)
 
     def _paint_state(self, on: bool) -> None:
         c = V2["purple_bright"] if on else V2["secondary"]
@@ -324,6 +326,10 @@ class RenderView(QWidget):
         for key, text in disclosure.RIGHTS.items():
             self.rights.addItem(text, key)
         self.rights.currentIndexChanged.connect(self._on_rights)
+        # long choices elide instead of widening the fixed-width panel past its scroll area
+        for combo in (self.voice, self.cover, self.frame):
+            compact_combo(combo, 10)
+        compact_combo(self.rights, 6)            # shares its row with a caption + button
         rrow.addWidget(self.rights, 1)
         self.proof_btn = button("Bằng chứng…", "Upload", variant="ghost", small=True,
                                 tip="Đính kèm ảnh chụp / email cho phép — được chép vào thư mục dự án")

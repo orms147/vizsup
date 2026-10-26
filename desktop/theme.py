@@ -130,6 +130,8 @@ QFrame#vdivider {{ background:{v['line']}; border:none; max-width:1px; min-width
 /* v1 surfaces still used by not-yet-ported widgets */
 QFrame#toolbar, QFrame#dock, QFrame#rail {{ background:{v['panel']}; border:none; }}
 QFrame#card {{ background:{v['panel']}; border:1px solid {v['line_soft']}; border-radius:10px; }}
+/* layout-only containers: show the surface they sit on (a panel, the page) */
+QWidget#bare {{ background:transparent; }}
 
 /* text roles */
 QLabel {{ background:transparent; }}
@@ -230,6 +232,7 @@ QLineEdit#hero {{ min-height:47px; font-size:14px; padding:0 14px; }}
 QComboBox {{ background:{v['input']}; border:1px solid {v['field_line']}; border-radius:7px;
     padding:0 11px; min-height:35px; color:{v['text']}; }}
 QComboBox:hover {{ border-color:#525161; }}
+QComboBox:disabled {{ color:{v['dim']}; border-color:{v['line_soft']}; }}
 QComboBox:focus {{ border-color:{v['purple']}; }}
 QComboBox::drop-down {{ border:none; width:24px; }}
 QComboBox QAbstractItemView {{ background:{v['raised']}; border:1px solid {v['line']};
@@ -287,6 +290,7 @@ QScrollArea > QWidget > QWidget {{ background:transparent; }}
 
 /* checkbox / radio */
 QCheckBox, QRadioButton {{ background:transparent; spacing:8px; font-size:12px; }}
+QCheckBox:disabled, QRadioButton:disabled {{ color:{v['dim']}; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width:14px; height:14px; }}
 QCheckBox::indicator {{ border:1px solid {v['field_line']}; border-radius:4px; background:{v['input']}; }}
 QCheckBox::indicator:checked {{ background:{v['purple']}; border-color:{v['purple']}; }}

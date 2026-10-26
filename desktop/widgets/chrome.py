@@ -8,6 +8,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from desktop.icons import icon, pixmap
 from desktop.theme import V2, fonts
+from desktop.widgets.pointer import glow
 
 
 # --- small builders -------------------------------------------------------------
@@ -43,7 +45,8 @@ def button(text: str = "", icon_name: str | None = None, *, variant: str = "",
     if tip:
         b.setToolTip(tip)
     b.setCheckable(checkable)
-    b.setCursor(Qt.PointingHandCursor)
+    if variant == "primary":
+        glow(b, "button", corner=7)   # hover light; the hand cursor: pointer.CursorPolicy
     return b
 
 
@@ -55,7 +58,6 @@ def icon_button(icon_name: str, tip: str, *, checkable: bool = False, size: int 
     b.setIconSize(QSize(size, size))
     b.setToolTip(tip)
     b.setCheckable(checkable)
-    b.setCursor(Qt.PointingHandCursor)
     return b
 
 
@@ -130,6 +132,24 @@ def vbox(*widgets, spacing: int = 8, margins=(0, 0, 0, 0)) -> QVBoxLayout:
     return v
 
 
+def compact_combo(combo: QComboBox, chars: int = 12) -> QComboBox:
+    """Let a combo shrink below its longest item (shown elided) so it can never push a
+    narrow panel wider than its scroll area — that cut the panel off at the right."""
+    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(chars)
+    return combo
+
+
+def breakpoint_for(width: int, points: tuple[tuple[str, int], ...]) -> str:
+    """Responsive layouts: the name of the widest breakpoint ``width`` reaches.
+    ``points`` = ((name, min_width), …) ascending; the first is the fallback."""
+    name = points[0][0]
+    for key, lo in points:
+        if width >= lo:
+            name = key
+    return name
+
+
 # --- step rail ------------------------------------------------------------------
 
 STEPS = ["Bắt đầu", "Sửa phụ đề", "Dựng video"]
@@ -175,7 +195,6 @@ class StepRail(QWidget):
         self._btns: list[QPushButton] = []
         for i, name in enumerate(STEPS):
             b = QPushButton(name)
-            b.setCursor(Qt.PointingHandCursor)
             b.setIconSize(QSize(22, 22))
             b.clicked.connect(lambda _=False, k=i: self.clicked.emit(k))
             self._btns.append(b)

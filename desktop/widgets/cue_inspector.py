@@ -30,7 +30,7 @@ from app.pipeline import review
 from desktop.cuemodel import EditorCue, fmt_time, parse_time
 from desktop.icons import icon
 from desktop.theme import V2, cjk_font
-from desktop.widgets.chrome import badge, button, icon_label, label
+from desktop.widgets.chrome import badge, button, hbox, icon_label, label
 
 NUDGES = (-200, -50, 50, 200)
 
@@ -117,6 +117,17 @@ class CueInspector(QFrame):
         s.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         s.setWidget(w)
         return s
+
+    def content_min_width(self) -> int:
+        """Narrowest width showing every tab whole: the pages sit in scroll areas that
+        never scroll sideways, so anything narrower is cut off at the right edge."""
+        need = self.tabbar.minimumSizeHint().width() + 20
+        for i in range(self._pages.count()):
+            page = self._pages.widget(i)
+            inner = page.widget() if isinstance(page, QScrollArea) else page
+            if inner is not None:
+                need = max(need, inner.minimumSizeHint().width() + 14)   # + scroll bar
+        return need + 2                                                   # panel border
 
     def set_tab(self, i: int) -> None:
         self.tabbar.setCurrentIndex(i)
@@ -231,7 +242,6 @@ class CueInspector(QFrame):
                 b = QPushButton(f"{ms:+d}" if ms > 0 else str(ms))
                 b.setObjectName("nudge")
                 b.setToolTip(f"{'Đầu' if which == 'start' else 'Cuối'} {ms:+d} ms")
-                b.setCursor(Qt.PointingHandCursor)
                 b.clicked.connect(lambda _=False, w=which, d=ms: self.nudgeRequested.emit(w, d))
                 self.nudge_btns.append(b)
                 row.addWidget(b)
@@ -258,15 +268,16 @@ class CueInspector(QFrame):
         self.lock_cb.toggled.connect(self._on_lock)
         lock_row.addWidget(self.lock_cb)
         lock_row.addStretch(1)
-        self.lines_lbl = label("", "small")
-        lock_row.addWidget(self.lines_lbl)
-        self.read_lbl = label("", "small")                 # F-6 reading speed
-        lock_row.addWidget(self.read_lbl)
         br = button("Xuống dòng", "AlignCenter", variant="ghost", small=True,
                     tip="Chèn ngắt dòng ở vị trí con trỏ · Shift+Enter")
         br.clicked.connect(self.lineBreakRequested)
         lock_row.addWidget(br)
         lay.addLayout(lock_row)
+        # line count + F-6 reading speed on their own line: beside the lock they pushed
+        # the inspector wider than a 1366 px window gives it (cut off at the right)
+        self.lines_lbl = label("", "small")
+        self.read_lbl = label("", "small")
+        lay.addLayout(hbox(self.lines_lbl, None, self.read_lbl))
         lay.addWidget(_hline())
 
         # collapsible per-line dub

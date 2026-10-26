@@ -31,7 +31,17 @@ from desktop.cuemodel import fmt_time
 from desktop.icons import pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
-from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
+from desktop.widgets.chrome import (
+    badge,
+    breakpoint_for,
+    button,
+    compact_combo,
+    hbox,
+    icon_button,
+    icon_label,
+    label,
+)
+from desktop.widgets.pointer import glow
 from desktop.widgets.provider_combo import ProviderCombo
 from desktop.widgets.recent_projects import RecentProjects, short_title
 
@@ -45,6 +55,15 @@ _CLIP_URL = re.compile(r"https?://[^\s]*(?:douyin\.com|iesdouyin\.com|bilibili\.
 _ALL_URLS = re.compile(r"https?://[^\s]+")
 STAGES = (("download", "Tải video"), ("subtitle", "Lấy phụ đề tiếng Trung"),
           ("context", "Đọc ngữ cảnh"), ("translate", "Dịch sang tiếng Việt"))
+# responsive, on the view's width (the recent-projects aside included): from 1500 px
+# (a 1600×900 window and up) two columns, below that (1366×768) the single column.
+BREAKPOINTS = (("narrow", 0), ("wide", 1500))
+NARROW_MAX, WIDE_MAX = 780, 1640          # max width of the main column per layout
+COPY_IDLE = ("Một đường link.\nMột video của bạn.",
+             "Từ video tiếng Trung đến phụ đề và giọng đọc tiếng Việt.\n"
+             "Dán link, xem bản dịch, chỉnh cho vừa ý.")
+COPY_RUNNING = ("Để tiếng Việt\nkể lại câu chuyện.",
+                "Ứng dụng chuẩn bị bản dịch. Bạn là người quyết định câu chữ cuối cùng.")
 
 
 def _field(title: str, w: QWidget) -> QVBoxLayout:
@@ -146,27 +165,36 @@ class InputView(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        main = QWidget()
-        main.setMaximumWidth(780)
+        self._wide = False
+        self._running = False
+        self._main = main = QWidget()
+        main.setMaximumWidth(NARROW_MAX)
         col = QVBoxLayout(main)
         col.setContentsMargins(24, 24, 24, 24)
         col.setSpacing(18)
         intro = QVBoxLayout()
         intro.setSpacing(10)
         intro.addWidget(label("GÓC DỊCH VIDEO CỦA BẠN", "eyebrow"))
-        self.headline = label("Một đường link.\nMột video của bạn.", "display")
+        self.headline = label("", "display", wrap=True)   # wraps rather than widen the page
         intro.addWidget(self.headline)
-        self.tagline = label("Từ video tiếng Trung đến phụ đề và giọng đọc tiếng Việt.\n"
-                             "Dán link, xem bản dịch, chỉnh cho vừa ý.", "secondary")
+        self.tagline = label("", "secondary", wrap=True)
         intro.addWidget(self.tagline)
         col.addLayout(intro)
 
-        col.addWidget(self._hero())
-        col.addWidget(self._progress_card())
+        # narrow: one column (link card … options); wide: the options panel moves into a
+        # second column beside the link card (_set_wide, on resize)
+        self._left = QWidget()
+        self._left.setObjectName("bare")
+        left = QVBoxLayout(self._left)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(18)
+        self._left_lay = left
+        left.addWidget(self._hero())
+        left.addWidget(self._progress_card())
         self.alert = QFrame()
         self.alert.setVisible(False)
         self._alert_lay = QVBoxLayout(self.alert)
-        col.addWidget(self.alert)
+        left.addWidget(self.alert)
 
         toggles = QHBoxLayout()
         toggles.setSpacing(8)
@@ -181,13 +209,31 @@ class InputView(QWidget):
         gl.clicked.connect(self.glossaryRequested)
         toggles.addWidget(gl)
         self._toggles = QWidget()
+        self._toggles.setObjectName("bare")
         self._toggles.setLayout(toggles)
-        col.addWidget(self._toggles)
+        left.addWidget(self._toggles)
 
         self.note_box = self._note_box()
-        col.addWidget(self.note_box)
+        left.addWidget(self.note_box)
         self.options = self._options(providers)
-        col.addWidget(self.options)
+        left.addWidget(self.options)
+        left.addStretch(1)
+
+        self._right = QWidget()
+        self._right.setObjectName("bare")
+        right = QVBoxLayout(self._right)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(10)
+        right.addLayout(hbox(label("Tùy chọn", "h3"), label("Không bắt buộc · nhớ cho lần sau",
+                                                          "small"), None, spacing=10))
+        right.addStretch(1)
+        self._right_lay = right
+        self._right.setVisible(False)
+        body = QHBoxLayout()
+        body.setSpacing(24)
+        body.addWidget(self._left, 6)
+        body.addWidget(self._right, 5)
+        col.addLayout(body)
         col.addStretch(1)
 
         gate = QHBoxLayout()
@@ -210,7 +256,8 @@ class InputView(QWidget):
         hl.setContentsMargins(0, 0, 0, 0)
         hl.addStretch(1)
         hl.addWidget(main, 6)
-        hl.addStretch(0)
+        hl.addStretch(0)                     # narrow: next to the aside; wide: centred
+        self._holder_lay = hl
         scroll.setWidget(holder)
         self._scroll = scroll
 
@@ -243,6 +290,47 @@ class InputView(QWidget):
         self._on_source_changed()
         self._refresh_start()
         self.progress.setVisible(False)
+        self._apply_copy()
+
+    # --- responsive layout ---------------------------------------------------------
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._set_wide(breakpoint_for(self.width(), BREAKPOINTS) == "wide")
+
+    def _set_wide(self, wide: bool) -> None:
+        """Wide windows: link card + progress on the left, Tùy chọn always open beside
+        them, one-line hero copy. Narrow: the single column with the Tùy chọn toggle."""
+        if wide == self._wide:
+            return
+        self._wide = wide
+        if wide:
+            self._right_lay.insertWidget(1, self.options)
+        else:
+            self._left_lay.insertWidget(self._left_lay.count() - 1, self.options)
+        self._right.setVisible(wide)
+        self._main.setMaximumWidth(WIDE_MAX if wide else NARROW_MAX)
+        # wide: the column grows to WIDE_MAX first, what is left centres it
+        self._holder_lay.setStretch(1, 100 if wide else 6)
+        self._holder_lay.setStretch(2, 1 if wide else 0)
+        self.opt_btn.setVisible(not wide)
+        self._sync_options()
+        self._apply_copy()
+
+    def _sync_options(self) -> None:
+        """Narrow: the toggle shows the panel, hidden during a run. Wide: always shown,
+        read-only during a run (the run already took its options)."""
+        if self._wide:
+            self.options.setVisible(True)
+            self.options.setEnabled(not self._busy)
+        else:
+            self.options.setVisible(not self._busy and self.opt_btn.isChecked())
+            self.options.setEnabled(True)
+
+    def _apply_copy(self) -> None:
+        head, tag = COPY_RUNNING if self._running else COPY_IDLE
+        sep = " " if self._wide else "\n"               # wide: one line each, less height
+        self.headline.setText(head.replace("\n", sep))
+        self.tagline.setText(tag.replace("\n", sep))
 
     # --- hero ------------------------------------------------------------------
     def _hero(self) -> QFrame:
@@ -314,6 +402,7 @@ class InputView(QWidget):
         v.addWidget(self.clip_chip)
         self.setAcceptDrops(True)
         self._hero_frame = hero
+        glow(hero, corner=13)
         return hero
 
     def offer_clipboard(self, text: str, *, known: set[str] = frozenset()) -> bool:
@@ -394,6 +483,7 @@ class InputView(QWidget):
         for text, key in OCR_REGIONS:
             self.ocr_region.addItem(text, key)
         self._ocr_field = QWidget()
+        self._ocr_field.setObjectName("bare")
         self._ocr_field.setLayout(_field("Vùng đọc chữ trên video", self.ocr_region))
         self._ocr_field.layout().setContentsMargins(0, 0, 0, 0)
         g.addWidget(self._ocr_field, 1, 0)
@@ -403,6 +493,7 @@ class InputView(QWidget):
             "chữ nghệ thuật / nền rối. AI qua mạng: gửi dải phụ đề của từng khung lên OpenRouter, "
             "đọc đúng hơn hẳn, ~$0,1 cho video 3 giờ, không dùng GPU của máy.")
         self._ocr_engine_field = QWidget()
+        self._ocr_engine_field.setObjectName("bare")
         self._ocr_engine_field.setLayout(_field("Cách đọc chữ", self.ocr_engine))
         self._ocr_engine_field.layout().setContentsMargins(0, 0, 0, 0)
         g.addWidget(self._ocr_engine_field, 1, 1)
@@ -413,6 +504,7 @@ class InputView(QWidget):
         srt_row.addWidget(self.srt_btn)
         srt_row.addWidget(self.srt_lbl, 1)
         self._srt_field = QWidget()
+        self._srt_field.setObjectName("bare")
         self._srt_field.setLayout(srt_row)
         srt_row.setContentsMargins(0, 0, 0, 0)
         g.addWidget(self._srt_field, 2, 0, 1, 2)
@@ -425,6 +517,7 @@ class InputView(QWidget):
         g.addLayout(_field("Bộ dịch bản nháp", self.draft), 3, 0)
         g.addLayout(_field("Tinh chỉnh · tùy chọn", self.refine), 3, 1)
         self._asr_field = QWidget()
+        self._asr_field.setObjectName("bare")
         self._asr_field.setLayout(_field("Nhận dạng giọng nói", self.asr))
         self._asr_field.layout().setContentsMargins(0, 0, 0, 0)
         g.addWidget(self._asr_field, 4, 0)
@@ -475,6 +568,9 @@ class InputView(QWidget):
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
         g.addWidget(self.asr_note, 9, 0, 1, 2)
+        for w in (self.source, self.ocr_region, self.ocr_engine, self.draft, self.refine,
+                  self.asr, self.tts):
+            compact_combo(w, 14)          # long engine names elide, never widen the panel
         for w in (self.draft, self.refine, self.asr, self.tts):
             w.currentIndexChanged.connect(self._update_defaults)
         for w in (self.draft, self.refine, self.asr, self.source, self.ocr_engine):
@@ -490,7 +586,7 @@ class InputView(QWidget):
             self.context_note.setFocus()
 
     def _toggle_options(self, on: bool) -> None:
-        self.options.setVisible(on)
+        self._sync_options()
         self.opt_btn.setText("Ẩn tùy chọn" if on else "Tùy chọn")
         st = store.load_ui_state()
         if bool(st.get("options_open")) != on:
@@ -730,15 +826,11 @@ class InputView(QWidget):
         self._hero_frame.setVisible(not busy)
         self._toggles.setVisible(not busy)
         self.note_box.setVisible(not busy and self.note_btn.isChecked())
-        self.options.setVisible(not busy and self.opt_btn.isChecked())
+        self._sync_options()
 
     def _set_running_copy(self, running: bool) -> None:
-        self.headline.setText("Để tiếng Việt\nkể lại câu chuyện." if running else
-                              "Một đường link.\nMột video của bạn.")
-        self.tagline.setText("Ứng dụng chuẩn bị bản dịch. Bạn là người quyết định câu chữ cuối "
-                             "cùng." if running else
-                             "Từ video tiếng Trung đến phụ đề và giọng đọc tiếng Việt.\n"
-                             "Dán link, xem bản dịch, chỉnh cho vừa ý.")
+        self._running = running
+        self._apply_copy()
 
     def set_title(self, title: str, meta: str = "") -> None:
         if title:

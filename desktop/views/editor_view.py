@@ -44,6 +44,30 @@ except Exception:  # noqa: BLE001
 
 SAVE_MS, RETRY_MS = 600, 4000
 LAYOUTS = {"balanced": ("Cân bằng", (36, 38, 26)), "video": ("Ưu tiên video", (50, 27, 23))}
+# wide windows: past these widths the inspector / cue list only spread their content
+# apart, so the extra room goes to the video instead
+INSPECTOR_MAX, LIST_MAX = 560, 820
+
+
+def split_sizes(total: int, layout: str, inspector_min: int = 0) -> list[int]:
+    """[video, cue list, inspector] widths for a ``total``-px row: the layout's ratio,
+    the inspector never below what its tabs need (``inspector_min``) nor above
+    INSPECTOR_MAX, the list capped at LIST_MAX, the video takes the rest."""
+    rv, rl, ri = LAYOUTS[layout][1]
+    ins = max(inspector_min, min(int(total * ri / 100), INSPECTOR_MAX))
+    rest = max(0, total - ins)
+    lst = min(int(rest * rl / (rv + rl)), LIST_MAX)
+    return [rest - lst, lst, ins]
+
+
+class _Splitter(QSplitter):
+    """QSplitter that says when it was resized (after it laid its panes out)."""
+
+    resized = Signal()
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self.resized.emit()
 
 
 class _Task(QObject):
@@ -121,7 +145,7 @@ class EditorView(QWidget):
         self.timeline_panel = TimelinePanel()
         self.timeline = self.timeline_panel.timeline
 
-        self.top = QSplitter(Qt.Horizontal)
+        self.top = _Splitter(Qt.Horizontal)
         self.top.setHandleWidth(8)
         self.top.setChildrenCollapsible(False)
         self.video.setMinimumWidth(260)
@@ -129,6 +153,13 @@ class EditorView(QWidget):
         self.inspector.setMinimumWidth(280)
         for w in (self.video, self.cue_list, self.inspector):
             self.top.addWidget(w)
+        # the layout ratio follows the window (maximize, 1366 → 2560) until the user
+        # drags a handle; after that only the video and the list take extra width
+        self._user_split = False
+        self.top.splitterMoved.connect(lambda *_: setattr(self, "_user_split", True))
+        self.top.resized.connect(lambda: self._user_split or self._fit_split())
+        for i, stretch in enumerate((3, 2, 0)):
+            self.top.setStretchFactor(i, stretch)
         self.split = QSplitter(Qt.Vertical)
         self.split.setHandleWidth(8)
         self.split.setChildrenCollapsible(False)
@@ -271,12 +302,19 @@ class EditorView(QWidget):
 
     def _apply_layout(self, name: str, *, initial: bool = False) -> None:
         self._layout = name
-        text, ratio = LAYOUTS[name]
-        self.layout_btn.setText(text)
-        total = max(900, self.top.width() or 1330)
-        self.top.setSizes([int(total * r / 100) for r in ratio])
+        self.layout_btn.setText(LAYOUTS[name][0])
+        self._user_split = False
+        self._fit_split()
         if initial:
             self.split.setSizes([560, 170])
+
+    def _fit_split(self) -> None:
+        """Size the three panes for the current width (split_sizes); the inspector's
+        minimum follows its widest tab so its time fields are never cut off."""
+        ins = self.inspector.content_min_width()
+        self.inspector.setMinimumWidth(ins)
+        total = (self.top.width() or 1330) - 2 * self.top.handleWidth()
+        self.top.setSizes(split_sizes(max(900, total), self._layout, ins))
 
     # --- find / replace (UX-4) -----------------------------------------------
     def _find_bar(self) -> QWidget:
