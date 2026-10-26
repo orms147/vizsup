@@ -230,3 +230,11 @@ def test_mark_rest_lists_only_unticked_rows(qapp):
     assert dlg.unticked() == [3]
     dlg.mark_rest.setChecked(False)
     assert dlg.unticked() == []
+
+
+def test_mark_rest_alone_can_be_applied(qapp):
+    dlg = BulkEditDialog(None, title="t", intro="i", rows=[(0, "a", "b", "")], checked=False,
+                         mark_rest="đánh dấu")
+    assert dlg.apply_btn.isEnabled() and dlg.apply_btn.text() == "Đánh dấu đã xem"
+    dlg.mark_rest.setChecked(False)
+    assert not dlg.apply_btn.isEnabled()

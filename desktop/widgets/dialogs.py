@@ -152,6 +152,7 @@ class BulkEditDialog(VzDialog):
         self.mark_rest = QCheckBox(mark_rest) if mark_rest else None
         if self.mark_rest is not None:
             self.mark_rest.setChecked(True)
+            self.mark_rest.toggled.connect(self._update_count)
             self.body.addWidget(self.mark_rest)
         self.add_button("Hủy")
         self.apply_btn = self.add_button("Áp dụng", icon_name="Check", primary=True, accept=True)
@@ -164,8 +165,10 @@ class BulkEditDialog(VzDialog):
     def _update_count(self, *_a) -> None:
         n = sum(t.isChecked() for _i, t, _e in self._rows)
         self.count.setText(f"Đã chọn {n} / {len(self._rows)} câu")
-        self.apply_btn.setText(f"Áp dụng {n} câu" if n else "Áp dụng")
-        self.apply_btn.setEnabled(n > 0)
+        rest = self.mark_rest is not None and self.mark_rest.isChecked() and n < len(self._rows)
+        self.apply_btn.setText(f"Áp dụng {n} câu" if n else
+                               "Đánh dấu đã xem" if rest else "Áp dụng")
+        self.apply_btn.setEnabled(n > 0 or rest)
 
     def unticked(self) -> list[int]:
         """Rows left unticked — only when the "mark the rest" box is on."""
