@@ -110,6 +110,8 @@ class EdgeTTS(TTSProvider):
                 sem = _asyncio.Semaphore(concurrency)
                 stop = _asyncio.Event()   # set after the first fatal → stop admitting
                 inflight: set = set()     # tasks holding a slot (the only ones Hủy cancels)
+                loop = _asyncio.get_running_loop()
+                cool = {"until": 0.0}     # shared: one throttled answer pauses EVERY worker
 
                 async def _one(key: str, text: str, out_path) -> tuple[str, Exception | None]:
                     try:
@@ -134,6 +136,9 @@ class EdgeTTS(TTSProvider):
                     delays = list(retry_delays)
                     throttled = 0
                     while True:
+                        wait = cool["until"] - loop.time()
+                        if wait > 0:
+                            await _asyncio.sleep(wait)
                         try:
                             comm = edge_tts.Communicate(
                                 text, voice=voice, rate=rate, connector=connector)
@@ -150,9 +155,10 @@ class EdgeTTS(TTSProvider):
                                     return key, TTSThrottled(
                                         "máy chủ giọng đọc (edge-tts) đang giới hạn — "
                                         "không trả âm thanh")
-                                await _asyncio.sleep(THROTTLE_DELAYS[throttled])
+                                pause = THROTTLE_DELAYS[throttled]
+                                cool["until"] = max(cool["until"], loop.time() + pause)
                                 throttled += 1
-                                continue
+                                continue                 # waits out the shared cooldown
                             if not delays:
                                 stop.set()           # dead endpoint → stop admitting
                                 return key, exc
