@@ -53,3 +53,14 @@ def test_default_voice_priority(tmp_path, monkeypatch):
     assert render_view.saved_voice(job) == "vi-VN-HoaiMyNeural"
     assert main._default_voice(job, EDGE, {"voice": "x"}) == "vi-VN-HoaiMyNeural"
     assert main._default_voice(job, [], {}) is None
+
+
+def test_main_module_entry_point_is_last():
+    """`python -m desktop.main` runs main() at the `if __name__` line: a helper defined
+    below it (as _default_voice once was) is a NameError in the real app only."""
+    import ast
+
+    src = (Path(__file__).resolve().parents[2] / "desktop" / "main.py").read_text(encoding="utf-8")
+    body = ast.parse(src).body
+    last = body[-1]
+    assert isinstance(last, ast.If) and "__name__" in ast.unparse(last.test)

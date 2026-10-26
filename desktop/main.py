@@ -898,6 +898,21 @@ def _group_status(job: Job) -> dict | None:
             "approved": sum(r["approved"] for r in ready)}
 
 
+def _default_voice(job, voices: list[str], opts: dict) -> str | None:
+    """The dub voice to show first: this project's own pick (render page), the run's
+    option, a voice matching the speaker the AI heard (male reviewer → NamMinh), else
+    the first one."""
+    from app.pipeline import speakers
+
+    from desktop.views.render_view import saved_voice
+
+    for v in (saved_voice(job), opts.get("voice")):
+        if v and v in voices:
+            return v
+    return speakers.voice_for(voices, speakers.speaker_gender(job)) or (voices[0] if voices
+                                                                       else None)
+
+
 def main() -> int:
     _install_qt_log_filter()
     app = QApplication(sys.argv)
@@ -921,17 +936,3 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 
-
-def _default_voice(job, voices: list[str], opts: dict) -> str | None:
-    """The dub voice to show first: this project's own pick (render page), the run's
-    option, a voice matching the speaker the AI heard (male reviewer → NamMinh), else
-    the first one."""
-    from app.pipeline import speakers
-
-    from desktop.views.render_view import saved_voice
-
-    for v in (saved_voice(job), opts.get("voice")):
-        if v and v in voices:
-            return v
-    return speakers.voice_for(voices, speakers.speaker_gender(job)) or (voices[0] if voices
-                                                                       else None)
