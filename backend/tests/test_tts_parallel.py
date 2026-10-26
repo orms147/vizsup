@@ -253,3 +253,17 @@ def test_edge_batch_cancel_reaches_a_request_in_flight(tmp_path, monkeypatch):
     res = dict(prov.synthesize_many(items, cancel=lambda: time.monotonic() > stop_at))
     assert time.monotonic() - t0 < 5
     assert all(isinstance(e, InterruptedError) for e in res.values()) and len(res) == 6
+
+
+def test_edge_batch_keeps_going_until_a_streak_of_empty_lines(tmp_path, monkeypatch):
+    """One unlucky line no longer ends the batch; GIVE_UP_AFTER in a row does."""
+    from app.providers.tts import edge
+
+    texts = [f"câu số {i}" for i in range(12)]
+    prov = _fake_edge(monkeypatch, {t: 99 for t in texts[:1] + texts[2:]})   # 1 is fine
+    monkeypatch.setattr(edge, "GIVE_UP_AFTER", 3)
+    items = [(str(i), t, tmp_path / f"{i}.mp3") for i, t in enumerate(texts)]
+    res = dict(prov.synthesize_many(items, concurrency=1))
+    kinds = [type(res[str(i)]).__name__ if res[str(i)] else "ok" for i in range(12)]
+    assert kinds[:5] == ["TTSThrottled", "ok", "TTSThrottled", "TTSThrottled", "TTSThrottled"]
+    assert set(kinds[5:]) == {"InterruptedError"}             # stopped after 3 in a row

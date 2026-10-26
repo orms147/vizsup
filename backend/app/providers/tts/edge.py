@@ -22,7 +22,10 @@ def _no_audio(exc: Exception) -> bool:
     return type(exc).__name__ == "NoAudioReceived"
 
 
-THROTTLE_DELAYS = (3.0, 8.0, 20.0)   # "no audio" on a speakable line: back off, retry
+THROTTLE_DELAYS = (5.0, 15.0, 30.0, 60.0)   # "no audio" on a speakable line: back off
+GIVE_UP_AFTER = 5     # lines in a row still empty after every retry → stop the batch
+# Oct 2026: edge-tts's endpoint answers many valid requests with no audio (rany2/edge-tts
+# #473; ~1 in 4 succeeded in mid-October) — patience works, hammering does not.
 SAVE_TIMEOUT = 90.0                  # one line never takes this long; a stuck socket does
 CANCEL_POLL = 0.5                    # how often the batch checks the render's Hủy
 
@@ -112,6 +115,7 @@ class EdgeTTS(TTSProvider):
                 inflight: set = set()     # tasks holding a slot (the only ones Hủy cancels)
                 loop = _asyncio.get_running_loop()
                 cool = {"until": 0.0}     # shared: one throttled answer pauses EVERY worker
+                streak = {"n": 0}         # consecutive lines that stayed empty after retries
 
                 async def _one(key: str, text: str, out_path) -> tuple[str, Exception | None]:
                     try:
@@ -145,13 +149,16 @@ class EdgeTTS(TTSProvider):
                             # 2026-10-27: under throttling a request hung for good and
                             # froze the render (and its Hủy) at "TTS 20%"
                             await _asyncio.wait_for(comm.save(str(out_path)), SAVE_TIMEOUT)
+                            streak["n"] = 0
                             return key, None
                         except Exception as exc:  # noqa: BLE001
                             if _no_audio(exc):
                                 if not has_speakable(text):
                                     return key, exc  # nothing to say → skip, no retry
                                 if throttled >= len(THROTTLE_DELAYS):
-                                    stop.set()       # sustained limiting → stop, keep done
+                                    streak["n"] += 1
+                                    if streak["n"] >= GIVE_UP_AFTER:
+                                        stop.set()   # sustained limiting → stop, keep done
                                     return key, TTSThrottled(
                                         "máy chủ giọng đọc (edge-tts) đang giới hạn — "
                                         "không trả âm thanh")
