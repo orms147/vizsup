@@ -252,6 +252,20 @@ class RenderView(QWidget):
         ll.addWidget(card)
         self.speed, self.speed_lbl = self._slider(ll, "Tốc độ nói", 70, 140, 100,
                                                   lambda v: f"{v / 100:.2f}×")
+        # fast talker → most lines late at 1.0×: say so BEFORE ~15 min of TTS
+        fit_row = QHBoxLayout()
+        self.fit_hint = label("", "small", wrap=True)
+        self.fit_btn = button("", variant="ghost", small=True)
+        self.fit_btn.clicked.connect(lambda: self.speed.setValue(int(round(self._fit_rate * 100))))
+        fit_row.addWidget(self.fit_hint, 1)
+        fit_row.addWidget(self.fit_btn)
+        ll.addLayout(fit_row)
+        self._fit_cues: list = []
+        self._fit_rate = 1.0
+        self.fit_hint.setVisible(False)
+        self.fit_btn.setVisible(False)
+        self.speed.valueChanged.connect(lambda _v: self._update_fit_hint())
+        self.speed.sliderReleased.connect(self._remember_voice)
 
         ll.addWidget(_hline())
         ll.addWidget(label("Âm thanh bạn muốn nghe", "h3"))
@@ -787,6 +801,7 @@ class RenderView(QWidget):
             w.setEnabled(dub)
         if hasattr(self, "ai_label_cb"):           # built after the audio cards
             self.ai_label_cb.setEnabled(dub)
+        self._update_fit_hint()                    # no dub → no "late lines" warning
 
     def suggest_original(self, singing: str | None) -> None:
         """E-8: a mostly-sung video starts on "Giữ giọng gốc" (once per job; the user's
@@ -818,14 +833,39 @@ class RenderView(QWidget):
             self.voice.blockSignals(True)
             self.voice.setCurrentIndex(i)
             self.voice.blockSignals(False)
+        rate = saved_rate(self._job) if self._job is not None else None
+        self.speed.setValue(int(round((rate or 1.0) * 100)))
 
-    def _remember_voice(self, _i: int) -> None:
-        """The user's pick sticks to this project (voice.json) across restarts."""
+    def _remember_voice(self, *_a) -> None:
+        """The user's voice and speed stick to this project (voice.json) across restarts."""
         import json
 
         if self._job is not None and self._has_real_voices:
             (Path(self._job.work_dir) / VOICE_FILE).write_text(
-                json.dumps({"voice": self.voice.currentData()}), encoding="utf-8")
+                json.dumps({"voice": self.voice.currentData(),
+                            "rate": self.speed.value() / 100}), encoding="utf-8")
+
+    def _update_fit_hint(self) -> None:
+        from app.pipeline import fit_estimate
+
+        cur = self.speed.value() / 100
+        share = fit_estimate.late_share(self._fit_cues, cur) if self._fit_cues else 0.0
+        show = share > 0.15 and self._audio_mode() != "original"
+        self.fit_hint.setVisible(show)
+        self.fit_btn.setVisible(False)
+        if not show:
+            return
+        rate, then = fit_estimate.suggest_rate(self._fit_cues)
+        self._fit_rate = rate
+        msg = f"Người nói nhanh: ở {cur:.2f}× khoảng {share:.0%} câu sẽ trễ hoặc bị cắt."
+        if rate > cur + 0.001:
+            msg += f" Ở {rate:.2f}× còn khoảng {then:.0%}."
+            self.fit_btn.setText(f"Dùng {rate:.2f}×")
+            self.fit_btn.setVisible(True)
+        else:
+            msg += " Nên rút gọn thêm ở màn Sửa phụ đề."
+        self.fit_hint.setText(msg)
+        self.fit_hint.setStyleSheet(f"color:{V2['amber']};")
 
     def set_rendering(self, on: bool) -> None:
         """Lock/unlock this screen around a render run. Every exit path (done,
@@ -849,6 +889,8 @@ class RenderView(QWidget):
         self.preview.load(video_path)
         if cues is not None:
             self.preview.set_cues(cues)
+            self._fit_cues = list(cues)
+            self._update_fit_hint()
         if self._right_stack.currentIndex() == 1:
             return
         self._right_stack.setCurrentIndex(2 if self._out and Path(self._out).exists() else 0)
@@ -1146,6 +1188,16 @@ def _hline() -> QFrame:
 
 
 VOICE_FILE = "voice.json"
+
+
+def saved_rate(job) -> float | None:
+    import json
+
+    try:
+        r = json.loads((Path(job.work_dir) / VOICE_FILE).read_text(encoding="utf-8")).get("rate")
+        return float(r) if r else None
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
 
 
 def saved_voice(job) -> str | None:

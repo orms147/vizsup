@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.models import Cue
 from app.pipeline import translate
-from app.pipeline.fit_estimate import fits, slot_seconds, speech_seconds
+from app.pipeline.fit_estimate import SYL_PER_SEC, fits, slot_seconds, speech_seconds
 
 
 def _c(i, s, e, t="x"):
@@ -12,7 +12,8 @@ def _c(i, s, e, t="x"):
 
 def test_speech_seconds_scales_with_words():
     assert speech_seconds("") == 0.0
-    assert speech_seconds("một hai ba bốn tám") == 5 / 4.8
+    assert speech_seconds("một hai ba bốn tám") == 5 / SYL_PER_SEC
+    assert speech_seconds("một hai ba bốn tám", 1.25) == 5 / (SYL_PER_SEC * 1.25)
 
 
 def test_slot_spans_to_next_cue_and_last_uses_duration():
@@ -68,3 +69,24 @@ def test_autoshorten_opt_out(monkeypatch):
     cues = [_c(1, 0.0, 2.0)]
     out = translate.translate_cues(cues, draft="fake", auto_shorten=False)
     assert out[0].text.startswith("một")
+
+
+def test_measured_rate_not_the_optimistic_one():
+    """4.8 w/s flagged 17 lines of a fast talker; the voice really speaks ~2.8."""
+    assert 2.5 <= SYL_PER_SEC <= 3.3
+
+
+def test_suggest_rate_for_a_fast_talker():
+    from app.pipeline.fit_estimate import late_share, suggest_rate
+
+    # 8 words in a 1.6 s slot: 2.67 s at 1.0× vs 1.6 × 1.3 = 2.08 s → late; 2.05 s at 1.3×
+    cues = [_c(i, i * 1.6, i * 1.6 + 1.5) for i in range(10)]
+    for c in cues:
+        c.text = "một hai ba bốn năm sáu bảy tám"
+    assert late_share(cues, 1.0) > 0.5
+    rate, share = suggest_rate(cues)
+    assert rate == 1.3 and share <= 0.15
+    slow = [_c(i, i * 3.0, i * 3.0 + 3.0) for i in range(5)]
+    for c in slow:
+        c.text = "một hai"
+    assert suggest_rate(slow) == (1.0, 0.0)

@@ -541,7 +541,7 @@ class EditorView(QWidget):
                 pct = min(pct, int(100 * BULK_TARGET_CPS / cps))
             if "long" in iss:
                 slot = fit_estimate.slot_seconds(self.cues, i)
-                need = max(0.1, fit_estimate.speech_seconds(c.vi))
+                need = max(0.1, fit_estimate.speech_seconds(c.vi, self._voice_rate()))
                 pct = min(pct, int(100 * slot * fit_estimate.MAX_TEMPO / need))
             pct = max(50, min(90, round(pct / 10) * 10))
             note = " · ".join(review.LABELS[k] for k in iss if k in ("read", "long"))
@@ -644,6 +644,12 @@ class EditorView(QWidget):
         self._reload()
         self.message.emit(f"Đã gộp {merged} câu quá ngắn vào câu bên cạnh · gỡ {fixed} chỗ "
                           f"chồng lấn — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+
+    def _voice_rate(self) -> float:
+        """The dub speed picked on the render page for this project (voice.json)."""
+        from desktop.views.render_view import saved_rate
+
+        return (saved_rate(self.job) if self.job is not None else None) or 1.0
 
     def _issues_at(self, i: int) -> list[str]:
         return self.issues[i] if 0 <= i < len(self.issues) else []
@@ -775,7 +781,8 @@ class EditorView(QWidget):
         ocr, term = self._spans
         return review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term,
                                  guess_spans=self._guess, voice=self._speech,
-                                 qa_findings=self._qa, late=getattr(self, "_late", []))
+                                 qa_findings=self._qa, late=getattr(self, "_late", []),
+                                 rate=self._voice_rate())
 
     def reload_fit_report(self) -> None:
         """F-10: after a render (or a quick preview), flag lines whose dub came in late."""

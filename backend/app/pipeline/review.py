@@ -113,11 +113,13 @@ def late_lines(cues, late: list[dict]) -> dict[int, float]:
 
 def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
                guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None,
-               qa_findings: list[dict] = (), late: list[dict] = ()) -> list[list[str]]:
+               qa_findings: list[dict] = (), late: list[dict] = (),
+               rate: float = 1.0) -> list[list[str]]:
     """``cues``: objects with ``start``, ``end``, and Vietnamese text in ``vi`` (editor
     cues) or ``text`` (+ optional Chinese ``zh``). ``voice``: VAD spans, when known.
-    ``late``: fit_report.json "late" rows from the last render (F-10). Returns, per cue,
-    its issue keys in ORDER."""
+    ``late``: fit_report.json "late" rows from the last render (F-10). ``rate``: the voice
+    speed picked for this project ("Tốc độ nói") — "Quá dài" is judged at it. Returns,
+    per cue, its issue keys in ORDER."""
     late_at = late_lines(cues, late)
     out: list[list[str]] = []
     for i, c in enumerate(cues):
@@ -140,7 +142,8 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
 
             if qa.findings_for(c, qa_findings):
                 issues.append("ai")
-        if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i)):
+        if text.strip() and not fit_estimate.fits(text, fit_estimate.slot_seconds(cues, i),
+                                                  rate):
             issues.append("long")
         if i in late_at:
             issues.append("late")

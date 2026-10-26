@@ -64,3 +64,29 @@ def test_main_module_entry_point_is_last():
     body = ast.parse(src).body
     last = body[-1]
     assert isinstance(last, ast.If) and "__name__" in ast.unparse(last.test)
+
+
+def test_render_page_warns_a_fast_talker_and_offers_a_speed(tmp_path):
+    """e2e 2026-10-27: 522/717 lines came out late at 1.0× with no warning beforehand."""
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    from desktop.cuemodel import EditorCue
+    from desktop.views import render_view
+
+    QApplication.instance() or QApplication([])
+    rv = render_view.RenderView()
+    job = Job(id="j", work_dir=tmp_path)
+    rv.set_job(job, cues=10)
+    fast = [EditorCue(start=i * 1.6, end=i * 1.6 + 1.5, vi="một hai ba bốn năm sáu bảy tám",
+                      zh="") for i in range(10)]
+    rv.set_preview(tmp_path / "missing.mp4", fast)
+    assert not rv.fit_hint.isHidden() and "trễ" in rv.fit_hint.text()
+    assert not rv.fit_btn.isHidden() and "1.30×" in rv.fit_btn.text()
+    rv.fit_btn.click()
+    assert rv.speed.value() == 130
+    rv._remember_voice()
+    assert render_view.saved_rate(job) is None or render_view.saved_rate(job) == 1.3
+    slow = [EditorCue(start=i * 3.0, end=i * 3.0 + 3.0, vi="một hai", zh="") for i in range(5)]
+    rv.set_preview(tmp_path / "missing.mp4", slow)
+    assert rv.fit_hint.isHidden()

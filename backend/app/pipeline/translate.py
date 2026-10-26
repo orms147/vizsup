@@ -284,13 +284,14 @@ def translate_cues(
         # refine prompt so the refiner shortens WHILE polishing (kills the
         # draft → refine-the-long-version → autoshorten triple-pay). Fitting lines
         # get None so their prompt block stays byte-identical to before.
-        from app.pipeline.fit_estimate import MAX_TEMPO, SYL_PER_SEC, fits, slot_seconds
+        from app.pipeline.fit_estimate import (MAX_TEMPO, PREGATE_RATE, SYL_PER_SEC, fits,
+                                               slot_seconds)
 
         budgets: list[int | None] = []
         for j in range(len(vi_draft)):
             slot = slot_seconds(cues, j)
-            budgets.append(int(slot * MAX_TEMPO * SYL_PER_SEC)
-                           if slot > 0 and not fits(vi_draft[j], slot) else None)
+            budgets.append(int(slot * MAX_TEMPO * SYL_PER_SEC * PREGATE_RATE)
+                           if slot > 0 and not fits(vi_draft[j], slot, PREGATE_RATE) else None)
         return budgets
 
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
@@ -370,7 +371,8 @@ def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
     BEFORE the gate (so the user reviews already-fitting lines). Skips silently when
     the provider can't rewrite; a rewrite that fails or doesn't shorten a line keeps
     the original. shorten_line (per-line, GUI editor) stays untouched."""
-    from app.pipeline.fit_estimate import MAX_TEMPO, fits, slot_seconds, speech_seconds
+    from app.pipeline.fit_estimate import (MAX_TEMPO, PREGATE_RATE, fits, slot_seconds,
+                                           speech_seconds)
 
     prov = get_translator(provider_name)
     if not hasattr(prov, "rewrite") or not prov.available():
@@ -381,9 +383,9 @@ def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
     todo: list[tuple[int, int]] = []
     for i in range(len(cues)):
         slot = slot_seconds(cues, i)
-        if slot <= 0 or fits(out[i], slot):
+        if slot <= 0 or fits(out[i], slot, PREGATE_RATE):
             continue
-        ratio = (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i]))
+        ratio = (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i], PREGATE_RATE))
         pct = max(50, min(90, round(ratio * 10) * 10))
         todo.append((i, pct))
     if not todo:
