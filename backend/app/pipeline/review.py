@@ -83,13 +83,30 @@ def _overlaps(a_start: float, a_end: float, spans: list[Span]) -> bool:
     return any(min(a_end, s.end) - max(a_start, s.start) > 0.05 for s in spans)
 
 
-def load_late(job: Job) -> list[dict]:
-    """The last render's late dub lines (fit_report.json), [] when none / no render."""
+def stamp_fit_report(job: Job, *, rate: str | None) -> None:
+    """Record the voice speed ("+30%") the last render's fit_report was measured at."""
+    import json
+
+    p = job.work_dir / "fit_report.json"
+    try:
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        rows["rate"] = rate or "+0%"
+        p.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def load_late(job: Job, *, rate: str | None = None) -> list[dict]:
+    """The last render's late dub lines (fit_report.json), [] when none / no render —
+    or when it was measured at another voice speed than ``rate`` (a 1.0× preview's 522
+    late lines say nothing about the 1.3× dub the user is preparing now)."""
     import json
 
     try:
         rows = json.loads((job.work_dir / "fit_report.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return []
+    if rate is not None and isinstance(rows, dict) and rows.get("rate", "+0%") != rate:
         return []
     late = rows.get("late") if isinstance(rows, dict) else None
     return [r for r in late or [] if isinstance(r, dict) and "index" in r]

@@ -645,6 +645,10 @@ class EditorView(QWidget):
         self.message.emit(f"Đã gộp {merged} câu quá ngắn vào câu bên cạnh · gỡ {fixed} chỗ "
                           f"chồng lấn — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
 
+    def _rate_str(self) -> str:
+        """The voice speed as the TTS/render options spell it ("+30%")."""
+        return f"{int(round((self._voice_rate() - 1) * 100)):+d}%"
+
     def _voice_rate(self) -> float:
         """The dub speed picked on the render page for this project (voice.json)."""
         from desktop.views.render_view import saved_rate
@@ -788,7 +792,7 @@ class EditorView(QWidget):
         """F-10: after a render (or a quick preview), flag lines whose dub came in late."""
         if self.job is None:
             return
-        self._late = review.load_late(self.job)
+        self._late = review.load_late(self.job, rate=self._rate_str())
         if self.cues:
             self._refresh_issues()
 
@@ -1082,7 +1086,7 @@ class EditorView(QWidget):
             from app.pipeline import qa
 
             self._qa = qa.load(job)
-            self._late = review.load_late(job)
+            self._late = review.load_late(job, rate=self._rate_str())
         except Exception:  # noqa: BLE001 - flags are hints; never block opening a job
             self._spans, self._guess, self._qa, self._late = ([], []), [], [], []
         self._meta = {"title": _job_title(job), "platform": job.metadata.get("platform") or

@@ -406,7 +406,7 @@ class PipelineWorker(QObject):
             self._run_render()
 
     def _run_render(self) -> None:
-        from app.pipeline import assemble, disclosure, tts
+        from app.pipeline import assemble, disclosure, review, tts
 
         job, o = self.job, self.opts
         try:
@@ -487,6 +487,7 @@ class PipelineWorker(QObject):
                     ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
                 commentary=voiced,
             )
+            review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
             self.progress.emit(1.0, "Hoàn tất")
             self.log.emit(f"✓ Xuất: {out}")
             self.render_done.emit(str(out))

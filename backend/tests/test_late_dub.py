@@ -62,3 +62,21 @@ def test_editor_shows_late_lines_after_a_render(tmp_path):
         {"late": [{"index": 2, "text": "câu hai", "carry_s": 0.7}]}), encoding="utf-8")
     v.reload_fit_report()
     assert "late" in v.issues[1] and review.LABELS["late"] == "Lồng tiếng trễ"
+
+
+def test_late_flags_only_for_the_speed_they_were_measured_at(tmp_path):
+    """e2e: a 1.0× preview left 522 'trễ' flags; after picking 1.3× they were stale."""
+    import json
+
+    from app.models import Job
+    from app.pipeline import review
+
+    job = Job(id="j", work_dir=tmp_path)
+    (tmp_path / "fit_report.json").write_text(json.dumps(
+        {"late": [{"index": 1, "text": "a", "carry_s": 1.0}]}), encoding="utf-8")
+    assert len(review.load_late(job, rate="+0%")) == 1          # unstamped = 1.0×
+    assert review.load_late(job, rate="+30%") == []
+    review.stamp_fit_report(job, rate="+30%")
+    assert len(review.load_late(job, rate="+30%")) == 1
+    assert review.load_late(job, rate="+0%") == []
+    assert len(review.load_late(job)) == 1                       # no speed given → as before

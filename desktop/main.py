@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         self.editor.shortcutsRequested.connect(self._show_shortcuts)
         self.render.renderRequested.connect(self._start_render)
         self.render.cancelRequested.connect(self._cancel_render)
-        self.render.backRequested.connect(lambda: self.stack.setCurrentIndex(EDITOR))
+        self.render.backRequested.connect(self._back_to_editor)
         self.render.approveRequested.connect(self._approve)
         self.render.joinRequested.connect(self._start_join)
         self.editor.previewStyleRequested.connect(self._preview_style)
@@ -358,6 +358,12 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    def _back_to_editor(self) -> None:
+        # the voice speed may have changed on the render page: "Quá dài" and the late
+        # flags are judged at it, so recompute them before the user looks
+        self.editor.reload_fit_report()
+        self.stack.setCurrentIndex(EDITOR)
 
     def _learn_from_approval(self) -> None:
         """E-7: approved lines → translation memory; changed lines → style edits; every
