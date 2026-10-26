@@ -1016,21 +1016,32 @@ class RenderView(QWidget):
         tts = self._tts
         out = Path(self._job.work_dir if self._job else ".") / "_voice_sample.mp3"
         self.listen_btn.setEnabled(False)
+        # feedback next to the voice: self.status sits on the progress card, hidden here
+        idle = f"Tiếng Việt · {tts}"
+        self.voice_sub.setText("Đang tạo giọng mẫu…")
+        self.voice_sub.setStyleSheet("")
+        from PySide6.QtCore import QUrl
+
+        self._player.setSource(QUrl())         # Windows: the player locks the old sample file
 
         def work():
             get_tts(tts).synthesize(SAMPLE, out, voice=voice, rate=rate)
+            if not out.exists() or out.stat().st_size == 0:      # a dropped connection
+                raise RuntimeError("máy chủ giọng đọc không trả âm thanh — thử lại")
             return str(out)
 
         def done(p):
             from PySide6.QtCore import QUrl
 
             self.listen_btn.setEnabled(True)
+            self.voice_sub.setText(idle)
             self._player.setSource(QUrl.fromLocalFile(p))
             self._player.play()
 
         def fail(msg):
             self.listen_btn.setEnabled(True)
-            self.status.setText(f"Không nghe thử được: {msg}")
+            self.voice_sub.setText(f"Không nghe thử được: {msg}")
+            self.voice_sub.setStyleSheet(f"color:{V2['amber']};")
 
         self._bg.run(work, done, fail)
 
