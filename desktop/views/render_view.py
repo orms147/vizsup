@@ -236,6 +236,7 @@ class RenderView(QWidget):
         vc = QVBoxLayout()
         vc.setSpacing(3)
         self.voice = QComboBox()
+        self.voice.currentIndexChanged.connect(self._remember_voice)
         self.voice_sub = label("Tiếng Việt", "small")
         vc.addWidget(self.voice)
         vc.addWidget(self.voice_sub)
@@ -425,6 +426,7 @@ class RenderView(QWidget):
         pv.setContentsMargins(0, 0, 0, 0)
         pv.setSpacing(0)
         self.preview = VideoPanel("Video nguồn")
+        self.preview.durationChanged.connect(lambda _d: self._show_commentary())
         pv.addWidget(self.preview, 1)
         self._right_stack.addWidget(prev)
 
@@ -744,7 +746,10 @@ class RenderView(QWidget):
         if notes and info.get("commentary_s"):
             return len(notes), float(info.get("commentary_share") or 0.0)
         dur = self.preview.duration() or float(info.get("duration") or 0.0)
-        return len(notes), commentary.estimate(notes, dur)[1] if notes else 0.0
+        if not dur and notes and self._job.source_video.exists():
+            # the player hasn't reported a length yet: 0 here made 9 s read as "94.7%"
+            dur = assemble.probe_duration(self._job.source_video)
+        return len(notes), commentary.estimate(notes, dur)[1] if notes and dur else 0.0
 
     def _show_commentary(self) -> None:
         n, share = self._commentary_stats()
@@ -800,10 +805,27 @@ class RenderView(QWidget):
         return "replace"
 
     def set_voices(self, voices: list[str]) -> None:
+        self.voice.blockSignals(True)
         self.voice.clear()
         self._has_real_voices = bool(voices)
         for v in voices or ["(mặc định)"]:
             self.voice.addItem(_voice_name(v) if voices else v, v)
+        self.voice.blockSignals(False)
+
+    def select_voice(self, voice: str | None) -> None:
+        i = self.voice.findData(voice) if voice else -1
+        if i >= 0:
+            self.voice.blockSignals(True)
+            self.voice.setCurrentIndex(i)
+            self.voice.blockSignals(False)
+
+    def _remember_voice(self, _i: int) -> None:
+        """The user's pick sticks to this project (voice.json) across restarts."""
+        import json
+
+        if self._job is not None and self._has_real_voices:
+            (Path(self._job.work_dir) / VOICE_FILE).write_text(
+                json.dumps({"voice": self.voice.currentData()}), encoding="utf-8")
 
     def set_rendering(self, on: bool) -> None:
         """Lock/unlock this screen around a render run. Every exit path (done,
@@ -1110,3 +1132,15 @@ def _hline() -> QFrame:
     f.setFixedHeight(1)
     f.setStyleSheet(f"background:{V2['line_soft']};")
     return f
+
+
+VOICE_FILE = "voice.json"
+
+
+def saved_voice(job) -> str | None:
+    import json
+
+    try:
+        return json.loads((Path(job.work_dir) / VOICE_FILE).read_text(encoding="utf-8")).get("voice")
+    except (OSError, ValueError, AttributeError):
+        return None

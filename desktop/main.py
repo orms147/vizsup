@@ -338,7 +338,7 @@ class MainWindow(QMainWindow):
             if not approval.is_approved(self.job):
                 from desktop.widgets.dialogs import ApproveDialog
 
-                voice = self.opts.get("voice") or (voices[0] if voices else tts_name)
+                voice = _default_voice(self.job, voices, self.opts) or tts_name
                 dur = self.editor.video.duration() or max((c.end for c in self.editor.cues),
                                                           default=0.0)
                 dlg = ApproveDialog(self, cues=len(self.editor.cues),
@@ -352,6 +352,7 @@ class MainWindow(QMainWindow):
                 self._learn_from_approval()
                 self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
             self.render.set_voices(voices)
+            self.render.select_voice(_default_voice(self.job, voices, self.opts))
             self._sync_render_page()
             self.render.set_preview(self.job.source_video, self.editor.cues)  # show VI caption bar in step 3
             self.stack.setCurrentIndex(RENDER)
@@ -919,3 +920,18 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _default_voice(job, voices: list[str], opts: dict) -> str | None:
+    """The dub voice to show first: this project's own pick (render page), the run's
+    option, a voice matching the speaker the AI heard (male reviewer → NamMinh), else
+    the first one."""
+    from app.pipeline import speakers
+
+    from desktop.views.render_view import saved_voice
+
+    for v in (saved_voice(job), opts.get("voice")):
+        if v and v in voices:
+            return v
+    return speakers.voice_for(voices, speakers.speaker_gender(job)) or (voices[0] if voices
+                                                                       else None)

@@ -233,3 +233,29 @@ def observe(job: Job, *, frames: bool = False, log=None) -> str | None:
     if frames and data.get("frames"):
         parts.append(f"Xem khung hình (chỉ bối cảnh và ai xuất hiện): {data['frames']}")
     return "\n".join(parts) or None
+
+
+# voice-name hints → the pitch class of the voice (first match wins: "female" ⊃ "male")
+_VOICE_HINTS = (("hoaimy", "high"), ("namminh", "low"), ("female", "high"), ("male", "low"),
+                ("nữ", "high"), ("nam", "low"))
+
+
+def speaker_gender(job: Job) -> str | None:
+    """'low' / 'high' when the listener heard ONE gender (observed.json), else None."""
+    g = genders(_load(job).get("audio"))
+    return next(iter(g)) if len(g) == 1 else None
+
+
+def voice_for(voices: list[str], gender: str | None) -> str | None:
+    """The first voice whose name says it matches ``gender`` (a male reviewer should not
+    get HoaiMy by default). Pure."""
+    if gender is None:
+        return None
+    for v in voices:
+        low = v.lower()
+        for key, g in _VOICE_HINTS:
+            if key in low:
+                if g == gender:
+                    return v
+                break
+    return None
