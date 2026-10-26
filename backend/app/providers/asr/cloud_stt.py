@@ -88,6 +88,7 @@ class CloudSTT(ASRProvider):
 
         def hear(it):
             resp = self._call(it[0], language)
+            _cloud.record_stt(self.model, resp, it[1][1] - it[1][0])   # E-14 per-job cost
             say(f"  ✓ Đã nhận dạng đoạn {done.next()}/{n}")
             return resp
 

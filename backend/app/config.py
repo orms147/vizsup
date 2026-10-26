@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # a /audio/transcriptions model that returns word timestamps. blank → default
     # (openai/whisper-large-v3 on OpenRouter; Groq's id is "whisper-large-v3").
     stt_timing_model: str = ""
+    # USD per minute of audio for /audio/transcriptions calls, used in usage.json ONLY when
+    # the response carries no ``usage.cost`` (OpenRouter's does; direct vendors may not).
+    # 0.00045 = openai/whisper-large-v3 on OpenRouter, $0.0000075 per second — catalog at
+    # openrouter.ai/api/v1/models, checked 2026-10-26 (a live 60 s call was billed exactly
+    # that). Set STT_PRICE_PER_MIN when STT_* points at another vendor or model.
+    stt_price_per_min: float = 0.00045
 
     # download
     ytdlp_cookies_file: str = ""

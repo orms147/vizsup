@@ -394,6 +394,20 @@ def timing_model() -> str:
     return settings.stt_timing_model.strip() or DEFAULT_TIMING_MODEL
 
 
+def record_stt(model: str, resp, seconds: float) -> None:
+    """E-14: put one /audio/transcriptions call into the job's usage.json — the response's
+    own ``usage.cost`` (OpenRouter: ``usage {seconds, cost}``), else the audio length
+    (``duration``, else the uploaded span) × STT_PRICE_PER_MIN."""
+    from app import usage
+
+    get = (resp.get if isinstance(resp, dict) else lambda k: getattr(resp, k, None))
+    try:
+        seconds = float(get("duration") or seconds)
+    except (TypeError, ValueError):
+        pass
+    usage.record_audio(model, get("usage"), seconds, settings.stt_price_per_min)
+
+
 def _words_of(resp, offset: float) -> list[Word]:
     out: list[Word] = []
     for w in (resp.get("words") if isinstance(resp, dict) else getattr(resp, "words", None)) or []:
@@ -427,7 +441,9 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
                             file=fh, model=model, language=language,
                             response_format="verbose_json",
                             timestamp_granularities=["word", "segment"])
-                return _words_of(with_retry(send), sp[0])
+                resp = with_retry(send)
+                record_stt(model, resp, sp[1] - sp[0])          # E-14 per-job cost
+                return _words_of(resp, sp[0])
 
             pieces = split_on_drop(media, (lo, _hi), path, one_piece, log=log)
             return [w for _sp, words in pieces for w in words]
