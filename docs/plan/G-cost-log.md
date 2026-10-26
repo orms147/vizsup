@@ -39,7 +39,11 @@ The estimate before Start said 8–19 min (fixed in `6d94d46`: now 4–8 min).
 
 ### After the gate
 
-TTS edge-tts: free (717 lines). Render: local (NVENC when available) — no API spend.
+TTS edge-tts: free (717 lines) — but **unreliable in Oct 2026**: during this run Microsoft's
+endpoint answered ~50–75% of requests with "no audio" (rany2/edge-tts #473,
+travisvn/openai-edge-tts #61). Before `2e3b405` that silently dropped 417/717 lines; now the app
+retries with a shared backoff and stops with "đã tạo X/Y câu" after a streak. A 717-line dub
+took several clicks of "Dựng lại". Render: local (NVENC when available) — no API spend.
 
 ## Where the money goes → candidates for the cost pass
 
@@ -49,5 +53,8 @@ TTS edge-tts: free (717 lines). Render: local (NVENC when available) — no API 
 2. **Quality data for that decision:** of 61 AI-review notes, ~22 were wrong because the
    reviewer judged half-sentences (fixed in `6d94d46` — needs a re-measure); of 111 lines the
    bulk shortener touched, 4 lost meaning and 8 broke "các bạn" → keep the human dialog.
-3. Whisper + omni ASR together ≈ $0.017 / 28 min — not worth optimizing.
-4. Cost per video minute (this run): ≈ $0.0105 / min to the gate.
+3. **TTS reliability has a price question:** a paid fallback voice (FPT / Azure / Google are
+   wired but have no keys here) used only for lines edge-tts refuses would make renders
+   finish in one click — measure its per-line cost before proposing it.
+4. Whisper + omni ASR together ≈ $0.017 / 28 min — not worth optimizing.
+5. Cost per video minute (this run): ≈ $0.0105 / min to the gate.
