@@ -933,6 +933,9 @@ def main() -> int:
     app.setStyleSheet(qss())
     # hand cursor on everything clickable + the hover glow ("hover_glow": false in
     # storage/ui_state.json turns the glow off)
+    from desktop.widgets import no_wheel
+
+    no_wheel.install(app)                    # the wheel scrolls; it never changes a setting
     pointer.install(app, glow_enabled=store.load_ui_state().get("hover_glow", True) is not False)
     win = MainWindow()
     win.show()

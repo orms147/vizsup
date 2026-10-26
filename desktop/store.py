@@ -231,9 +231,12 @@ def project_summary(job_id: str) -> dict:
 
             cues = cuemodel.load_pair(job)
             ocr, term = review.load_flag_spans(job)
+            rate = _voice_speed(job)            # same speed as the editor judges at
             issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term,
                                        guess_spans=review.load_guess_spans(job),
-                                       qa_findings=_qa_load(job))
+                                       qa_findings=_qa_load(job), rate=rate,
+                                       late=review.load_late(
+                                           job, rate=f"{int(round((rate - 1) * 100)):+d}%"))
             info["cues"] = len(cues)
             info["pending"] = sum(1 for c, i in zip(cues, issues, strict=False)
                                   if i and not cuemodel.is_reviewed(c))
@@ -246,6 +249,15 @@ def project_summary(job_id: str) -> dict:
 
     info["usage"] = usage.label(d)          # E-14: "AI $0.012 · 2 phút 05"
     return info
+
+
+def _voice_speed(job) -> float:
+    """The dub speed picked on the render page (voice.json), 1.0 when none."""
+    try:
+        r = json.loads((job.work_dir / "voice.json").read_text(encoding="utf-8")).get("rate")
+        return float(r) if r else 1.0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 1.0
 
 
 def debug(msg: str) -> None:
