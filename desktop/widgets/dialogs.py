@@ -98,7 +98,8 @@ class BulkEditDialog(VzDialog):
     changes until "Áp dụng"; ``chosen()`` returns [(row index, text)] of ticked rows."""
 
     def __init__(self, parent, *, title: str, intro: str,
-                 rows: list[tuple[int, str, str, str]], checked: bool = True) -> None:
+                 rows: list[tuple[int, str, str, str]], checked: bool = True,
+                 mark_rest: str = "") -> None:
         from PySide6.QtWidgets import QCheckBox, QLineEdit, QScrollArea
 
         super().__init__(title, parent, width=860)
@@ -147,6 +148,11 @@ class BulkEditDialog(VzDialog):
         scroll.setWidget(inner)
         scroll.setMinimumHeight(min(560, 110 * max(1, len(rows))))
         self.body.addWidget(scroll, 1)
+        # e.g. "the suggestions I didn't take: I looked, they're fine" → Đã xem
+        self.mark_rest = QCheckBox(mark_rest) if mark_rest else None
+        if self.mark_rest is not None:
+            self.mark_rest.setChecked(True)
+            self.body.addWidget(self.mark_rest)
         self.add_button("Hủy")
         self.apply_btn = self.add_button("Áp dụng", icon_name="Check", primary=True, accept=True)
         self._update_count()
@@ -160,6 +166,12 @@ class BulkEditDialog(VzDialog):
         self.count.setText(f"Đã chọn {n} / {len(self._rows)} câu")
         self.apply_btn.setText(f"Áp dụng {n} câu" if n else "Áp dụng")
         self.apply_btn.setEnabled(n > 0)
+
+    def unticked(self) -> list[int]:
+        """Rows left unticked — only when the "mark the rest" box is on."""
+        if self.mark_rest is None or not self.mark_rest.isChecked():
+            return []
+        return [i for i, t, _e in self._rows if not t.isChecked()]
 
     def chosen(self) -> list[tuple[int, str]]:
         return [(i, e.text().strip()) for i, t, e in self._rows

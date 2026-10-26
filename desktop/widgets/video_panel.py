@@ -107,6 +107,7 @@ class VideoPanel(QFrame):
             self._player.durationChanged.connect(self._on_dur)
             self._player.errorOccurred.connect(self._on_media_error)
             self._player.playbackStateChanged.connect(self._on_state)
+            self._player.mediaStatusChanged.connect(self._on_status)
         else:
             self._player = None
             self._audio = None
@@ -273,6 +274,13 @@ class VideoPanel(QFrame):
         if max(nw, nh) > 960:
             img = img.scaled(960, 960, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self._canvas.set_frame(img, nw, nh)
+
+    def _on_status(self, status) -> None:
+        """A freshly loaded video shows its first frame, not a black "…" until Play:
+        pausing a stopped player makes the backend decode and deliver frame 0."""
+        if (status == QMediaPlayer.MediaStatus.LoadedMedia
+                and self._player.playbackState() == QMediaPlayer.PlaybackState.StoppedState):
+            self._player.pause()
 
     def _on_media_error(self, _error, msg: str = "") -> None:
         self._placeholder.setText("Không phát được video (tệp hỏng).")

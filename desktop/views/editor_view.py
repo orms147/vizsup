@@ -213,6 +213,7 @@ class EditorView(QWidget):
         cl.retimeRequested.connect(self._retime)
         cl.bulkShortenRequested.connect(self._bulk_shorten)
         cl.aiSuggestionsRequested.connect(self._ai_suggestions)
+        cl.tidyRequested.connect(self._tidy_timing)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -609,19 +610,40 @@ class EditorView(QWidget):
         dlg = BulkEditDialog(self, title=f"{len(rows)} gợi ý của AI soát",
                              intro="AI có thể sai (nhất là khi câu bị cắt giữa chừng) — đọc "
                                    "câu gốc rồi chọn những gợi ý bạn đồng ý.",
-                             rows=rows, checked=False)
+                             rows=rows, checked=False,
+                             mark_rest="Đánh dấu “Đã xem” các câu không chọn (mình đã đọc, giữ nguyên)")
         if dlg.exec():
-            self._apply_bulk(dlg.chosen(), "Đã dùng gợi ý AI cho")
+            self._apply_bulk(dlg.chosen(), "Đã dùng gợi ý AI cho", reviewed=dlg.unticked())
 
-    def _apply_bulk(self, chosen: list[tuple[int, str]], verb: str) -> None:
+    def _apply_bulk(self, chosen: list[tuple[int, str]], verb: str, *,
+                    reviewed: list[int] = ()) -> None:
         chosen = [(i, t) for i, t in chosen if 0 <= i < len(self.cues) and self.cues[i].vi != t]
-        if not chosen:
+        reviewed = [i for i in reviewed if 0 <= i < len(self.cues)]
+        if not chosen and not reviewed:
             return
         self._snapshot()
         for i, t in chosen:
             self.cues[i].vi = t
+        for i in reviewed:
+            cuemodel.mark_reviewed(self.cues[i])
         self._reload()
-        self.message.emit(f"{verb} {len(chosen)} câu — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+        tail = f" · {len(reviewed)} câu giữ nguyên đã đánh dấu Đã xem" if reviewed else ""
+        self.message.emit(f"{verb} {len(chosen)} câu{tail} — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+
+    def _tidy_timing(self) -> None:
+        """Lines too short to read (ASR fragments) join their neighbour; overlaps get a
+        shared edge. One undo step; policy in cuemodel.tidy_timing (pure, tested)."""
+        from app.pipeline.review import MIN_SECONDS
+
+        new, merged, fixed = cuemodel.tidy_timing(self.cues, min_len=MIN_SECONDS)
+        if not merged and not fixed:
+            self.message.emit("Không có câu quá ngắn hay chồng lấn nào gộp được.", "ok")
+            return
+        self._snapshot()
+        self.cues = new
+        self._reload()
+        self.message.emit(f"Đã gộp {merged} câu quá ngắn vào câu bên cạnh · gỡ {fixed} chỗ "
+                          f"chồng lấn — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
 
     def _issues_at(self, i: int) -> list[str]:
         return self.issues[i] if 0 <= i < len(self.issues) else []
@@ -1252,7 +1274,8 @@ class EditorView(QWidget):
 
     def _update_project(self) -> None:
         m = self._meta
-        parts = [{"douyin": "Douyin", "bilibili": "Bilibili"}.get(m["platform"], m["platform"] or "")]
+        parts = [{"douyin": "Douyin", "bilibili": "Bilibili", "local": "Tệp trên máy"}
+                 .get(m["platform"], m["platform"] or "")]
         if m["dur"]:
             parts.append(fmt_time(m["dur"], 0))
         if m["dims"][0]:
@@ -1568,9 +1591,10 @@ def _job_field(job, key: str):
 
 def _job_title(job) -> str:
     """Douyin titles are the whole post caption — keep the part before the hashtags."""
-    src = (_job_field(job, "opts") or {}).get("file")       # a local file: its name
-    raw = (job.metadata.get("title") or _job_field(job, "title")
-           or (Path(src).stem if src else "") or job.id).strip()
+    raw = (job.metadata.get("title") or _job_field(job, "title") or "").strip()
+    if not raw or raw == job.id:                  # job.json stores the id as a stand-in
+        src = (_job_field(job, "opts") or {}).get("file")   # a local file: its name
+        raw = Path(src).stem if src else job.id
     head = raw.split("#", 1)[0].strip()
     return head or raw
 

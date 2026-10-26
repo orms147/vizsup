@@ -249,6 +249,62 @@ def merge_cues(a: EditorCue, b: EditorCue) -> EditorCue:
     )
 
 
+_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！")
+
+
+def tidy_timing(cues: list[EditorCue], *, min_len: float = 0.8, max_gap: float = 0.5,
+                max_len: float = 7.0, max_chars: int = 90) -> tuple[list[EditorCue], int, int]:
+    """"Gộp câu quá ngắn & gỡ chồng lấn": overlapping neighbours get a shared edge,
+    then every line shorter than ``min_len`` (the "Timing quá ngắn" flag — an ASR
+    fragment that flashes by) joins the neighbour it belongs to: the next line when it
+    ends mid-sentence, else the previous one — only across a gap ≤ ``max_gap`` and while
+    the result stays ≤ ``max_len`` s / ``max_chars`` characters. Locked lines are never
+    touched. Returns (new list, lines merged away, overlaps fixed). Pure."""
+    out = [copy_cue(c) for c in cues]
+    fixed = 0
+    for i in range(1, len(out)):
+        a, b = out[i - 1], out[i]
+        if b.start < a.end - 0.01 and not (a.locked and b.locked):
+            if not a.locked and b.start - a.start >= MIN_CUE:
+                a.end = b.start
+            elif not b.locked and b.end - a.end >= MIN_CUE:
+                b.start = a.end
+            else:
+                continue
+            fixed += 1
+
+    def joinable(a: EditorCue, b: EditorCue) -> bool:
+        return (not a.locked and not b.locked and b.start - a.end <= max_gap
+                and b.end - a.start <= max_len and len(a.vi) + len(b.vi) + 1 <= max_chars)
+
+    merged = 0
+    i = 0
+    while i < len(out):
+        c = out[i]
+        if c.locked or c.end - c.start >= min_len:
+            i += 1
+            continue
+        nxt = out[i + 1] if i + 1 < len(out) else None
+        prv = out[i - 1] if i > 0 else None
+        mid_sentence = not c.vi.rstrip().endswith(_SENTENCE_END)
+        order = [("next", nxt), ("prev", prv)] if mid_sentence else [("prev", prv), ("next", nxt)]
+        for side, other in order:
+            if other is None:
+                continue
+            if side == "next" and joinable(c, other):
+                out[i:i + 2] = [merge_cues(c, other)]
+                merged += 1
+                break
+            if side == "prev" and joinable(other, c):
+                out[i - 1:i + 1] = [merge_cues(other, c)]
+                merged += 1
+                i -= 1
+                break
+        else:
+            i += 1
+    return out, merged, fixed
+
+
 # --- pure find / replace over the VI column (UX-4) ---------------------------
 # Kept here, Qt-free, so the search semantics are headless-testable; the editor's
 # find bar is a thin wrapper. Only the VI text is searched — the zh column is a

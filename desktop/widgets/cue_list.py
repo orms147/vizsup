@@ -214,6 +214,7 @@ class CueList(QFrame):
     retimeRequested = Signal()
     bulkShortenRequested = Signal()
     aiSuggestionsRequested = Signal()
+    tidyRequested = Signal()
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
@@ -346,6 +347,7 @@ class CueList(QFrame):
         m.addSeparator()
         m.addAction("Rút gọn hàng loạt các câu đọc không kịp…", self.bulkShortenRequested.emit)
         m.addAction("Xem tất cả gợi ý của AI soát…", self.aiSuggestionsRequested.emit)
+        m.addAction("Gộp câu quá ngắn & gỡ chồng lấn", self.tidyRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

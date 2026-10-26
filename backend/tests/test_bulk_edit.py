@@ -133,7 +133,7 @@ def test_ai_suggestions_lists_open_findings(view, monkeypatch):
     seen = {}
 
     class Dlg:
-        def __init__(self, parent, *, title, intro, rows, checked):
+        def __init__(self, parent, *, title, intro, rows, checked, mark_rest=""):
             seen.update(rows=rows, checked=checked)
 
         def exec(self):
@@ -174,3 +174,59 @@ def test_standard_buttons_are_vietnamese(qapp):
         assert sorted(b.text() for b in bb.buttons()) == ["Hủy", "Lưu"]
     finally:
         qapp.removeTranslator(t)
+
+
+# --- "Gộp câu quá ngắn & gỡ chồng lấn" (pure) ----------------------------------------
+
+def _c(a, b, vi, **kw):
+    return EditorCue(start=a, end=b, vi=vi, zh="", **kw)
+
+
+def test_tidy_merges_a_mid_sentence_fragment_forward():
+    from desktop.cuemodel import tidy_timing
+
+    out, merged, fixed = tidy_timing([_c(0, 2, "Câu đầu."), _c(2.1, 2.5, "iPhone Air,"),
+                                      _c(2.6, 5, "rất mỏng.")])
+    assert (merged, fixed) == (1, 0)
+    assert [c.vi for c in out] == ["Câu đầu.", "iPhone Air, rất mỏng."]
+    assert (out[1].start, out[1].end) == (2.1, 5)
+
+
+def test_tidy_merges_a_sentence_tail_backward_and_respects_limits():
+    from desktop.cuemodel import tidy_timing
+
+    out, merged, _ = tidy_timing([_c(0, 2, "Nhưng mà"), _c(2.1, 2.4, "thôi."), _c(4, 6, "Sau.")])
+    assert [c.vi for c in out] == ["Nhưng mà thôi.", "Sau."]
+    # too far from both neighbours / a locked neighbour → left alone
+    out, merged, _ = tidy_timing([_c(0, 2, "A,", locked=True), _c(2.1, 2.4, "b,"),
+                                  _c(4, 6, "C.")])
+    assert merged == 0 and len(out) == 3
+
+
+def test_tidy_fixes_overlaps_without_touching_locked_lines():
+    from desktop.cuemodel import tidy_timing
+
+    cues = [_c(0, 3, "Một."), _c(2.5, 5, "Hai.")]
+    out, merged, fixed = tidy_timing(cues)
+    assert fixed == 1 and out[0].end == 2.5 and out[1].start == 2.5
+    assert cues[0].end == 3                       # pure: the input is untouched
+    out, _m, fixed = tidy_timing([_c(0, 3, "Một.", locked=True), _c(2.5, 5, "Hai.")])
+    assert fixed == 1 and out[0].end == 3 and out[1].start == 3
+
+
+def test_ai_dialog_marks_the_unticked_rows_reviewed(view):
+    from desktop import cuemodel
+
+    view._apply_bulk([(0, "ngắn")], "x", reviewed=[2])
+    assert cuemodel.is_reviewed(view.cues[2]) and view.cues[0].vi == "ngắn"
+    view.undo_btn.click()
+    assert not cuemodel.is_reviewed(view.cues[2])
+
+
+def test_mark_rest_lists_only_unticked_rows(qapp):
+    dlg = BulkEditDialog(None, title="t", intro="i", rows=[(0, "a", "b", ""), (3, "c", "d", "")],
+                         checked=False, mark_rest="đánh dấu")
+    dlg._rows[0][1].setChecked(True)
+    assert dlg.unticked() == [3]
+    dlg.mark_rest.setChecked(False)
+    assert dlg.unticked() == []
