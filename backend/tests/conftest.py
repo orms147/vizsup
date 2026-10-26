@@ -1,7 +1,20 @@
 """Suite-wide guards."""
 from __future__ import annotations
 
+import tempfile
+
 import pytest
+
+
+def pytest_configure(config):
+    """Baseline for the whole session: storage is a temp dir even OUTSIDE a test — Qt
+    windows closed at teardown (after the per-test monkeypatch is undone) used to write
+    "closeEvent" lines into the user's real storage/vizsup-debug.log."""
+    try:
+        from app.config import settings
+    except Exception:  # noqa: BLE001
+        return
+    settings.vizsup_storage_dir = tempfile.mkdtemp(prefix="vizsup-test-storage-")
 
 def pytest_sessionfinish(session, exitstatus):
     """Stop and delete every live Qt media object while the QApplication still exists.

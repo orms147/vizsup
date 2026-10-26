@@ -19,6 +19,7 @@ approach, invariants that must not break, and headless verification.
 | `C-workflow-ux.md` | Mostly shipped (UX-2…UX-5; v2 UI 2026-10). UX-1 → folded into E-9; UX-7 still open. **UX-6 is PARKED — read its note before touching the API** | reference |
 | `E-roadmap.md` | Workstream (2026-10-13, done): model-per-role on OpenRouter (benchmark table), ASR timing bug (E-1), OCR overlay filter, translation QA / xưng hô / songs, everyday UX | done |
 | `F-roadmap.md` | **Next (2026-10-14)**: research-backed directions — viewers, creators & competing tools, platform/legal rules (credit, AI-voice label, commentary track, cost estimate, reading-speed check…) | **do next** |
+| `G-cost-log.md` | **Measured cost per real run** (2026-10-26: 27:42 video ≈ $0.29, refine ≈86%) — input for the cost pass the user asked for after the UX fixes | **next after UX** |
 | `D-backlog.md` | Parked ideas — do not start without the user asking | never by default |
 
 History: `docs/dev-plan.md` is the previous plan (v2) with DONE annotations for milestones M5–M8;
