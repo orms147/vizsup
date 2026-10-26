@@ -5,8 +5,9 @@ key caps, badges). Specs: appdesign/v2/design.css (.app-nav, .statusbar, .btn, k
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QStyle, QStyleOptionComboBox, QStylePainter
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -137,7 +138,29 @@ def compact_combo(combo: QComboBox, chars: int = 12) -> QComboBox:
     narrow panel wider than its scroll area — that cut the panel off at the right."""
     combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
     combo.setMinimumContentsLength(chars)
+    combo.installEventFilter(_ELIDE)
     return combo
+
+
+class _ElideCombo(QObject):
+    """Paint a combo's current text elided ("OpenRouter — 1 key · nháp…") instead of
+    Qt's hard clip mid-letter. Editable combos keep their line edit."""
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802 - Qt API
+        if ev.type() != QEvent.Paint or not isinstance(obj, QComboBox) or obj.isEditable():
+            return False
+        p = QStylePainter(obj)
+        opt = QStyleOptionComboBox()
+        obj.initStyleOption(opt)
+        p.drawComplexControl(QStyle.CC_ComboBox, opt)
+        r = obj.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, obj)
+        opt.currentText = obj.fontMetrics().elidedText(opt.currentText, Qt.ElideRight,
+                                                       max(0, r.width() - 4))
+        p.drawControl(QStyle.CE_ComboBoxLabel, opt)
+        return True
+
+
+_ELIDE = _ElideCombo()
 
 
 def breakpoint_for(width: int, points: tuple[tuple[str, int], ...]) -> str:

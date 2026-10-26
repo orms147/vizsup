@@ -1568,7 +1568,9 @@ def _job_field(job, key: str):
 
 def _job_title(job) -> str:
     """Douyin titles are the whole post caption — keep the part before the hashtags."""
-    raw = (job.metadata.get("title") or _job_field(job, "title") or job.id).strip()
+    src = (_job_field(job, "opts") or {}).get("file")       # a local file: its name
+    raw = (job.metadata.get("title") or _job_field(job, "title")
+           or (Path(src).stem if src else "") or job.id).strip()
     head = raw.split("#", 1)[0].strip()
     return head or raw
 

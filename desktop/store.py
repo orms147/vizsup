@@ -107,8 +107,13 @@ def list_jobs(limit: int = 8) -> list[dict]:
         try:
             meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
             info["group"] = meta.get("group") if isinstance(meta, dict) else None
+            if info["title"] == d.name and isinstance(meta, dict) and meta.get("title"):
+                info["title"] = meta["title"]      # job.json is written before the download
         except (OSError, ValueError):
             pass
+        src = (info["opts"] or {}).get("file")
+        if info["title"] == d.name and src:
+            info["title"] = Path(src).stem         # a local file: its name, not the job id
         out.append(info)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
