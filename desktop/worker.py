@@ -196,7 +196,7 @@ class PipelineWorker(QObject):
             else:
                 self.progress.emit(0.1, "Đang tải video…")
                 self.log.emit(f"$ yt-dlp {download.normalize_url(job.url)}")
-                download.download(job)
+                download.download(job, log=self.log.emit)
                 self.log.emit(f"✓ Tải xong: {job.metadata.get('title')!r}")
 
             store.debug("source ready (video on disk)")

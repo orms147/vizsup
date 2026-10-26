@@ -1027,11 +1027,13 @@ class InputView(QWidget):
 def _host(src: str) -> str:
     if not src:
         return ""
+    if Path(src).exists():                  # a local douyin_123.mp4 is still a local file
+        return "Tệp trên máy"
     if "douyin" in src:
         return "Douyin"
     if "bilibili" in src or "b23.tv" in src:
         return "Bilibili"
-    return "Tệp trên máy" if Path(src).exists() else src[:60]
+    return src[:60]
 
 
 def _clear_layout(lay) -> None:

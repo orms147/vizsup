@@ -1,11 +1,18 @@
 """Stage: download. yt-dlp (Python API), domain-routed, cookie-aware.
 
-Scope (v1): Douyin + Bilibili. Douyin is cookie-fragile and breaks even with
-fresh cookies (extractor-side) — supply cookies and expect occasional failures;
-fallbacks (BBDown / TikTokDownloader) are a later addition.
+Scope (v1): Douyin + Bilibili. Fallbacks: BBDown for Bilibili (when configured) and,
+for Douyin, an embedded browser (app/douyin_capture.py): since Oct 2026 Douyin answers
+yt-dlp's unsigned ``aweme/detail`` call with HTTP 403 whatever the cookies, so the page is
+opened in QtWebEngine, which runs Douyin's own signing code, and the media URLs it plays
+are fetched with ffmpeg.
 """
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+import sys
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -114,16 +121,23 @@ def _bbdown(job: Job, url: str) -> Job:
     return job
 
 
-def download(job: Job) -> Job:
+def download(job: Job, *, log=None) -> Job:
     """Download ``job.url`` into ``job.source_video``. yt-dlp is the baseline;
-    Bilibili gets a BBDown fallback when configured (Douyin's fallback tool churns
-    too fast to wire blind — still yt-dlp-only)."""
+    Bilibili gets a BBDown fallback when configured, Douyin the embedded browser."""
     if not job.url:
         raise ValueError("Job has no URL to download.")
     url = normalize_url(job.url)
     try:
         return _ytdlp(job, url)
     except Exception as exc:
+        if platform_of(job.url) == "douyin" and web_available():
+            if log:
+                log("yt-dlp bị Douyin chặn — tải qua trình duyệt nhúng…")
+            try:
+                return _douyin_web(job, url)
+            except Exception as exc2:  # noqa: BLE001 - report BOTH failures
+                raise RuntimeError(f"yt-dlp thất bại ({exc}) và trình duyệt nhúng cũng không "
+                                   f"tải được ({exc2}).") from exc2
         if platform_of(job.url) == "bilibili" and settings.bbdown_path:
             try:
                 return _bbdown(job, url)
@@ -207,6 +221,13 @@ def probe(url: str) -> dict:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as exc:  # noqa: BLE001
+        if platform_of(url) == "douyin" and web_available():
+            data = _capture(douyin_id(url) or "")       # the page itself knows the title
+            dur = data.get("duration") or _streams_of(data["urls"][0],
+                                                      data.get("user_agent") or "")["duration"]
+            return {"title": data.get("title"), "duration": dur or None,
+                    "uploader": data.get("uploader"), "platform": "douyin",
+                    "webpage_url": url, "video_id": douyin_id(url)}
         friendly = _cookie_error(exc)
         if friendly is not None:
             raise friendly from exc
@@ -214,3 +235,136 @@ def probe(url: str) -> dict:
     return {"title": info.get("title"), "duration": info.get("duration"),
             "uploader": info.get("uploader"), "platform": platform_of(url),
             **_source_fields(info, url)}
+
+
+# --- Douyin through the embedded browser ---------------------------------------------------
+_REFERER = "https://www.douyin.com/"
+CAPTURE_FRESH_S = 600      # signed media URLs stay valid for a while; reuse a recent capture
+
+
+def douyin_id(url: str) -> str | None:
+    """The numeric video id of a Douyin link (/video/<id>, ?modal_id=<id>, or a v.douyin.com
+    short link, followed to its target). None when there is none."""
+    url = normalize_url(url)
+    m = re.search(r"/(?:video|note)/(\d{8,})", url)
+    if m:
+        return m.group(1)
+    if "v.douyin.com" in url or "iesdouyin.com" in url:
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                final = r.geturl()
+        except Exception:  # noqa: BLE001
+            return None
+        m = re.search(r"/(?:video|note)/(\d{8,})", final)
+        return m.group(1) if m else None
+    return None
+
+
+def web_available() -> bool:
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("PySide6.QtWebEngineCore") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _browser_dir() -> Path:
+    d = Path(settings.vizsup_storage_dir) / "_browser" / "douyin"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _capture(video_id: str) -> dict:
+    """Run app.douyin_capture in its own process (QtWebEngine needs the main thread) and
+    return what the page played: {urls, user_agent, title, uploader, duration}."""
+    if not video_id:
+        raise RuntimeError("Không đọc được mã video trong link Douyin.")
+    d = _browser_dir()
+    out = d / f"{video_id}.json"
+    if out.exists() and time.time() - out.stat().st_mtime < CAPTURE_FRESH_S:
+        data = json.loads(out.read_text(encoding="utf-8"))
+        if data.get("urls"):
+            return data
+    r = subprocess.run([sys.executable, "-m", "app.douyin_capture", video_id, str(out),
+                        str(d / "profile")], capture_output=True, text=True, timeout=150,
+                       encoding="utf-8", errors="replace")
+    if not out.exists():
+        raise RuntimeError(f"Trình duyệt nhúng không chạy được (mã {r.returncode}).")
+    data = json.loads(out.read_text(encoding="utf-8"))
+    if not data.get("urls"):
+        raise RuntimeError("Trang Douyin không phát video trong trình duyệt nhúng (video bị "
+                           "xóa / riêng tư, hoặc Douyin đòi xác minh).")
+    return data
+
+
+def _http_args(ua: str) -> list[str]:
+    return ["-user_agent", ua, "-headers", f"Referer: {_REFERER}\r\n"]
+
+
+def _streams_of(url: str, ua: str) -> dict:
+    """{'video': height or 0, 'audio': bool, 'duration': s} of one media URL (ffprobe, HTTP)."""
+    from app.ffmpegutil import ffprobe_bin
+
+    r = subprocess.run([ffprobe_bin(), "-v", "error", *_http_args(ua), "-show_entries",
+                        "stream=codec_type,height:format=duration", "-of", "json", url],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        doc = json.loads(r.stdout or "{}")
+    except ValueError:
+        doc = {}
+    streams = doc.get("streams") or []
+    return {"video": max((int(s.get("height") or 0) for s in streams
+                          if s.get("codec_type") == "video"), default=0),
+            "audio": any(s.get("codec_type") == "audio" for s in streams),
+            "duration": float((doc.get("format") or {}).get("duration") or 0)}
+
+
+def pick_streams(info: dict[str, dict]) -> tuple[str, str | None] | None:
+    """(video url, separate audio url or None): the sharpest file that has both, unless a
+    video-only stream is sharper and an audio-only one exists to go with it. Pure."""
+    both = [(v["video"], u) for u, v in info.items() if v["video"] and v["audio"]]
+    vonly = [(v["video"], u) for u, v in info.items() if v["video"] and not v["audio"]]
+    aonly = [u for u, v in info.items() if v["audio"] and not v["video"]]
+    best_both = max(both, default=None)
+    best_v = max(vonly, default=None)
+    if best_v and aonly and (not best_both or best_v[0] > best_both[0]):
+        return best_v[1], aonly[0]
+    if best_both:
+        return best_both[1], None
+    return (best_v[1], None) if best_v else None
+
+
+def _douyin_web(job: Job, url: str) -> Job:
+    from app.ffmpegutil import ffmpeg_bin
+
+    vid = douyin_id(url)
+    data = _capture(vid or "")
+    ua = data.get("user_agent") or "Mozilla/5.0"
+    info = {u: _streams_of(u, ua) for u in data["urls"]}
+    pick = pick_streams(info)
+    if pick is None:
+        raise RuntimeError("Không tìm thấy luồng video trong các yêu cầu của trang.")
+    video, audio = pick
+    cmd = [ffmpeg_bin(), "-y", "-v", "error", *_http_args(ua), "-i", video]
+    if audio:
+        cmd += [*_http_args(ua), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
+    cmd += ["-c", "copy", "-movflags", "+faststart", str(job.source_video)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if r.returncode != 0 or not job.source_video.exists():
+        tail = (r.stderr or "").strip().splitlines()[-1:] or ["ffmpeg lỗi"]
+        raise RuntimeError(f"Tải luồng video thất bại: {tail[0]}")
+    job.metadata = {
+        "title": data.get("title") or f"Douyin {vid}",
+        "duration": data.get("duration") or max(v.get("duration", 0) for v in info.values()) or None,
+        "uploader": data.get("uploader") or None,
+        "platform": "douyin",
+        "downloaded_file": job.source_video.name,
+        "downloader": "browser",
+        "webpage_url": url,
+        "video_id": vid,
+    }
+    return job

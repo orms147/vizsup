@@ -1,4 +1,4 @@
-"""Download stage: URL normalization, platform routing, and the BBDown fallback.
+"""Download stage: URL normalization, platform routing, the BBDown / browser fallbacks.
 
 `download.py` had zero tests. The risky parts are all pure or thin: the Douyin
 feed-URL rewrite (yt-dlp rejects the modal form), which platform a URL maps to,
@@ -7,6 +7,8 @@ of hiding the first. No network and no yt-dlp import here — `_ytdlp`/`_bbdown`
 are patched at the seam.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -134,18 +136,134 @@ def test_bilibili_falls_back_to_bbdown_when_configured(tmp_path, monkeypatch):
     assert calls == ["ytdlp", "bbdown"]
 
 
-def test_douyin_has_no_fallback_and_reraises(tmp_path, monkeypatch):
-    """Douyin's fallback tool churns too fast to wire blind — yt-dlp only."""
+def test_douyin_without_the_browser_reraises(tmp_path, monkeypatch):
+    """No QtWebEngine -> nothing to fall back to; BBDown is Bilibili-only."""
     def boom(job, url):
         raise RuntimeError("douyin needs fresh cookies")
 
     monkeypatch.setattr(download, "_ytdlp", boom)
+    monkeypatch.setattr(download, "web_available", lambda: False)
     monkeypatch.setattr(download, "_bbdown", lambda job, url: pytest.fail("must not be called"))
     monkeypatch.setattr(download.settings, "bbdown_path", "C:/tools/BBDown.exe")
 
     job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/123")
     with pytest.raises(RuntimeError, match="fresh cookies"):
         download.download(job)
+
+
+def test_douyin_falls_back_to_the_embedded_browser(tmp_path, monkeypatch):
+    """Oct 2026: Douyin 403s yt-dlp's unsigned API call whatever the cookies."""
+    def boom(job, url):
+        raise RuntimeError("Fresh cookies (not necessarily logged in) are needed")
+
+    seen, logs = {}, []
+
+    def fake_web(job, url):
+        seen["url"] = url
+        job.metadata = {"downloader": "browser"}
+        return job
+
+    monkeypatch.setattr(download, "_ytdlp", boom)
+    monkeypatch.setattr(download, "web_available", lambda: True)
+    monkeypatch.setattr(download, "_douyin_web", fake_web)
+    job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/jingxuan?modal_id=7699")
+    assert download.download(job, log=logs.append).metadata["downloader"] == "browser"
+    assert seen["url"] == "https://www.douyin.com/video/7699"
+    assert logs and "trình duyệt" in logs[0]
+
+
+def test_douyin_both_paths_failing_reports_both(tmp_path, monkeypatch):
+    def boom(job, url):
+        raise RuntimeError("yt-dlp 403")
+
+    def boom2(job, url):
+        raise RuntimeError("captcha")
+
+    monkeypatch.setattr(download, "_ytdlp", boom)
+    monkeypatch.setattr(download, "web_available", lambda: True)
+    monkeypatch.setattr(download, "_douyin_web", boom2)
+    job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/1")
+    with pytest.raises(RuntimeError) as exc:
+        download.download(job)
+    assert "yt-dlp 403" in str(exc.value) and "captcha" in str(exc.value)
+
+
+@pytest.mark.parametrize("url, vid", [
+    ("https://www.douyin.com/jingxuan?modal_id=7699070929850207498", "7699070929850207498"),
+    ("https://www.douyin.com/video/7699070929850207498?previous_page=x", "7699070929850207498"),
+    ("https://www.douyin.com/note/7412345678901234567", "7412345678901234567"),
+    ("https://www.douyin.com/jingxuan", None),
+])
+def test_douyin_id(url, vid):
+    assert download.douyin_id(url) == vid
+
+
+def test_pick_streams_prefers_the_sharpest_file_with_sound():
+    info = {"v576": {"video": 576, "audio": False}, "a": {"video": 0, "audio": True},
+            "both1080": {"video": 1080, "audio": True}, "both720": {"video": 720, "audio": True}}
+    assert download.pick_streams(info) == ("both1080", None)
+
+
+def test_pick_streams_pairs_a_sharper_video_only_stream_with_the_audio():
+    info = {"v1080": {"video": 1080, "audio": False}, "a": {"video": 0, "audio": True},
+            "both540": {"video": 540, "audio": True}}
+    assert download.pick_streams(info) == ("v1080", "a")
+
+
+def test_pick_streams_video_only_without_audio_and_nothing():
+    assert download.pick_streams({"v": {"video": 720, "audio": False}}) == ("v", None)
+    assert download.pick_streams({"a": {"video": 0, "audio": True}}) is None
+    assert download.pick_streams({}) is None
+
+
+def test_douyin_web_downloads_the_picked_streams(tmp_path, monkeypatch):
+    """The capture -> probe -> ffmpeg chain, with every process faked."""
+    monkeypatch.setattr(download, "_capture", lambda vid: {
+        "urls": ["https://x.zjcdn.com/v", "https://x.zjcdn.com/a"], "user_agent": "UA/1",
+        "title": "标题", "uploader": "作者", "duration": 12.5})
+    monkeypatch.setattr(download, "_streams_of", lambda u, ua: (
+        {"video": 1080, "audio": False} if u.endswith("/v") else {"video": 0, "audio": True}))
+    cmds = []
+
+    class R:
+        returncode, stderr = 0, ""
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        Path(cmd[-1]).write_bytes(b"mp4")
+        return R()
+
+    monkeypatch.setattr(download.subprocess, "run", fake_run)
+    job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/76990000001")
+    download._douyin_web(job, "https://www.douyin.com/video/76990000001")
+    cmd = cmds[0]
+    assert cmd.count("-i") == 2 and "https://x.zjcdn.com/a" in cmd
+    assert "UA/1" in cmd and any("Referer: https://www.douyin.com/" in c for c in cmd)
+    assert job.source_video.read_bytes() == b"mp4"
+    assert job.metadata["title"] == "标题" and job.metadata["video_id"] == "76990000001"
+    assert job.metadata["platform"] == "douyin" and job.metadata["duration"] == 12.5
+
+
+def test_capture_reuses_a_fresh_capture_and_reports_an_empty_page(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(download, "_browser_dir", lambda: tmp_path)
+    (tmp_path / "1.json").write_text(json.dumps({"urls": ["u"]}), encoding="utf-8")
+    monkeypatch.setattr(download.subprocess, "run", lambda *a, **k: pytest.fail("no browser"))
+    assert download._capture("1")["urls"] == ["u"]
+
+    def empty_page(cmd, **kw):
+        Path(cmd[4]).write_text(json.dumps({"urls": []}), encoding="utf-8")
+
+        class R:
+            returncode = 2
+        return R()
+
+    monkeypatch.setattr(download.subprocess, "run", empty_page)
+    with pytest.raises(RuntimeError, match="không phát video"):
+        download._capture("2")
+    with pytest.raises(RuntimeError, match="mã video"):
+        download._capture("")
 
 
 def test_bilibili_without_bbdown_configured_reraises_ytdlp(tmp_path, monkeypatch):
