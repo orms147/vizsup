@@ -440,7 +440,10 @@ class PipelineWorker(QObject):
                 self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
                 segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
                                           rate=o.get("rate"), log=self.log.emit,
-                                          cancel=lambda: self._cancel)  # per-cue cancel (N-10)
+                                          cancel=lambda: self._cancel,  # per-cue cancel (N-10)
+                                          progress=lambda d, n: self.progress.emit(
+                                              0.2 + 0.3 * d / max(1, n),
+                                              f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu"))
                 self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
 
             # F-4: the user's own commentary — a voice other than the dub's, or their recording

@@ -147,3 +147,16 @@ def test_unvoiceable_line_skipped_in_batch(job, monkeypatch):
     assert [c.index for c, _ in segs] == [1, 3]           # line 2 skipped, no raise
     assert any("không phát âm được" in m for m in logs)
     assert "2" not in json.loads(_mpath(job).read_text(encoding="utf-8"))
+
+
+def test_progress_counts_cache_hits_then_each_line(job, monkeypatch):
+    """A 717-line dub takes minutes; the render page shows "d/n câu" instead of a bar
+    frozen at one value."""
+    _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[("1", None), ("2", None), ("3", None)]))
+    synthesize(job, provider="fake")
+    seen = []
+    # second run: line 2 changed → 2 cache hits, one new line
+    job.vi_srt.write_text(VI.replace("câu hai", "câu hai mới"), encoding="utf-8")
+    _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[("2", None)]))
+    synthesize(job, provider="fake", progress=lambda d, n: seen.append((d, n)))
+    assert seen == [(2, 3), (3, 3)]

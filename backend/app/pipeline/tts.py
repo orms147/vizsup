@@ -99,8 +99,11 @@ def synthesize(
     rate: str | None = None,
     log: Callable[[str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    progress: Callable[[int, int], None] | None = None,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[tuple[Cue, Path]]:
+    """``progress(done, total)``: lines ready so far (cache hits included) — a 717-line
+    dub takes ~13 min, a bar frozen at one value looked like a hang."""
     tts = get_tts(provider)
     if not tts.available():
         raise RuntimeError(f"TTS provider '{provider}' is not available (missing key or dependency).")
@@ -113,7 +116,8 @@ def synthesize(
     # event loop with bounded concurrency; others keep the per-cue path below.
     if getattr(tts, "supports_batch", False):
         return _synthesize_batch(job, tts, cues, ov, manifest, provider=provider,
-                                 voice=voice, rate=rate, log=log, cancel=cancel)
+                                 voice=voice, rate=rate, log=log, cancel=cancel,
+                                 progress=progress)
 
     segments: list[tuple[Cue, Path]] = []
     kept = made = 0
@@ -143,6 +147,8 @@ def synthesize(
             _save_manifest(job, manifest)   # write-after-each: a crash keeps progress
             made += 1
         segments.append((c, seg))
+        if progress:
+            progress(i + 1, len(cues))
     _save_manifest(job, manifest)           # persists mute-drops even when made == 0
     if log and kept:
         log(f"↷ Giữ lại {kept} câu đã tạo trước đó, tạo mới {made} câu")
@@ -153,6 +159,7 @@ def _synthesize_batch(
     job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, *,
     provider: str, voice: str | None, rate: str | None,
     log: Callable[[str], None] | None, cancel: Callable[[], bool] | None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> list[tuple[Cue, Path]]:
     """API-10 batch path. Phase A: a sequential scan makes the SAME per-cue decision
     as the fallback (muted/empty → drop cache; cache hit → keep; else → to-do), with
@@ -179,6 +186,8 @@ def _synthesize_batch(
         else:
             todo.append((key, c.text, seg))
 
+    if progress:
+        progress(kept, kept + len(todo))     # cache hits count as done right away
     # Phase B — one batch. on_done runs on the loop thread (serialized).
     made = 0
     fatal: Exception | None = None
@@ -189,6 +198,8 @@ def _synthesize_batch(
             manifest[key] = want_of[key]
             _save_manifest(job, manifest)    # write-after-each: a crash keeps progress
             made += 1
+            if progress:
+                progress(kept + made, kept + len(todo))
         elif _unvoiceable(exc):
             manifest.pop(key, None)
             if log:
