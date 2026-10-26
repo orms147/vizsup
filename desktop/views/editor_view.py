@@ -43,7 +43,10 @@ except Exception:  # noqa: BLE001
     _HAVE_MM = False
 
 SAVE_MS, RETRY_MS = 600, 4000
-LAYOUTS = {"balanced": ("Cân bằng", (36, 38, 26)), "video": ("Ưu tiên video", (50, 27, 23))}
+LAYOUTS = {"balanced": ("Bố cục: cân bằng", (36, 38, 26)),
+           "video": ("Bố cục: ưu tiên video", (50, 27, 23))}
+COVER_STYLE = "Hộp đặc (che chữ Trung)"   # style_panel.BOX_STYLES key
+BULK_TARGET_CPS = 20.0     # "Rút gọn hàng loạt" aims under the 25 cps flag, with headroom
 
 
 class _Task(QObject):
@@ -81,6 +84,7 @@ class EditorView(QWidget):
         self._spans: tuple[list, list] = ([], [])   # (ocr, glossary) flag spans
         self._guess: list = []                      # ASR-estimated timing (timing_report)
         self._qa: list = []                         # AI review findings (qa_report, E-5)
+        self._busy_bulk = False                     # one "Rút gọn hàng loạt" at a time
         self._speech: list | None = None   # voice spans (app.pipeline.vad) for "Tự canh"
         self._ctx: dict = {}          # tts/voice/translator context from step 1
         self._sel: int = -1           # selected cue index
@@ -150,6 +154,13 @@ class EditorView(QWidget):
     def _project_bar(self) -> ProjectBar:
         self.project = ProjectBar()
         self.project.add_action(badge("Tiếng Trung → Tiếng Việt", "purple"))
+        # undo / redo for mouse users too (Ctrl+Z / Ctrl+Y stay the fast path)
+        self.undo_btn = icon_button("Undo2", "Hoàn tác (Ctrl+Z)")
+        self.undo_btn.clicked.connect(self._undo_action)
+        self.redo_btn = icon_button("Redo2", "Làm lại (Ctrl+Y)")
+        self.redo_btn.clicked.connect(self._redo_action)
+        self.project.add_action(self.undo_btn)
+        self.project.add_action(self.redo_btn)
         self.layout_btn = button("Cân bằng", "PanelRightClose", variant="ghost",
                                  tip="Đổi bố cục: cân bằng / ưu tiên video")
         self.layout_btn.clicked.connect(self._toggle_layout)
@@ -169,6 +180,8 @@ class EditorView(QWidget):
         cl.deleteRequested.connect(self._delete)
         cl.snapAllRequested.connect(self._auto_snap_all)
         cl.retimeRequested.connect(self._retime)
+        cl.bulkShortenRequested.connect(self._bulk_shorten)
+        cl.aiSuggestionsRequested.connect(self._ai_suggestions)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -473,6 +486,105 @@ class EditorView(QWidget):
         self._mark_dirty()
         self.message.emit("Đã dùng gợi ý của AI — Ctrl+Z để hoàn tác.", "ok")
 
+    # --- bulk edits ("Rút gọn hàng loạt", "Gợi ý AI") ------------------------------
+    def _bulk_targets(self) -> list[tuple[int, int, str]]:
+        """Lines too fast to read or too long to dub → (index, target %, note)."""
+        from app.pipeline import fit_estimate, review
+
+        out = []
+        for i, c in enumerate(self.cues):
+            iss = self._issues_at(i)
+            if not c.vi.strip() or not ({"read", "long"} & set(iss)):
+                continue
+            pct = 90
+            cps, _n = review.reading(c.vi, max(0.1, c.end - c.start))
+            if "read" in iss and cps > 0:
+                pct = min(pct, int(100 * BULK_TARGET_CPS / cps))
+            if "long" in iss:
+                slot = fit_estimate.slot_seconds(self.cues, i)
+                need = max(0.1, fit_estimate.speech_seconds(c.vi))
+                pct = min(pct, int(100 * slot * fit_estimate.MAX_TEMPO / need))
+            pct = max(50, min(90, round(pct / 10) * 10))
+            note = " · ".join(review.LABELS[k] for k in iss if k in ("read", "long"))
+            out.append((i, pct, f"{note} · {cps:.0f} ký tự/giây"))
+        return out
+
+    def _bulk_shorten(self) -> None:
+        """AI shortens every line flagged "Đọc không kịp" / "Quá dài" in a few batched
+        calls; the user ticks what to keep in one dialog; applied as ONE undo step."""
+        if self._busy_bulk:
+            return
+        targets = self._bulk_targets()
+        if not targets:
+            self.message.emit("Không có câu nào đọc không kịp hay quá dài để rút gọn.", "ok")
+            return
+        provider = self._ctx.get("translator") or "openrouter"
+        texts = [(self.cues[i].vi, pct) for i, pct, _n in targets]
+        snap = [self.cues[i].vi for i, _p, _n in targets]
+        self._busy_bulk = True
+        self.message.emit(f"AI đang rút gọn {len(targets)} câu…", "info")
+
+        def work():
+            from app.pipeline.translate import shorten_lines
+            return shorten_lines(texts, provider=provider)
+
+        def done(result):
+            from desktop.widgets.dialogs import BulkEditDialog
+
+            self._busy_bulk = False
+            rows = [(i, old, new, note) for (i, _p, note), old, new in zip(targets, snap, result)
+                    if new and new != old and i < len(self.cues) and self.cues[i].vi == old]
+            if not rows:
+                self.message.emit("AI không rút gọn thêm được câu nào.", "warn")
+                return
+            dlg = BulkEditDialog(self, title=f"Rút gọn {len(rows)} câu",
+                                 intro="Bản đề xuất ngắn hơn để kịp đọc và lồng tiếng. Bỏ "
+                                       "chọn câu bạn muốn giữ, hoặc sửa trực tiếp đề xuất.",
+                                 rows=rows, checked=True)
+            if dlg.exec():
+                self._apply_bulk(dlg.chosen(), "Đã rút gọn")
+
+        def fail(msg):
+            self._busy_bulk = False
+            self._toast(f"Lỗi rút gọn: {msg}")
+
+        self._run_async(work, done, fail)
+
+    def _ai_suggestions(self) -> None:
+        """Every open AI-review finding with a proposed fix, in one list (unticked: the
+        reviewer can be wrong — e.g. it judges half a sentence)."""
+        from app.pipeline import qa
+
+        rows = []
+        for i, c in enumerate(self.cues):
+            for f in qa.findings_for(c, self._qa):
+                if f.get("fix") and f["fix"].strip() != c.vi.strip():
+                    kind = qa.KINDS.get(f.get("kind", ""), "AI")
+                    rows.append((i, c.vi, f["fix"].strip(),
+                                 f"{kind}: {f.get('note', '')}  ·  {c.zh}".strip()))
+                    break
+        if not rows:
+            self.message.emit("Không còn gợi ý nào của AI soát.", "ok")
+            return
+        from desktop.widgets.dialogs import BulkEditDialog
+
+        dlg = BulkEditDialog(self, title=f"{len(rows)} gợi ý của AI soát",
+                             intro="AI có thể sai (nhất là khi câu bị cắt giữa chừng) — đọc "
+                                   "câu gốc rồi chọn những gợi ý bạn đồng ý.",
+                             rows=rows, checked=False)
+        if dlg.exec():
+            self._apply_bulk(dlg.chosen(), "Đã dùng gợi ý AI cho")
+
+    def _apply_bulk(self, chosen: list[tuple[int, str]], verb: str) -> None:
+        chosen = [(i, t) for i, t in chosen if 0 <= i < len(self.cues) and self.cues[i].vi != t]
+        if not chosen:
+            return
+        self._snapshot()
+        for i, t in chosen:
+            self.cues[i].vi = t
+        self._reload()
+        self.message.emit(f"{verb} {len(chosen)} câu — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+
     def _issues_at(self, i: int) -> list[str]:
         return self.issues[i] if 0 <= i < len(self.issues) else []
 
@@ -577,6 +689,7 @@ class EditorView(QWidget):
         self._snapshot()
         if not fn(c):
             self._undo_stack.pop()
+            self._update_undo_buttons()
             return
         self.cue_list.refresh_row(i)
         self.inspector.refresh_timing(c)
@@ -917,6 +1030,12 @@ class EditorView(QWidget):
         st = self._load_style(job)
         if st:
             self.style_panel.set_from(st)
+        elif _has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE:
+            # burned-in Chinese under an outline-only line shows through → cover it
+            self.style_panel.box_style.setCurrentText(COVER_STYLE)
+            QTimer.singleShot(0, lambda: self.message.emit(
+                "Video có chữ Trung in sẵn — đã chọn nền “Hộp đặc” để che. Đổi ở tab Kiểu chữ.",
+                "info"))
         self._set_global_from_panel()
         self.video.set_style(self._g_style, self._g_size, self._g_font)
         self._update_scope_hint()
@@ -1070,6 +1189,7 @@ class EditorView(QWidget):
         self._run_async(lambda: waveform.peaks(job), done, lambda _m: None)
 
     def _reload(self, *, dirty: bool = True) -> None:
+        self._update_undo_buttons()       # also catches a popped no-op snapshot
         self.issues = self._compute_issues()
         self.cue_list.load(self.cues, self.issues)
         self.timeline.set_cues(self.cues)
@@ -1112,6 +1232,12 @@ class EditorView(QWidget):
         if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
+        self._update_undo_buttons()
+
+    def _update_undo_buttons(self) -> None:
+        if hasattr(self, "undo_btn"):
+            self.undo_btn.setEnabled(bool(self._undo_stack))
+            self.redo_btn.setEnabled(bool(self._redo_stack))
 
     def _undo_action(self) -> None:
         if not self._undo_stack:
@@ -1158,6 +1284,7 @@ class EditorView(QWidget):
             self._snapshot()        # per-line style lives on the cues → undoable
             if not self._apply_style_to_selection():
                 self._undo_stack.pop()
+                self._update_undo_buttons()
                 self._set_global_from_panel()
                 self.video.set_style(self._g_style, self._g_size, self._g_font)
         else:
@@ -1381,6 +1508,16 @@ class EditorView(QWidget):
 
 
 # --- job helpers ---------------------------------------------------------------------
+
+def _has_hardsubs(job) -> bool:
+    import json
+
+    try:
+        md = json.loads((job.work_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(md.get("has_hardsubs"))
+
 
 def _job_field(job, key: str):
     import json

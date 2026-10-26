@@ -92,6 +92,80 @@ class ShortenDialog(VzDialog):
         return self.edit.toPlainText().strip()
 
 
+class BulkEditDialog(VzDialog):
+    """Many proposed line changes at once ("Rút gọn hàng loạt", "Gợi ý AI"): one row per
+    line — tick · câu N · current (struck) · editable proposal · optional note. Nothing
+    changes until "Áp dụng"; ``chosen()`` returns [(row index, text)] of ticked rows."""
+
+    def __init__(self, parent, *, title: str, intro: str,
+                 rows: list[tuple[int, str, str, str]], checked: bool = True) -> None:
+        from PySide6.QtWidgets import QCheckBox, QLineEdit, QScrollArea
+
+        super().__init__(title, parent, width=860)
+        self.body.addWidget(label(intro, "secondary", wrap=True))
+        bar = QHBoxLayout()
+        self.count = label("", "small")
+        bar.addWidget(self.count, 1)
+        for text, on in (("Chọn hết", True), ("Bỏ chọn hết", False)):
+            b = button(text, variant="ghost", small=True)
+            b.clicked.connect(lambda _c=False, on=on: self._set_all(on))
+            bar.addWidget(b)
+        self.body.addLayout(bar)
+        inner = QWidget()
+        lst = QVBoxLayout(inner)
+        lst.setContentsMargins(0, 0, 8, 0)
+        lst.setSpacing(10)
+        self._rows: list[tuple[int, QCheckBox, QLineEdit]] = []
+        for idx, old, new, note in rows:
+            card = QFrame()
+            card.setObjectName("inset")
+            g = QVBoxLayout(card)
+            g.setContentsMargins(12, 8, 12, 8)
+            g.setSpacing(4)
+            head = QHBoxLayout()
+            tick = QCheckBox(f"Câu {idx + 1}")
+            tick.setChecked(checked)
+            tick.toggled.connect(self._update_count)
+            head.addWidget(tick)
+            if note:
+                head.addWidget(label(note, "small", wrap=True), 1)
+            else:
+                head.addStretch(1)
+            g.addLayout(head)
+            was = label(old, "secondary", wrap=True)
+            was.setStyleSheet("text-decoration: line-through;")
+            g.addWidget(was)
+            ed = QLineEdit(new)
+            ed.textEdited.connect(lambda _t, t=tick: t.setChecked(True))
+            g.addWidget(ed)
+            lst.addWidget(card)
+            self._rows.append((idx, tick, ed))
+        lst.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(inner)
+        scroll.setMinimumHeight(min(560, 110 * max(1, len(rows))))
+        self.body.addWidget(scroll, 1)
+        self.add_button("Hủy")
+        self.apply_btn = self.add_button("Áp dụng", icon_name="Check", primary=True, accept=True)
+        self._update_count()
+
+    def _set_all(self, on: bool) -> None:
+        for _i, tick, _e in self._rows:
+            tick.setChecked(on)
+
+    def _update_count(self, *_a) -> None:
+        n = sum(t.isChecked() for _i, t, _e in self._rows)
+        self.count.setText(f"Đã chọn {n} / {len(self._rows)} câu")
+        self.apply_btn.setText(f"Áp dụng {n} câu" if n else "Áp dụng")
+        self.apply_btn.setEnabled(n > 0)
+
+    def chosen(self) -> list[tuple[int, str]]:
+        return [(i, e.text().strip()) for i, t, e in self._rows
+                if t.isChecked() and e.text().strip()]
+
+
 class RetranslateDialog(VzDialog):
     """E-6 "Dịch lại": three AI renderings of one line + an optional request.
     The editor fills the options asynchronously (``set_options`` / ``set_error``)."""

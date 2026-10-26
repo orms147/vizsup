@@ -212,6 +212,8 @@ class CueList(QFrame):
     deleteRequested = Signal()
     snapAllRequested = Signal()
     retimeRequested = Signal()
+    bulkShortenRequested = Signal()
+    aiSuggestionsRequested = Signal()
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
@@ -296,6 +298,7 @@ class CueList(QFrame):
         self.view.setStyleSheet(f"QListView{{background:{V2['panel']};border:none;}}")
         self.view.selectionModel().currentRowChanged.connect(
             lambda cur, _prev: self.rowSelected.emit(cur.row()) if cur.isValid() else None)
+        self.view.selectionModel().currentRowChanged.connect(lambda *_: self._update_pos())
         self.view.editRequested.connect(self.editRequested)
         self._stack.addWidget(self.view)
         empty = QWidget()
@@ -340,6 +343,9 @@ class CueList(QFrame):
         m.addSeparator()
         m.addAction("Tự canh tất cả câu theo giọng nói   Shift+A", self.snapAllRequested.emit)
         m.addAction("Đo lại thời gian từ âm thanh (giữ nguyên chữ)…", self.retimeRequested.emit)
+        m.addSeparator()
+        m.addAction("Rút gọn hàng loạt các câu đọc không kịp…", self.bulkShortenRequested.emit)
+        m.addAction("Xem tất cả gợi ý của AI soát…", self.aiSuggestionsRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

@@ -427,6 +427,33 @@ def shorten_line(text: str, *, provider: str = "openrouter", ratio: float = 0.7)
     return out or text
 
 
+def shorten_lines(items: list[tuple[str, int]], *, provider: str = "openrouter",
+                  cancel: Callable[[], bool] | None = None) -> list[str]:
+    """Editor "Rút gọn hàng loạt": shorten many VI lines, each to about ``pct``% of
+    its length — ``items`` = [(text, pct)] — in one batched rewrite() per BATCH lines
+    (same prompt as the pre-gate auto-shorten). Returns one line per item; a line the
+    model did not shorten comes back unchanged. Raises when the provider can't."""
+    prov = get_translator(provider)
+    if not hasattr(prov, "rewrite"):
+        raise RuntimeError(f"Bộ dịch '{provider}' không hỗ trợ rút gọn câu.")
+    if not prov.available():
+        raise RuntimeError(f"Bộ dịch '{provider}' chưa sẵn sàng (thiếu API key).")
+    out = [t for t, _ in items]
+    for start in range(0, len(items), BATCH):
+        if cancel and cancel():
+            break
+        chunk = items[start:start + BATCH]
+        body = "\n".join(f"{k}| (rút còn ~{pct}%) {t}" for k, (t, pct) in enumerate(chunk, 1))
+        reply = prov.rewrite(body, SHORTEN_BATCH_INSTRUCTION,
+                             max_tokens=_completion_cap(len(chunk)))
+        current = [t for t, _ in chunk]
+        for k, cand in enumerate(parse_numbered(reply, len(chunk), current)):
+            cand = cand.strip().strip('"').strip()
+            if cand and len(cand) < len(current[k]):
+                out[start + k] = cand
+    return out
+
+
 ALT_STYLES = ("Sát nghĩa", "Tự nhiên", "Ngắn gọn")
 ALT_INSTRUCTION = (
     "Bạn là biên tập viên phụ đề Trung → Việt. Cho DÒNG CẦN DỊCH LẠI (tiếng Trung + bản "

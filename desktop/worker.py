@@ -192,6 +192,7 @@ class PipelineWorker(QObject):
                 self.progress.emit(0.1, "Đang chép tệp cục bộ…")
                 shutil.copy(o["file"], job.source_video)
                 job.metadata.setdefault("platform", "local")
+                job.metadata.setdefault("title", Path(o["file"]).stem)   # not the job id
                 self.log.emit(f"✓ Dùng tệp: {Path(o['file']).name}")
             else:
                 self.progress.emit(0.1, "Đang tải video…")
@@ -261,6 +262,9 @@ class PipelineWorker(QObject):
                     cancel=lambda: self._cancel,                       # long videos: ETA + resume
                     progress=lambda f, m: self.progress.emit(0.4 + 0.15 * f, m))
                 self.log.emit("✓ OCR xong")
+                job.metadata["has_hardsubs"] = True          # → editor defaults to a cover box
+                (job.work_dir / "metadata.json").write_text(
+                    _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
                 if o.get("ocr_proofread"):
                     self._check()
                     prov = o.get("translator", "passthrough")
@@ -286,6 +290,8 @@ class PipelineWorker(QObject):
                 asr.transcribe(job, provider=asr_name, log=asr_log)
                 translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
                 self.log.emit("✓ Nhận dạng xong")
+                if "has_hardsubs" not in job.metadata:
+                    self._note_hardsubs(job, o)
 
             store.debug("subtitle stage ok")
             # 2.3) snap fresh Chinese cues to the voice (local Silero VAD) BEFORE
@@ -370,6 +376,25 @@ class PipelineWorker(QObject):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
         finally:
             self.finished.emit()
+
+    def _note_hardsubs(self, job, o: dict) -> None:
+        """ASR was picked by hand: still look (locally, 16 frames, nothing uploaded)
+        for burned-in Chinese text, so the editor can default to a box that covers it.
+        Best effort — never fails the run."""
+        import json as _json
+
+        from app.pipeline import hardsub_detect
+
+        try:
+            has = hardsub_detect.detect_hardsubs(job, crop=o.get("ocr_region", "bottom-third"))
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"hardsub note skipped: {exc}")
+            return
+        job.metadata["has_hardsubs"] = has
+        (job.work_dir / "metadata.json").write_text(
+            _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        if has:
+            self.log.emit("ℹ Video có chữ Trung in sẵn — phụ đề sẽ dùng nền hộp để che")
 
     # --- render --------------------------------------------------------------
     @Slot()

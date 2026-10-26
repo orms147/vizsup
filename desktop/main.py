@@ -900,6 +900,10 @@ def main() -> int:
     _install_qt_log_filter()
     app = QApplication(sys.argv)
     app.setApplicationName("vizsup")
+    from desktop.qt_vi import ViTranslator
+
+    app._vi = ViTranslator(app)               # keep a reference: Qt does not own it
+    app.installTranslator(app._vi)
     _install_excepthook()
     _install_exit_tracing(app)
     load_fonts(app)
