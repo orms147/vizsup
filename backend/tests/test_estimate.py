@@ -15,13 +15,43 @@ USUAL = {"subtitle_source": "asr", "asr": "audio_llm", "translator": "openrouter
          "refine": "openrouter", "auto_context": True, "ai_review": True}
 
 
-@pytest.mark.parametrize("seconds, cost, wall", [(137, 0.045, 87), (329, 0.043, 114)])
-def test_the_two_measured_runs_fall_inside_the_range(seconds, cost, wall):
-    """Real runs on 2026-10-14 with the user's usual options (vlog, song)."""
+@pytest.mark.parametrize("seconds, cost, wall", [(137, 0.045, 87), (329, 0.043, 114),
+                                                 (1662, 0.285, 287)])
+def test_the_measured_runs_fall_inside_the_range(seconds, cost, wall):
+    """Real runs with the user's usual options: vlog, song (2026-10-14) and a 27:42 tech
+    review (2026-10-26, job 703e…: gate at 287 s, $0.272 + ~$0.0125 Whisper word track)."""
     e = est.estimate(seconds, USUAL)
     assert e.cost[0] <= cost <= e.cost[1]
     assert e.seconds[0] <= wall <= e.seconds[1]
-    assert e.basis == "đo 14/10"
+    assert e.basis == est.STATIC_BASIS
+
+
+def test_a_long_talk_is_no_longer_estimated_at_two_to_four_times_its_real_time():
+    """The 27:42 review was shown '8–19 phút' (ASR) and reached the gate in 287 s: the
+    per-minute rates had absorbed the fixed latency of two short clips."""
+    e = est.estimate(1662, USUAL)
+    assert e.seconds[1] <= 2 * 287 and e.seconds[0] >= 287 / 2
+    assert "4–8 phút" in e.label()
+
+
+def test_auto_source_costs_one_path_not_both(monkeypatch):
+    """auto runs OCR OR ASR: the high end is the slower path, not their sum."""
+    monkeypatch.setattr(est, "_local_ocr_speed", lambda: est.OCR_GPU_SEC_PER_MIN)
+    asr = est.estimate(1662, USUAL)
+    ocr = est.estimate(1662, {**USUAL, "subtitle_source": "ocr"})
+    auto = est.estimate(1662, {**USUAL, "subtitle_source": "auto"})
+    detect = est.DETECT_SEC
+    assert auto.seconds[0] == pytest.approx(asr.seconds[0] + detect[0], abs=1)
+    assert auto.seconds[1] == pytest.approx(ocr.seconds[1] + detect[1], abs=1)
+    assert auto.seconds[1] < asr.seconds[1] + ocr.seconds[1] - est.SEC_FIXED[1] - 60
+    assert any("OCR" in n for n in auto.notes)
+
+
+def test_local_ocr_stays_honest_on_a_long_video(monkeypatch):
+    """CPU OCR is 0.25–0.5 s a frame at 2 fps: 30 minutes take 15–30 minutes."""
+    monkeypatch.setattr(est, "_local_ocr_speed", lambda: est.OCR_LOCAL_SEC_PER_MIN)
+    e = est.estimate(1800, {**USUAL, "subtitle_source": "ocr"})
+    assert e.seconds[0] >= 15 * 60 and e.seconds[1] >= 30 * 60
 
 
 def test_choices_change_the_estimate():
@@ -40,19 +70,102 @@ def test_long_video_mentions_the_parts_and_reads_in_hours():
     assert "3:00:00" in e.label() and any("6 phần" in n for n in e.notes)
 
 
-def test_own_history_takes_over_after_three_projects(tmp_path):
-    for k, (minutes, cost, secs) in enumerate([(2, 0.04, 80), (5, 0.05, 120), (10, 0.12, 300)]):
-        d = tmp_path / f"j{k}"
-        d.mkdir()
-        (d / "metadata.json").write_text(json.dumps({"duration": minutes * 60}), encoding="utf-8")
-        (d / "usage.json").write_text(json.dumps(
-            {"models": {"m": {"cost": cost}}, "seconds": {"gate": secs}}), encoding="utf-8")
+def _project(base: Path, name: str, *, minutes: float, cost: float, secs: float,
+             vi: bool = True, meta: dict | None = None, opts: dict | None = None) -> Path:
+    d = base / name
+    d.mkdir()
+    (d / "metadata.json").write_text(json.dumps({"duration": minutes * 60} if meta is None
+                                                else meta), encoding="utf-8")
+    (d / "usage.json").write_text(json.dumps(
+        {"models": {"m": {"calls": 1, "cost": cost}}, "seconds": {"gate": secs}}), encoding="utf-8")
+    if vi:
+        (d / "vi.srt").write_text("", encoding="utf-8")
+    if opts is not None:
+        (d / "job.json").write_text(json.dumps({"opts": opts}), encoding="utf-8")
+    return d
+
+
+def _mid(r):
+    return (r[0] + r[1]) / 2
+
+
+def test_own_history_calibrates_the_model_after_three_projects(tmp_path):
+    """Past projects that took twice what the model says → the range doubles."""
+    for k, minutes in enumerate((2, 5, 10)):
+        cost, secs, _n = est._model(minutes, USUAL)
+        _project(tmp_path, f"j{k}", minutes=minutes, cost=2 * _mid(cost), secs=2 * _mid(secs))
     hist = est.history(tmp_path)
     assert len(hist) == 3
-    e = est.estimate(600, USUAL, history=hist)
+    static = est.estimate(1662, USUAL)
+    e = est.estimate(1662, USUAL, history=hist)
     assert e.basis == "từ 3 dự án trước"
-    assert 0.09 <= e.cost[0] <= e.cost[1] <= 0.21          # $0.01–0.02 per minute × 10 min
-    assert est.estimate(600, USUAL, history=hist[:2]).basis == "đo 14/10"
+    assert e.seconds == pytest.approx((2 * static.seconds[0], 2 * static.seconds[1]), abs=1)
+    assert e.cost == pytest.approx((2 * static.cost[0], 2 * static.cost[1]), rel=1e-3)
+    assert est.estimate(600, USUAL, history=hist[:2]).basis == est.STATIC_BASIS
+
+
+def test_short_clips_in_history_do_not_inflate_a_long_video(tmp_path):
+    """Raw seconds-per-minute of 2-minute clips (mostly fixed latency: 87 s for 2.3 min =
+    38 s/min) used to be multiplied by 27.7 minutes. Clips that ran as modelled leave a
+    long video's estimate where the model puts it."""
+    for k, minutes in enumerate((2.3, 2.0, 2.5)):
+        cost, secs, _n = est._model(minutes, USUAL)
+        _project(tmp_path, f"c{k}", minutes=minutes, cost=_mid(cost), secs=_mid(secs))
+    e = est.estimate(1662, USUAL, history=est.history(tmp_path))
+    assert e.seconds == pytest.approx(est.estimate(1662, USUAL).seconds, abs=1)
+    assert e.seconds[0] <= 287 <= e.seconds[1]
+
+
+def test_history_skips_runs_that_never_reached_the_gate(tmp_path):
+    """A failed run (2026-10-26: ASR only, 171 s, no vi.srt) is not what a run costs."""
+    _project(tmp_path, "done", minutes=27.7, cost=0.27, secs=287)
+    _project(tmp_path, "failed", minutes=27.7, cost=0.0047, secs=171.5, vi=False)
+    assert [h["seconds"] for h in est.history(tmp_path)] == [287]
+
+
+def test_history_reads_a_local_files_length_from_its_audio(tmp_path):
+    """A local file's metadata.json is just {"platform": "local"}: that project was
+    silently dropped from the history."""
+    import wave
+
+    d = _project(tmp_path, "local", minutes=0, cost=0.27, secs=287, meta={"platform": "local"})
+    with wave.open(str(d / "source.wav"), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * 16000 * 90)                   # 90 s
+    (h,) = est.history(tmp_path)
+    assert h["minutes"] == pytest.approx(1.5)
+
+
+def test_history_models_each_project_with_its_own_options(tmp_path, monkeypatch):
+    """Slow local-OCR projects that ran as the OCR model says must not make an ASR video
+    look slow; auto resolves to the path it took (an OCR run leaves ocr_report.json)."""
+    monkeypatch.setattr(est, "_local_ocr_speed", lambda: est.OCR_LOCAL_SEC_PER_MIN)
+    ocr = {**USUAL, "subtitle_source": "ocr"}
+    cost, secs, _n = est._model(5, ocr)
+    _project(tmp_path, "o1", minutes=5, cost=_mid(cost), secs=_mid(secs), opts=ocr)
+    _project(tmp_path, "o2", minutes=5, cost=_mid(cost), secs=_mid(secs), opts=ocr)
+    a = _project(tmp_path, "a", minutes=5, cost=_mid(cost), secs=_mid(secs),
+                 opts={**USUAL, "subtitle_source": "auto"})
+    (a / "ocr_report.json").write_text("[]", encoding="utf-8")
+    hist = est.history(tmp_path)
+    assert sorted(h["opts"]["subtitle_source"] for h in hist) == ["ocr"] * 3
+    e = est.estimate(1662, USUAL, history=hist)
+    assert e.basis == "từ 3 dự án trước"
+    assert e.seconds == pytest.approx(est.estimate(1662, USUAL).seconds, abs=1)
+    _project(tmp_path, "s", minutes=5, cost=0.1, secs=300, opts={**USUAL, "subtitle_source": "auto"})
+    assert "asr" in [h["opts"]["subtitle_source"] for h in est.history(tmp_path)]
+
+
+def test_the_whisper_word_track_counts_in_a_projects_cost(tmp_path):
+    """usage.json now itemises the Whisper timing calls; history adds every model."""
+    d = _project(tmp_path, "w", minutes=27.7, cost=0.272, secs=287)
+    data = json.loads((d / "usage.json").read_text(encoding="utf-8"))
+    data["models"]["openai/whisper-large-v3"] = {"calls": 7, "in": 0, "out": 0, "cost": 0.0125}
+    (d / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+    (h,) = est.history(tmp_path)
+    assert h["cost"] == pytest.approx(0.2845)
 
 
 def test_start_screen_shows_the_estimate_for_a_file(tmp_path, monkeypatch):

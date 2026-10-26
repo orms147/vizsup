@@ -1,6 +1,8 @@
 """E-14: what each video cost in AI calls, and how long its runs took.
 
-OpenRouter returns ``usage.cost`` (credits ≈ USD) on every response. The worker opens a
+OpenRouter returns ``usage.cost`` (credits ≈ USD) on every response — chat and
+/audio/transcriptions alike (the Whisper word track: ``usage {seconds, cost}``; a vendor
+without it is priced per audio minute, see ``record_audio``). The worker opens a
 ``track(job_dir)`` scope around a run; any AI call made meanwhile — from any thread —
 is added to ``<job>/usage.json``. Outside a scope nothing is recorded. Best effort:
 accounting must never break a call.
@@ -31,15 +33,27 @@ def track(job_dir: Path, *, phase: str):
         _sink = prev
 
 
-def _usage_fields(usage) -> tuple[int, int, float]:
+def _getter(usage):
+    if isinstance(usage, dict):
+        return usage.get
+    extra = getattr(usage, "model_extra", None) or {}
+
+    def get(k, d=None):
+        v = getattr(usage, k, None)
+        return extra.get(k, d) if v is None else v
+    return get
+
+
+def _usage_fields(usage) -> tuple[int, int, float | None]:
+    """(input tokens, output tokens, cost) — cost None when the response carried none.
+    Chat responses name tokens prompt/completion, transcription ones input/output."""
     if usage is None:
-        return 0, 0, 0.0
-    get = (usage.get if isinstance(usage, dict) else lambda k, d=None: getattr(usage, k, d))
-    extra = {} if isinstance(usage, dict) else (getattr(usage, "model_extra", None) or {})
+        return 0, 0, None
+    get = _getter(usage)
     cost = get("cost", None)
-    if cost is None:
-        cost = extra.get("cost", 0.0)
-    return int(get("prompt_tokens", 0) or 0), int(get("completion_tokens", 0) or 0), float(cost or 0.0)
+    pin = get("prompt_tokens", None) or get("input_tokens", 0)
+    pout = get("completion_tokens", None) or get("output_tokens", 0)
+    return int(pin or 0), int(pout or 0), (None if cost is None else float(cost))
 
 
 def record(model: str, usage) -> None:
@@ -49,6 +63,23 @@ def record(model: str, usage) -> None:
         return
     try:
         pin, pout, cost = _usage_fields(usage)
+        _add(sink, model=model, pin=pin, pout=pout, cost=cost or 0.0)
+    except Exception:  # noqa: BLE001 - accounting never breaks a call
+        pass
+
+
+def record_audio(model: str, usage, seconds: float, price_per_min: float) -> None:
+    """Add one speech-to-text call (/audio/transcriptions). Its ``usage.cost`` when the
+    response has one (OpenRouter's does); otherwise ``seconds`` of audio (``usage.seconds``
+    when given) × ``price_per_min`` — these APIs bill per audio second."""
+    sink = _sink
+    if sink is None:
+        return
+    try:
+        pin, pout, cost = _usage_fields(usage)
+        if cost is None:
+            heard = _getter(usage)("seconds", None) if usage is not None else None
+            cost = float(heard or seconds or 0.0) / 60 * price_per_min
         _add(sink, model=model, pin=pin, pout=pout, cost=cost)
     except Exception:  # noqa: BLE001 - accounting never breaks a call
         pass

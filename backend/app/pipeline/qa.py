@@ -17,6 +17,13 @@ from app.models import Job
 from app.providers.registry import get_translator
 
 BATCH = 40
+# Lines are cut from running speech, so a sentence often spans two or three of them.
+# Judged alone, a fragment looked wrong (job 703e…, 2026-10-26: "…là viền đen rộng hơn"
+# flagged "meaning" because 黑边 sits in the NEXT Chinese line; the next line flagged
+# "câu bị tách rời"). Each batch is therefore sent as a run of consecutive lines with
+# CONTEXT lines from the neighbouring batches on both sides, marked as not to be judged.
+CONTEXT = 2                       # context lines before and after each batch
+CONTEXT_CHARS = 60                # …shortened: they are there for continuity, not review
 KINDS = {"meaning": "Sai nghĩa", "pronoun": "Xưng hô", "name": "Tên riêng",
          "omission": "Thiếu ý", "unnatural": "Chưa tự nhiên", "too_long": "Quá dài"}
 _REPORT = "qa_report.json"
@@ -28,9 +35,18 @@ INSTRUCTION = (
     "inconsistent xưng hô / pronouns for these speakers (pronoun), mistranslated or "
     "inconsistent proper name (name), dropped content (omission), stiff/unnatural "
     "Vietnamese (unnatural), clearly too long to say in a short subtitle (too_long). "
+    "The lines are CONSECUTIVE subtitle cues cut from running speech: one sentence often "
+    "starts in one line and ends in the next. Read every line together with the line "
+    "before and the line after it, and judge the meaning across the boundary: a word "
+    "that sits in a neighbouring ZH line is translated in that neighbour's VI, so never "
+    "flag a line for content that is in an adjacent line (that is not an omission nor a "
+    "meaning error), and never flag a line just because it is a fragment of a sentence "
+    "that continues before or after it. Lines marked CONTEXT ONLY are the neighbours "
+    "outside this batch, shown only for that purpose: do not judge them, never list them. "
     "Do not flag style preferences or fine lines. For each flagged line give a one-"
     "sentence note in Vietnamese and a corrected Vietnamese line (fix) that keeps the "
-    "same length or shorter. Reply ONLY with JSON: "
+    "same length or shorter and covers only that line's part of the sentence. Reply ONLY "
+    "with JSON: "
     '{"issues":[{"i":3,"kind":"meaning","note":"…","fix":"…"}]} '
     '(empty list when all lines are fine).'
 )
@@ -64,6 +80,31 @@ def _pairs(job: Job) -> list[tuple[float, float, str, str]]:
         zh = [" ".join(c.text for c in cn if c.start < v.end - 0.05 and c.end > v.start + 0.05)
               for v in vi]
     return [(v.start, v.end, z, v.text) for v, z in zip(vi, zh)]
+
+
+def _short(s: str, n: int = CONTEXT_CHARS) -> str:
+    s = re.sub(r"\s+", " ", (s or "").strip())
+    return s if len(s) <= n else s[:n - 1].rstrip() + "…"
+
+
+def batch_body(pairs: list[tuple[float, float, str, str]], b0: int, head: str = "") -> str:
+    """The prompt body for ``pairs[b0:b0 + BATCH]``: the lines to judge, numbered from 1,
+    between up to CONTEXT unnumbered, shortened lines on each side marked CONTEXT ONLY
+    (the end of the previous batch, the start of the next), so a sentence cut at a batch
+    edge reads whole."""
+    chunk = pairs[b0:b0 + BATCH]
+    before = pairs[max(0, b0 - CONTEXT):b0]
+    after = pairs[b0 + BATCH:b0 + BATCH + CONTEXT]
+
+    def ctx(rows, where: str) -> str:
+        return "\n".join([f"CONTEXT ONLY — {where} (do not judge):",
+                          *(f"   ZH: {_short(zh)} | VI: {_short(vi)}" for _s, _e, zh, vi in rows)])
+
+    review = "Lines to review:\n" + "\n".join(
+        f"{k + 1}. ZH: {zh}\n   VI: {vi}" for k, (_s, _e, zh, vi) in enumerate(chunk))
+    parts = ([ctx(before, "the lines just before")] if before else []) + [review] + (
+        [ctx(after, "the lines just after")] if after else [])
+    return head + "\n\n".join(parts)
 
 
 def parse_issues(reply: str, n: int) -> list[dict]:
@@ -103,8 +144,7 @@ def review(job: Job, provider_name: str, *, context: dict | None = None, log=Non
 
         def one(b0: int) -> list[dict]:
             chunk = pairs[b0:b0 + BATCH]
-            body = head + "\n".join(f"{k + 1}. ZH: {zh}\n   VI: {vi}"
-                                    for k, (_s, _e, zh, vi) in enumerate(chunk))
+            body = batch_body(pairs, b0, head)
             try:
                 reply = prov.rewrite(body, INSTRUCTION, max_tokens=2500, role="qa")
             except Exception:  # noqa: BLE001

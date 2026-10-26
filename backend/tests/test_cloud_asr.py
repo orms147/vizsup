@@ -486,3 +486,91 @@ def test_cloud_stt_text_only_model_without_whisper_fetches_cloud_words(cfg, no_m
     timing_calls = [c for c in fc.calls if c["model"] == _cloud.DEFAULT_TIMING_MODEL]
     assert len(timing_calls) == 2
     assert no_media.words_seen[0][0] == ("你好", 0.2, 0.6)
+
+
+# --- E-14: the Whisper word track is paid for, so it shows in usage.json ---------
+
+def _usage_models(job_dir: Path) -> dict:
+    import json
+
+    return json.loads((job_dir / "usage.json").read_text(encoding="utf-8"))["models"]
+
+
+def test_cloud_word_track_cost_comes_from_the_response(cfg, no_media, monkeypatch, tmp_path):
+    """OpenRouter's /audio/transcriptions answers usage {seconds, cost} (live 2026-10-26:
+    60 s of whisper-large-v3 → cost 0.00045). That cost goes into usage.json."""
+    from app import usage
+
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: False)
+    reply = {**_word_reply([("你", 1.0, 1.2)]), "usage": {"seconds": 10.0, "cost": 0.0001}}
+    fc = FakeClient(chat=lambda kw: _chat_reply("你好。"), transcribe=lambda kw: reply)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    job = tmp_path / "job"
+    job.mkdir()
+    with usage.track(job, phase="gate"):
+        AudioLLM().transcribe(Path("a.wav"))
+    whisper = _usage_models(job)[_cloud.DEFAULT_TIMING_MODEL]
+    assert whisper["calls"] == 2 and whisper["cost"] == pytest.approx(0.0002)
+    assert usage.summary(job)["cost"] == pytest.approx(0.0002)    # in the job's "AI $"
+
+
+def test_without_a_cost_in_the_response_the_audio_length_is_priced(cfg, no_media, monkeypatch,
+                                                                   tmp_path):
+    """A direct vendor may answer no usage at all: seconds × STT_PRICE_PER_MIN."""
+    from app import usage
+
+    monkeypatch.setattr(_cloud, "local_words_available", lambda: False)
+    monkeypatch.setattr(settings, "stt_price_per_min", 0.006)
+    fc = FakeClient(chat=lambda kw: _chat_reply("你好。"),
+                    transcribe=lambda kw: _word_reply([("你", 1.0, 1.2)]))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    with usage.track(tmp_path, phase="gate"):
+        AudioLLM().transcribe(Path("a.wav"))               # two 10 s chunks
+    whisper = _usage_models(tmp_path)[_cloud.DEFAULT_TIMING_MODEL]
+    assert whisper["calls"] == 2 and whisper["cost"] == pytest.approx(2 * 10 / 60 * 0.006)
+
+
+def test_usage_seconds_beat_the_chunk_length_when_pricing(monkeypatch, tmp_path):
+    from app import usage
+
+    monkeypatch.setattr(settings, "stt_price_per_min", 0.6)
+    with usage.track(tmp_path, phase="gate"):
+        _cloud.record_stt("m", {"usage": {"seconds": 30.0}}, 240.0)   # no cost field
+        _cloud.record_stt("m", {"duration": 60.0}, 240.0)              # no usage at all
+        _cloud.record_stt("m", SimpleNamespace(usage=None, duration=None), 6.0)
+    m = _usage_models(tmp_path)["m"]
+    assert m["calls"] == 3 and m["cost"] == pytest.approx(0.3 + 0.6 + 0.06)
+
+
+def test_cloud_stt_records_its_transcription_calls(cfg, no_media, monkeypatch, tmp_path):
+    from app import usage
+
+    def tr(kw):
+        return {"segments": [{"start": 1.0, "end": 2.0, "text": "你好"}],
+                "usage": {"seconds": 10.0, "cost": 0.00008}}
+
+    fc = FakeClient(transcribe=tr)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    with usage.track(tmp_path, phase="gate"):
+        CloudSTT().transcribe(Path("a.wav"))
+    m = _usage_models(tmp_path)[cloud_stt.DEFAULT_MODEL]
+    assert m["calls"] == 2 and m["cost"] == pytest.approx(0.00016)
+
+
+def test_cached_word_chunks_are_not_charged_again(cfg, monkeypatch, tmp_path):
+    from app import usage
+
+    media = tmp_path / "source.wav"
+    media.write_bytes(b"RIFF")
+    chunk = tmp_path / "c0.mp3"
+    chunk.write_bytes(b"ID3")
+    fc = FakeClient(transcribe=lambda kw: {**_word_reply([("你", 1.0, 1.2)]),
+                                           "usage": {"seconds": 10.0, "cost": 0.0001}})
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    cache, aid = _cloud.cache_for(media)
+    job = tmp_path / "job"
+    job.mkdir()
+    with usage.track(job, phase="gate"):
+        for _ in range(2):                                   # the second run hits the cache
+            _cloud.cloud_words([(chunk, (0.0, 10.0))], "zh", cache_dir=cache, audio_id=aid)
+    assert _usage_models(job)[_cloud.DEFAULT_TIMING_MODEL]["calls"] == 1
