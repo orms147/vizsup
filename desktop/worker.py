@@ -154,7 +154,7 @@ class PipelineWorker(QObject):
         except (_Cancelled, InterruptedError):
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.failed.emit(_user_message(exc))
         finally:
             self.finished.emit()
 
@@ -373,7 +373,7 @@ class PipelineWorker(QObject):
         except Exception as exc:  # noqa: BLE001 - surface to UI
             import traceback as _tb
             store.debug(f"run_to_gate FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.failed.emit(_user_message(exc))
         finally:
             self.finished.emit()
 
@@ -493,6 +493,15 @@ class PipelineWorker(QObject):
         except (_Cancelled, InterruptedError):
             self.failed.emit("Đã hủy.")
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.failed.emit(_user_message(exc))
         finally:
             self.finished.emit()
+
+
+def _user_message(exc: Exception) -> str:
+    """What the error card shows: our own messages are already Vietnamese sentences
+    ("Máy chủ giọng đọc đang giới hạn …") — "RuntimeError:" in front only scares; a
+    foreign exception keeps its type name, which is what makes it debuggable."""
+    if type(exc) in (RuntimeError, ValueError) and str(exc).strip():
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
