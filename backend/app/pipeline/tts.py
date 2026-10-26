@@ -62,10 +62,10 @@ def _save_manifest(job: Job, manifest: dict) -> None:
 def _unvoiceable(exc: Exception) -> bool:
     """edge-tts raises NoAudioReceived when a line contains nothing the picked
     voice can speak — e.g. pure-Chinese text on a vi-VN voice, which is exactly
-    what the no-keys passthrough smoke path produces. Deterministic, so retrying
-    is waste and aborting the render at its LAST stage is hostile; the caller
-    skips that line's dub instead (subtitle still shows). Matched by class name
-    to keep this module free of an edge_tts import."""
+    what the no-keys passthrough smoke path produces. The caller skips that line's
+    dub (subtitle still shows). NOT for normal text: there it means the service is
+    throttling — the providers retry those and raise a different error
+    (base.has_speakable decides). Matched by class name (no edge_tts import)."""
     return type(exc).__name__ == "NoAudioReceived"
 
 
@@ -81,12 +81,19 @@ def _explain(exc: Exception) -> Exception:
 
 
 def _synth_retry(tts, text: str, seg: Path, *, voice, rate, sleep) -> None:
+    from app.providers.base import has_speakable
+
     for delay in (*_RETRY_DELAYS, None):
         try:
             tts.synthesize(text, seg, voice=voice, rate=rate)
             return
         except Exception as exc:  # noqa: BLE001 - transient 403/timeouts get the retries
-            if delay is None or _unvoiceable(exc):
+            if _unvoiceable(exc) and not has_speakable(text):
+                raise                         # nothing a voice could say → caller skips
+            if delay is None:
+                if _unvoiceable(exc):         # "no audio" for normal text = throttling
+                    raise RuntimeError("máy chủ giọng đọc đang giới hạn — không trả âm "
+                                       "thanh") from exc
                 raise
             sleep(delay)
 
@@ -215,6 +222,11 @@ def _synthesize_batch(
                             on_done=_done, cancel=cancel)
     _save_manifest(job, manifest)            # persists mute-drops even when nothing made
     if fatal is not None:
+        if type(fatal).__name__ == "TTSThrottled":
+            total = kept + len(todo)
+            raise RuntimeError(
+                f"Máy chủ giọng đọc đang giới hạn — đã tạo {kept + made}/{total} câu (được giữ "
+                f"lại). Đợi vài phút rồi bấm Dựng lại để tạo tiếp.") from fatal
         raise _explain(fatal) from fatal
     # Dubbed segments in cue order (assemble re-sorts by start, but keep it
     # deterministic). A cue is dubbed iff its manifest entry matches — kept or made;

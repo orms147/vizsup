@@ -12,6 +12,7 @@ Design rules:
 from __future__ import annotations
 
 import importlib.util
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +20,15 @@ from pathlib import Path
 
 def _installed(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
+
+
+_SPEAKABLE = re.compile(r"[0-9A-Za-zÀ-ɏḀ-ỿ]")
+
+
+def has_speakable(text: str) -> bool:
+    """Anything a Vietnamese voice can pronounce (Latin letters incl. diacritics, digits).
+    A TTS "no audio" answer for such a line is the service throttling, not the text."""
+    return bool(_SPEAKABLE.search(text or ""))
 
 
 class Provider(ABC):

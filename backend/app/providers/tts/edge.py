@@ -8,16 +8,27 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from app.providers.base import TTSProvider, _installed
+from app.providers.base import TTSProvider, _installed, has_speakable
 
 DEFAULT_VOICE = "vi-VN-HoaiMyNeural"
 VOICES = ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"]
 
 
 def _no_audio(exc: Exception) -> bool:
-    # NoAudioReceived = the voice can't speak this text (deterministic) — matched by
-    # class name to keep the retry decision free of an edge_tts import at the top.
+    # NoAudioReceived — matched by class name to keep the retry decision free of an
+    # edge_tts import at the top. Deterministic ONLY for text the voice can't speak
+    # (pure Chinese on a vi-VN voice); for a normal line it is Microsoft throttling a
+    # burst (2026-10-27: 417 of 717 lines came back empty, then worked on a retry).
     return type(exc).__name__ == "NoAudioReceived"
+
+
+THROTTLE_DELAYS = (3.0, 8.0, 20.0)   # "no audio" on a speakable line: back off, retry
+SAVE_TIMEOUT = 90.0                  # one line never takes this long; a stuck socket does
+CANCEL_POLL = 0.5                    # how often the batch checks the render's Hủy
+
+
+class TTSThrottled(RuntimeError):
+    """edge-tts kept answering "no audio" for normal text — the service is limiting us."""
 
 
 def _keep_alive_connector(limit: int):
@@ -98,34 +109,73 @@ class EdgeTTS(TTSProvider):
             try:
                 sem = _asyncio.Semaphore(concurrency)
                 stop = _asyncio.Event()   # set after the first fatal → stop admitting
+                inflight: set = set()     # tasks holding a slot (the only ones Hủy cancels)
 
                 async def _one(key: str, text: str, out_path) -> tuple[str, Exception | None]:
+                    try:
+                        return await _attempts(key, text, out_path)
+                    except _asyncio.CancelledError:      # Hủy while a request was in flight
+                        return key, InterruptedError()
+
+                async def _attempts(key: str, text: str, out_path):
                     if (cancel and cancel()) or stop.is_set():
                         return key, InterruptedError()   # no network work started
                     async with sem:
                         if (cancel and cancel()) or stop.is_set():
                             return key, InterruptedError()
-                        for delay in (*retry_delays, None):
-                            try:
-                                comm = edge_tts.Communicate(
-                                    text, voice=voice, rate=rate, connector=connector)
-                                await comm.save(str(out_path))
-                                return key, None
-                            except Exception as exc:  # noqa: BLE001
-                                if _no_audio(exc):
-                                    return key, exc      # deterministic → no retry
-                                if delay is None:
-                                    stop.set()           # dead endpoint → stop admitting
-                                    return key, exc
-                                await _asyncio.sleep(delay)
-                        return key, None                 # unreachable (loop always returns)
+                        me = _asyncio.current_task()
+                        inflight.add(me)
+                        try:
+                            return await _speak(key, text, out_path)
+                        finally:
+                            inflight.discard(me)
+
+                async def _speak(key: str, text: str, out_path):
+                    delays = list(retry_delays)
+                    throttled = 0
+                    while True:
+                        try:
+                            comm = edge_tts.Communicate(
+                                text, voice=voice, rate=rate, connector=connector)
+                            # 2026-10-27: under throttling a request hung for good and
+                            # froze the render (and its Hủy) at "TTS 20%"
+                            await _asyncio.wait_for(comm.save(str(out_path)), SAVE_TIMEOUT)
+                            return key, None
+                        except Exception as exc:  # noqa: BLE001
+                            if _no_audio(exc):
+                                if not has_speakable(text):
+                                    return key, exc  # nothing to say → skip, no retry
+                                if throttled >= len(THROTTLE_DELAYS):
+                                    stop.set()       # sustained limiting → stop, keep done
+                                    return key, TTSThrottled(
+                                        "máy chủ giọng đọc (edge-tts) đang giới hạn — "
+                                        "không trả âm thanh")
+                                await _asyncio.sleep(THROTTLE_DELAYS[throttled])
+                                throttled += 1
+                                continue
+                            if not delays:
+                                stop.set()           # dead endpoint → stop admitting
+                                return key, exc
+                            await _asyncio.sleep(delays.pop(0))
 
                 tasks = [_asyncio.create_task(_one(k, t, p)) for k, t, p in items]
+
+                async def _watch_cancel() -> None:
+                    while cancel and not all(t.done() for t in tasks):
+                        if cancel():
+                            stop.set()                   # queued ones return on their own
+                            for t in list(inflight):
+                                t.cancel()               # in-flight requests too
+                            return
+                        await _asyncio.sleep(CANCEL_POLL)
+
+                watcher = _asyncio.create_task(_watch_cancel())
                 for fut in _asyncio.as_completed(tasks):
                     key, exc = await fut
                     results.append((key, exc))
                     if on_done:
                         on_done(key, exc)                # loop-thread → serialized
+                watcher.cancel()
             finally:
                 await connector.shutdown()               # close the shared pool for real
 

@@ -122,12 +122,13 @@ class UnvoiceableTTS(FakeTTS):
     """Voice can't speak Chinese-only lines (the passthrough smoke path)."""
 
     def synthesize(self, text, out_path, *, voice=None, rate=None):
-        if "câu hai" in text:
+        if "二" in text:
             raise NoAudioReceived("No audio was received.")
         return super().synthesize(text, out_path, voice=voice, rate=rate)
 
 
 def test_unvoiceable_line_skipped_not_fatal(job, monkeypatch):
+    job.vi_srt.write_text(VI.replace("câu hai", "第二句"), encoding="utf-8")   # passthrough
     fake = _use(monkeypatch, UnvoiceableTTS())
     logs: list[str] = []
     sleeps: list[float] = []
@@ -146,3 +147,40 @@ def test_hash_covers_every_audio_knob():
     assert _seg_hash("edge", "voiceA", "+20%", "xin chào") != base
     assert _seg_hash("edge", "voiceA", "+10%", "xin chào!") != base
     assert _seg_hash("edge", "voiceA", "+10%", "xin chào") == base
+
+
+class ThrottledTTS(FakeTTS):
+    """edge-tts under a burst (2026-10-27): "no audio" for NORMAL text, then fine."""
+
+    def __init__(self, empty_times: int):
+        super().__init__()
+        self.empty = empty_times
+
+    def synthesize(self, text, out_path, *, voice=None, rate=None):
+        if "câu hai" in text and self.empty:
+            self.empty -= 1
+            raise NoAudioReceived("No audio was received.")
+        return super().synthesize(text, out_path, voice=voice, rate=rate)
+
+
+def test_no_audio_on_normal_text_is_retried(job, monkeypatch):
+    """417 of 717 lines were dropped as "unvoiceable" while Microsoft was throttling."""
+    _use(monkeypatch, ThrottledTTS(empty_times=1))
+    sleeps: list[float] = []
+    segs = synthesize(job, provider="fake", _sleep=sleeps.append)
+    assert [c.index for c, _ in segs] == [1, 2, 3] and sleeps
+
+
+def test_sustained_no_audio_on_normal_text_stops_instead_of_dropping(job, monkeypatch):
+    _use(monkeypatch, ThrottledTTS(empty_times=99))
+    with pytest.raises(RuntimeError, match="giới hạn"):
+        synthesize(job, provider="fake", _sleep=lambda _s: None)
+    manifest = json.loads((job.tts_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "1" in manifest                      # finished lines are kept for the retry
+
+
+def test_has_speakable():
+    from app.providers.base import has_speakable
+
+    assert has_speakable("Xin chào") and has_speakable("Đ") and has_speakable("2025")
+    assert not has_speakable("第二句") and not has_speakable("…!?") and not has_speakable("")

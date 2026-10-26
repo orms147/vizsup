@@ -9,6 +9,8 @@ test_tts_resume.py.
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -160,3 +162,94 @@ def test_progress_counts_cache_hits_then_each_line(job, monkeypatch):
     _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[("2", None)]))
     synthesize(job, provider="fake", progress=lambda d, n: seen.append((d, n)))
     assert seen == [(2, 3), (3, 3)]
+
+
+def _fake_edge(monkeypatch, empty: dict[str, int]):
+    """edge_tts stand-in: Communicate(text).save() answers "no audio" ``empty[text]`` times."""
+    import types
+
+    from app.providers.tts import edge
+
+    class NoAudioReceived(Exception):
+        pass
+
+    class Communicate:
+        def __init__(self, text, **kw):
+            self.text = text
+
+        async def save(self, path):
+            if empty.get(self.text, 0) > 0:
+                empty[self.text] -= 1
+                raise NoAudioReceived("No audio was received.")
+            Path(path).write_bytes(b"mp3")
+
+    class Conn:
+        async def shutdown(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=Communicate))
+    monkeypatch.setattr(edge, "_keep_alive_connector", lambda n: Conn())
+    monkeypatch.setattr(edge, "THROTTLE_DELAYS", (0.0, 0.0, 0.0))
+    return edge.EdgeTTS()
+
+
+def test_edge_batch_retries_no_audio_on_normal_text(tmp_path, monkeypatch):
+    prov = _fake_edge(monkeypatch, {"câu hai": 2, "第二句": 9})
+    items = [("1", "câu một", tmp_path / "1.mp3"), ("2", "câu hai", tmp_path / "2.mp3"),
+             ("3", "第二句", tmp_path / "3.mp3")]
+    res = dict(prov.synthesize_many(items))
+    assert res["1"] is None and res["2"] is None          # throttled twice, then spoken
+    assert type(res["3"]).__name__ == "NoAudioReceived"   # Chinese on a vi voice: skip
+
+
+def test_edge_batch_sustained_no_audio_is_throttling(tmp_path, monkeypatch):
+    prov = _fake_edge(monkeypatch, {"câu hai": 99})
+    res = dict(prov.synthesize_many([("2", "câu hai", tmp_path / "2.mp3")]))
+    assert type(res["2"]).__name__ == "TTSThrottled"
+
+
+def test_edge_batch_hung_request_times_out_and_retries(tmp_path, monkeypatch):
+    """A socket that never answers froze the render at "TTS 20%" (and its Hủy)."""
+    import asyncio
+
+    from app.providers.tts import edge
+
+    prov = _fake_edge(monkeypatch, {})
+    hang = {"câu hai": 1}
+    real = sys.modules["edge_tts"].Communicate
+
+    class Hanging(real):
+        async def save(self, path):
+            if hang.get(self.text):
+                hang[self.text] -= 1
+                await asyncio.sleep(3600)
+            await super().save(path)
+
+    sys.modules["edge_tts"].Communicate = Hanging
+    monkeypatch.setattr(edge, "SAVE_TIMEOUT", 0.2)
+    res = dict(prov.synthesize_many([("2", "câu hai", tmp_path / "2.mp3")],
+                                    retry_delays=(0.0,)))
+    assert res["2"] is None and (tmp_path / "2.mp3").exists()
+
+
+def test_edge_batch_cancel_reaches_a_request_in_flight(tmp_path, monkeypatch):
+    import asyncio
+    import time
+
+    from app.providers.tts import edge
+
+    prov = _fake_edge(monkeypatch, {})
+    real = sys.modules["edge_tts"].Communicate
+
+    class Hanging(real):
+        async def save(self, path):
+            await asyncio.sleep(3600)
+
+    sys.modules["edge_tts"].Communicate = Hanging
+    monkeypatch.setattr(edge, "CANCEL_POLL", 0.05)
+    t0 = time.monotonic()
+    stop_at = t0 + 0.3
+    items = [(str(i), f"câu {i}", tmp_path / f"{i}.mp3") for i in range(6)]
+    res = dict(prov.synthesize_many(items, cancel=lambda: time.monotonic() > stop_at))
+    assert time.monotonic() - t0 < 5
+    assert all(isinstance(e, InterruptedError) for e in res.values()) and len(res) == 6
