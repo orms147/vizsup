@@ -90,3 +90,28 @@ def test_render_page_warns_a_fast_talker_and_offers_a_speed(tmp_path):
     slow = [EditorCue(start=i * 3.0, end=i * 3.0 + 3.0, vi="một hai", zh="") for i in range(5)]
     rv.set_preview(tmp_path / "missing.mp4", slow)
     assert rv.fit_hint.isHidden()
+
+
+def test_speed_is_restored_per_project(tmp_path):
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    from desktop.views import render_view
+
+    QApplication.instance() or QApplication([])
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (b / render_view.VOICE_FILE).write_text(json.dumps({"voice": EDGE[1], "rate": 1.2}),
+                                            encoding="utf-8")
+    rv = render_view.RenderView()
+    rv.set_voices(EDGE)
+    rv.set_job(Job(id="b", work_dir=b), cues=1)
+    rv.select_voice(EDGE[1])
+    assert rv.speed.value() == 120 and rv.voice.currentData() == EDGE[1]
+    rv.set_job(Job(id="a", work_dir=a), cues=1)
+    rv.select_voice(EDGE[0])
+    assert rv.speed.value() == 100                       # a has no saved speed
+    assert render_view.saved_rate(Job(id="b", work_dir=b)) == 1.2   # b untouched
+    rv.speed.setValue(130)                               # e.g. the "Dùng 1.30×" button
+    assert render_view.saved_rate(Job(id="a", work_dir=a)) == 1.3

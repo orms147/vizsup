@@ -352,8 +352,8 @@ class MainWindow(QMainWindow):
                 self._learn_from_approval()
                 self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
             self.render.set_voices(voices)
+            self._sync_render_page()                    # set_job first: voice.json is per job
             self.render.select_voice(_default_voice(self.job, voices, self.opts))
-            self._sync_render_page()
             self.render.set_preview(self.job.source_video, self.editor.cues)  # show VI caption bar in step 3
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001

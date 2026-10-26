@@ -265,7 +265,7 @@ class RenderView(QWidget):
         self.fit_hint.setVisible(False)
         self.fit_btn.setVisible(False)
         self.speed.valueChanged.connect(lambda _v: self._update_fit_hint())
-        self.speed.sliderReleased.connect(self._remember_voice)
+        self.speed.valueChanged.connect(self._remember_voice)   # slider, keys, "Dùng 1.30×"
 
         ll.addWidget(_hline())
         ll.addWidget(label("Âm thanh bạn muốn nghe", "h3"))
@@ -834,7 +834,11 @@ class RenderView(QWidget):
             self.voice.setCurrentIndex(i)
             self.voice.blockSignals(False)
         rate = saved_rate(self._job) if self._job is not None else None
+        self.speed.blockSignals(True)                 # restoring is not a new choice
         self.speed.setValue(int(round((rate or 1.0) * 100)))
+        self.speed.blockSignals(False)
+        self.speed_lbl.setText(f"{self.speed.value() / 100:.2f}×")
+        self._update_fit_hint()
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts."""
