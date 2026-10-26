@@ -279,6 +279,8 @@ class Timeline(QWidget):
             c = self._cues[idx]
             if not c.locked:              # locked timing: select only, never drag
                 self._drag = (idx, mode, x, c.start, c.end)
+                if mode == "move":        # the open hand closes while the cue is held
+                    self.setCursor(Qt.ClosedHandCursor)
                 self.dragStarted.emit()   # before any mutation — snapshot the pre-drag state
             self.update()
         else:
@@ -315,6 +317,8 @@ class Timeline(QWidget):
         if self._drag:
             idx = self._drag[0]
             self._drag = None
+            if self.cursor().shape() == Qt.ClosedHandCursor:
+                self.setCursor(Qt.OpenHandCursor)    # still over the cue it let go of
             self._update_dur()
             self.dragFinished.emit(idx)
 

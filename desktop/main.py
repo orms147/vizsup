@@ -29,6 +29,7 @@ from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
 from desktop.views.render_view import RenderView
+from desktop.widgets import pointer
 from desktop.widgets.chrome import AppNav, StatusBar, Toast
 from desktop.worker import PipelineWorker
 
@@ -908,6 +909,9 @@ def main() -> int:
     _install_exit_tracing(app)
     load_fonts(app)
     app.setStyleSheet(qss())
+    # hand cursor on everything clickable + the hover glow ("hover_glow": false in
+    # storage/ui_state.json turns the glow off)
+    pointer.install(app, glow_enabled=store.load_ui_state().get("hover_glow", True) is not False)
     win = MainWindow()
     win.show()
     return app.exec()

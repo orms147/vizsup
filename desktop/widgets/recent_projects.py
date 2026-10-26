@@ -19,6 +19,7 @@ from desktop.icons import pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
+from desktop.widgets.pointer import glow
 
 THUMB_W, THUMB_H = 50, 72
 
@@ -61,6 +62,7 @@ class _Row(QFrame):
             f"QFrame#recentRow{{background:transparent;border:none;border-bottom:1px solid "
             f"{V2['line_soft']};border-radius:0;}}"
             f"QFrame#recentRow:hover{{background:{V2['panel']};}}")
+        glow(self, corner=0)
         self._id = info["id"]
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 12, 0, 14)
@@ -152,6 +154,7 @@ class _GroupRow(QFrame):
             f"QFrame#recentRow{{background:transparent;border:none;border-bottom:1px solid "
             f"{V2['line_soft']};border-radius:0;}}"
             f"QFrame#recentRow:hover{{background:{V2['panel']};}}")
+        glow(self, corner=0)
         self._id = info["id"]
         self._parts = info.get("parts") or []
         self._total = int(info.get("total") or len(self._parts))
