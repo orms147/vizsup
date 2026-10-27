@@ -244,6 +244,7 @@ class AppNav(QFrame):
     settingsClicked = Signal()
     keysClicked = Signal()
     primaryClicked = Signal()
+    libraryClicked = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -277,6 +278,11 @@ class AppNav(QFrame):
         self.keys_btn = icon_button("Keyboard", "Phím tắt (?)", size=17)
         self.keys_btn.clicked.connect(self.keysClicked)
         h.addWidget(self.keys_btn)
+        self.library_btn = button("Thư viện", "FolderOpen", variant="ghost",
+                                  tip="Mọi dự án trên máy: xem lại, mở tiếp, dọn dung lượng")
+        self.library_btn.setCheckable(True)
+        self.library_btn.clicked.connect(self.libraryClicked)
+        h.addWidget(self.library_btn)
         self.settings_btn = button("Cài đặt", "Settings2", variant="ghost")
         self.settings_btn.clicked.connect(self.settingsClicked)
         h.addWidget(self.settings_btn)

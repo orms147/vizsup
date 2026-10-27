@@ -258,6 +258,7 @@ class RecentProjects(QWidget):
     groupResumeRequested = Signal(str)
     groupJoinRequested = Signal(str)
     groupDeleteRequested = Signal(str)
+    libraryRequested = Signal()          # "Xem tất cả (N)" → the Thư viện page
 
     def __init__(self) -> None:
         super().__init__()
@@ -272,6 +273,13 @@ class RecentProjects(QWidget):
         head.addStretch(1)
         self.count = label("", "small")
         head.addWidget(self.count)
+        self.all_btn = button("Xem tất cả", variant="link",
+                              tip="Thư viện: mọi dự án, dung lượng, xem lại và xóa")
+        self.all_btn.setStyleSheet(f"QPushButton#link{{color:{V2['purple_bright']};"
+                                   f"font-size:12px;padding:0;}}"
+                                   f"QPushButton#link:hover{{color:{V2['text']};}}")
+        self.all_btn.clicked.connect(self.libraryRequested)
+        head.addWidget(self.all_btn)
         v.addLayout(head)
         v.addSpacing(10)
         self._list = QVBoxLayout()
@@ -303,7 +311,11 @@ class RecentProjects(QWidget):
         self._rows.clear()
         self._groups.clear()
         jobs = store.list_projects(limit=6)
+        total = len(store.library_items())
         self.count.setText(f"{len(jobs)} dự án")
+        self.count.setVisible(not total)
+        self.all_btn.setText(f"Xem tất cả ({total})")
+        self.all_btn.setVisible(total > 0)
         self._empty.setVisible(not jobs)
         for j in jobs:
             if j.get("kind") == "group":
