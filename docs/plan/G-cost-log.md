@@ -45,6 +45,19 @@ travisvn/openai-edge-tts #61). Before `2e3b405` that silently dropped 417/717 li
 retries with a shared backoff and stops with "đã tạo X/Y câu" after a streak. A 717-line dub
 took several clicks of "Dựng lại". Render: local (NVENC when available) — no API spend.
 
+### Final render (2026-10-27 08:39 → 08:56, 17 min, 1080p, NVENC)
+
+| | 1.0× preview (no warning) | final: 1.3× + bulk shorten at 1.3× |
+|---|---|---|
+| lines sped up / flagged | 643 / 603 | 437 / 61 |
+| late lines (> 0.2 s) | 522 | 61 |
+| speech trimmed | 297 s | 36 s |
+| max carry | 4.2 s | 2.8 s |
+
+Root cause of the 1.0× result: the fit estimate assumed 4.8 words/s; edge-tts NamMinh speaks
+2.8 (`cb9ad02` → 3.0 + a speed suggestion on the render page). Output: `output.mp4`
+1920×1080, 4.8 Mb/s, 27:50 (incl. a 9 s commentary pause); exports .srt / .mkv (soft ASS) checked.
+
 ## Where the money goes → candidates for the cost pass
 
 1. **Refine model ≈ 86% of the run.** kimi-k3 refine on 756 lines = $0.25. Options to measure:
