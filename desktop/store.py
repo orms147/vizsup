@@ -488,8 +488,24 @@ def library_details(items: list[dict]) -> dict[str, dict]:
                 approved = approval.is_approved(Job(id=d.name, work_dir=d))
             except Exception:  # noqa: BLE001 - a status must never break the list
                 approved = False
-        out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved}
+        out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved,
+                         "duration": None if it.get("duration") else _probe_length(it)}
     return out
+
+
+def _probe_length(item: dict) -> float | None:
+    """A local-file project has no duration in its metadata: read it from the video."""
+    from app.pipeline.assemble import probe_duration
+
+    for d in item.get("dirs") or []:
+        for name in ("source.mp4", "output.mp4"):
+            p = Path(d) / name
+            if p.exists():
+                try:
+                    return probe_duration(p) or None
+                except Exception:  # noqa: BLE001 - a length must never break the list
+                    return None
+    return None
 
 
 def library_thumbs(items: list[dict]) -> dict[str, str | None]:

@@ -206,6 +206,7 @@ class _Row(QFrame):
         dur = label(duration_label(item["duration"]) if item.get("duration") else "—", "mono")
         dur.setFixedWidth(W_DUR)
         h.addWidget(dur)
+        self.dur_lbl = dur
         st = QWidget()
         st.setObjectName("bare")
         st.setFixedWidth(W_STATUS)
@@ -273,6 +274,8 @@ class _Row(QFrame):
 
     def apply_details(self, d: dict) -> None:
         self.size_lbl.setText(fmt_size(d.get("size")))
+        if d.get("duration") and not self.item.get("duration"):
+            self.dur_lbl.setText(duration_label(d["duration"]))     # measured (local files)
         heavy = d.get("heavy") or 0
         self.size_lbl.setToolTip(f"File nặng xóa được: {fmt_size(heavy)}" if heavy else
                              "Không còn file nặng nào để dọn")
