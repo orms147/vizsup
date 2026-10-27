@@ -15,11 +15,26 @@ USUAL = {"subtitle_source": "asr", "asr": "audio_llm", "translator": "openrouter
          "refine": "openrouter", "auto_context": True, "ai_review": True}
 
 
+@pytest.fixture(autouse=True)
+def _package(monkeypatch):
+    """The default model package, no hand-picked role models (the developer's .env must
+    not change what these tests price)."""
+    from app.config import settings
+    from app.providers.roles import ROLES
+
+    monkeypatch.setattr(settings, "model_preset", "")
+    for r in ROLES.values():
+        monkeypatch.setattr(settings, r.attr, "")
+    return settings
+
+
 @pytest.mark.parametrize("seconds, cost, wall", [(137, 0.045, 87), (329, 0.043, 114),
                                                  (1662, 0.285, 287)])
-def test_the_measured_runs_fall_inside_the_range(seconds, cost, wall):
-    """Real runs with the user's usual options: vlog, song (2026-10-14) and a 27:42 tech
-    review (2026-10-26, job 703e…: gate at 287 s, $0.272 + ~$0.0125 Whisper word track)."""
+def test_the_measured_runs_fall_inside_the_range(seconds, cost, wall, _package):
+    """Real runs with the user's usual options and Kimi K3 as refiner (the package "kimi"
+    = the defaults until 2026-10-27): vlog, song (2026-10-14) and a 27:42 tech review
+    (2026-10-26, job 703e…: gate at 287 s, $0.272 + ~$0.0125 Whisper word track)."""
+    _package.model_preset = "kimi"
     e = est.estimate(seconds, USUAL)
     assert e.cost[0] <= cost <= e.cost[1]
     assert e.seconds[0] <= wall <= e.seconds[1]
@@ -230,3 +245,67 @@ def test_local_ocr_time_follows_the_gpu_and_the_fast_option(monkeypatch):
     assert cpu.seconds[1] > gpu.seconds[1] > fast.seconds[1]
     ocr_part = est.OCR_GPU_SEC_PER_MIN[1] * 30
     assert gpu.seconds[1] - fast.seconds[1] == pytest.approx(ocr_part / 2)
+
+
+# --- 2026-10-27 cost pass: the estimate follows the model package --------------------
+
+def test_the_default_package_prices_the_cost_pass_measurement():
+    """Cân bằng on the 27:42 review: measured $0.0016/min to the gate + $0.0007 brief
+    (120-line bench extrapolated, docs/plan/G-cost-log.md) — ~1/6 of the Kimi run."""
+    e = est.estimate(1662, USUAL)
+    assert e.cost[0] <= 0.0016 * 27.7 + 0.0007 <= e.cost[1]
+    assert e.cost[1] < 0.285 / 2
+    assert any("Gói mô hình: Cân bằng" in n for n in e.notes)
+
+
+@pytest.mark.parametrize("key", ["economy", "balanced", "quality", "kimi"])
+def test_every_package_shows_a_cost_its_estimate_agrees_with(key, _package):
+    """The $/minute shown next to a package in Settings lies inside what the before-Start
+    estimate says for a long talk with that package."""
+    from app.providers import presets
+
+    _package.model_preset = key
+    p = presets.PRESETS[key]
+    e = est.estimate(1662, USUAL)
+    assert e.cost[0] <= p.usd_per_min * 1662 / 60 + p.usd_per_video <= e.cost[1]
+
+
+def test_packages_order_by_price(_package):
+    his = {}
+    for key in ("economy", "balanced", "quality", "kimi"):
+        _package.model_preset = key
+        his[key] = est.estimate(600, USUAL).cost[1]
+    assert his["economy"] <= his["balanced"] < his["kimi"]
+    assert his["kimi"] > 3 * his["balanced"]
+
+
+def test_an_unmeasured_model_is_priced_wide_and_said_so(_package):
+    _package.model_refine = "someone/new-model-9"
+    e = est.estimate(600, USUAL)
+    assert any("someone/new-model-9" in n for n in e.notes)
+    assert any("tự chọn" in n for n in e.notes)
+    no_refine = est.estimate(600, {**USUAL, "refine": None})
+    assert e.cost[1] - no_refine.cost[1] == pytest.approx(est.UNKNOWN_LINE_COST[1] * 10 * 28,
+                                                          abs=1e-3)
+
+
+def test_kimi_projects_do_not_calibrate_the_cost_of_a_cheaper_package(tmp_path, _package):
+    """History from runs paid with Kimi K3 would push the cheap package's estimate up to
+    the 4× clamp; those runs still calibrate the time."""
+    _package.model_preset = "kimi"
+    for k, minutes in enumerate((2, 5, 10)):
+        cost, secs, _n = est._model(minutes, USUAL)
+        d = _project(tmp_path, f"k{k}", minutes=minutes, cost=_mid(cost), secs=2 * _mid(secs))
+        (d / "usage.json").write_text(json.dumps(
+            {"models": {"moonshotai/kimi-k3": {"calls": 3, "cost": _mid(cost)}},
+             "seconds": {"gate": 2 * _mid(secs)}}), encoding="utf-8")
+    hist = est.history(tmp_path)
+    assert all(h["models"] == ["moonshotai/kimi-k3"] for h in hist)
+    kimi = est.estimate(1662, USUAL, history=hist)
+    assert kimi.cost == pytest.approx(est.estimate(1662, USUAL).cost, rel=1e-3)   # ratio 1
+    _package.model_preset = ""
+    cheap = est.estimate(1662, USUAL, history=hist)
+    static = est.estimate(1662, USUAL)
+    assert cheap.basis == "từ 3 dự án trước"
+    assert cheap.cost == pytest.approx(static.cost, rel=1e-3)
+    assert cheap.seconds == pytest.approx((2 * static.seconds[0], 2 * static.seconds[1]), abs=1)

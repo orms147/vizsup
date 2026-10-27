@@ -412,7 +412,22 @@ class SettingsView(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(14, 12, 14, 12)
         cl.setSpacing(6)
+        from app.providers import presets
         from app.providers.roles import ROLES
+
+        # the package: one choice sets every text role (app/providers/presets.py)
+        cl.addWidget(label("Gói mô hình", "h3"))
+        self.preset_combo = QComboBox()
+        for p in presets.PRESETS.values():
+            self.preset_combo.addItem(f"{p.label} — ≈ ${p.usd_per_min:.4f}/phút", p.key)
+        self.preset_combo.addItem("Tùy chỉnh — bạn tự chọn model cho từng việc", presets.CUSTOM)
+        self.preset_combo.setToolTip("Chi phí đo thật 27/10/2026 tới bước sửa phụ đề (nhận dạng "
+                                     "giọng nói + dịch + AI soát), vlog nói nhiều ~27 câu/phút.")
+        self.preset_combo.currentIndexChanged.connect(self._preset_chosen)
+        cl.addWidget(self.preset_combo)
+        self.preset_hint = label("", "small", wrap=True)
+        cl.addWidget(self.preset_hint)
+        self._base_preset = presets.DEFAULT     # the package the role rows fall back to
 
         head = QHBoxLayout()
         head.addWidget(label("Mô hình cho từng việc (OpenRouter)", "h3"), 1)
@@ -431,19 +446,74 @@ class SettingsView(QWidget):
             combo = QComboBox()
             combo.setEditable(True)
             combo.setMinimumWidth(280)
+            combo.addItems([""] + presets.known_models())   # any OpenRouter id can be typed
             combo.lineEdit().setPlaceholderText(f"mặc định · {r.default}")
-            combo.setToolTip(r.hint + "\nĐể trống = dùng mặc định đã thử nghiệm.")
+            combo.setToolTip(r.hint + "\nĐể trống = theo gói mô hình đã chọn. Gõ được mọi id "
+                             "OpenRouter (vd. openai/gpt-6-luna).")
             combo.editTextChanged.connect(self._mark_dirty)
+            combo.editTextChanged.connect(lambda _t, k=r.key: self._role_edited(k))
             self.role_combos[r.key] = combo
             grid.addWidget(name, row, 0)
             grid.addWidget(combo, row, 1)
         grid.setColumnStretch(1, 1)
         cl.addLayout(grid)
-        self.model_status = label("Để trống = mặc định chọn theo thử nghiệm 13/10/2026 (8 model "
-                                  "Trung Quốc trên 2 video thật).", "small")
+        self.model_status = label("Để trống = theo gói đã chọn (chấm mù 27/10/2026 trên video "
+                                  "thật, xem docs/plan/G-cost-log.md).", "small")
         self.model_status.setWordWrap(True)
         cl.addWidget(self.model_status)
         return card
+
+    # --- model package ----------------------------------------------------------------
+    def _show_package(self, key: str) -> None:
+        """Select ``key`` in the package list without side effects; refresh hint and the
+        role rows' placeholders (what a blank row will use)."""
+        from app.providers import presets
+        from app.providers.roles import ROLES
+
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(key)))
+        self.preset_combo.blockSignals(False)
+        base = presets.PRESETS[self._base_preset]
+        if key == presets.CUSTOM:
+            self.preset_hint.setText(f"Tùy chỉnh: các ô để trống vẫn theo gói “{base.label}”. "
+                                     f"Chọn lại một gói ở trên để bỏ các lựa chọn riêng.")
+        else:
+            self.preset_hint.setText(f"{base.hint}\n{base.cost_label()} (đo thật 27/10/2026).")
+        models = presets.models(self._base_preset)
+        for k, combo in self.role_combos.items():
+            src = "theo gói" if k in models else "mặc định"     # vision / ocr: not packaged
+            combo.lineEdit().setPlaceholderText(f"{src} · {models.get(k) or ROLES[k].default}")
+
+    def _preset_chosen(self, _i: int) -> None:
+        from app.providers import presets
+        from app.providers.roles import ROLES
+
+        key = self.preset_combo.currentData()
+        if key == presets.CUSTOM:
+            # show what each role uses now, ready to edit
+            models = presets.models(self._base_preset)
+            for k in presets.TEXT_ROLES:
+                combo = self.role_combos[k]
+                if not combo.currentText().strip():
+                    combo.blockSignals(True)
+                    combo.setEditText(models.get(k) or ROLES[k].default)
+                    combo.blockSignals(False)
+        else:
+            # a package replaces every hand-picked text-role model
+            self._base_preset = key
+            for k in presets.TEXT_ROLES:
+                combo = self.role_combos[k]
+                combo.blockSignals(True)
+                combo.setEditText("")
+                combo.blockSignals(False)
+        self._show_package(key)
+        self._mark_dirty()
+
+    def _role_edited(self, role: str) -> None:
+        from app.providers import presets
+
+        if role in presets.TEXT_ROLES and self.role_combos[role].currentText().strip():
+            self._show_package(presets.CUSTOM)
 
     # --- Tải video: yt-dlp upkeep and cookie age -------------------------------------
     def _ytdlp_card(self) -> QFrame:
@@ -682,6 +752,10 @@ class SettingsView(QWidget):
             combo.blockSignals(True)
             combo.setEditText(getattr(settings, ROLES[key].attr, "") or "")
             combo.blockSignals(False)
+        from app.providers import presets
+
+        self._base_preset = presets.active().key
+        self._show_package(presets.CUSTOM if presets.is_custom() else self._base_preset)
         self._update_promo_state()
         self._update_cookie_state()
         self._set_dirty(False)
@@ -817,6 +891,7 @@ class SettingsView(QWidget):
         role_models = {k: c.currentText().strip() for k, c in self.role_combos.items()}
         for k, v in role_models.items():
             updates[f"MODEL_{k.upper()}"] = v
+        updates["MODEL_PRESET"] = self._base_preset
         # options: always write, INCLUDING empties — clearing one is a real intent
         # ("no cookie browser", "resolve ffmpeg from PATH") and must round-trip.
         for env, _n, _a, _k, _h, _c in OPTIONS:
@@ -827,6 +902,7 @@ class SettingsView(QWidget):
             setattr(settings, ATTR_BY_ENV[env], f.text().strip())
         for k, v in role_models.items():
             setattr(settings, ROLES[k].attr, v)
+        settings.model_preset = self._base_preset
         for env, attr in OPT_ATTR_BY_ENV.items():
             value = self._opt_value(env)
             # vizsup_storage_dir is typed Path; assigning a str breaks every "/" use

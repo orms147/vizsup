@@ -41,6 +41,30 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
+# Chinese punctuation a model sometimes leaves in a Vietnamese line (2026-10-27 cost pass:
+# GPT-6 Luna refining its own draft returned "Bọn mình đoán là Duo】【。"). Mapped to the
+# Latin mark or dropped; Chinese CHARACTERS are left alone — that is a real miss to review.
+_CJK_PUNCT = str.maketrans({"。": ". ", "，": ", ", "、": ", ", "！": "! ", "？": "? ",
+                            "：": ": ", "；": "; ", "（": " (", "）": ") ",
+                            "【": "", "】": "", "「": "", "」": "", "『": "", "』": "",
+                            "《": "", "》": ""})
+_HANZI = re.compile(r"[㐀-䶿一-鿿]")
+
+
+def clean_vi(text: str) -> str:
+    """A translated line without stray Chinese punctuation (and the space it leaves).
+    A line that still holds Chinese characters (passthrough, an untranslated miss) is
+    returned as is."""
+    if not text or text.isascii() or _HANZI.search(text):
+        return text
+    out = text.translate(_CJK_PUNCT)
+    if out == text:
+        return text
+    out = re.sub(r"\s+([.,!?:;)])", r"\1", out)
+    out = re.sub(r"([.,!?:;])\1+", r"\1", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def dedupe_adjacent(cues: list[Cue], sim: float = 0.85) -> list[Cue]:
     """Merge consecutive (near-)identical cues into one spanning the combined time.
 
@@ -353,7 +377,8 @@ def translate_cues(
     if auto_shorten:
         vi = _autoshorten(cues, vi, refine or draft, log=log)
 
-    return [Cue(index=c.index, start=c.start, end=c.end, text=t) for c, t in zip(cues, vi)]
+    return [Cue(index=c.index, start=c.start, end=c.end, text=clean_vi(t))
+            for c, t in zip(cues, vi)]
 
 
 SHORTEN_BATCH_INSTRUCTION = (

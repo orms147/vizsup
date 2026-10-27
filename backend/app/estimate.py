@@ -4,10 +4,12 @@ Competing tools are criticised above all for surprise charges (docs/plan/F-roadm
 The estimate is a range, because the number of subtitle lines is only known after the
 Chinese subtitles exist (a song has ~8 lines a minute, a talking vlog ~28).
 
-Cost base rates come from two real runs with the default role models on 2026-10-14 (copies
-of a 137 s vlog: 63 lines, $0.045, 87 s; a 329 s song: 42 lines, $0.043, 114 s): the cost
-is mostly a fixed context brief plus a per-line refine pass (Kimi K3 output tokens), not
-the audio.
+Cost = per-line passes priced by the model each role uses NOW (the Settings package +
+the user's own picks: ``LINE_COST`` / ``BRIEF_COST``, measured per model) + the audio.
+With Kimi K3 as refiner (runs of 2026-10-14: a 137 s vlog, 63 lines, $0.045; a 329 s
+song, $0.043; 2026-10-26: 27:42, $0.285) the refine pass was ~86% of a run; with the
+2026-10-27 default package the cloud ASR is the biggest part (~$0.0016 / minute in all).
+A model nobody measured gets a wide range and a note.
 
 Time: those two short runs were first fitted with per-minute rates only, which charged
 their fixed latency (first request of every stage, brief, VAD) to every minute — a 27:42
@@ -30,11 +32,28 @@ from pathlib import Path
 
 LINES_PER_MIN = (8.0, 28.0)        # song … talking vlog (measured 2026-10-14; 27/min 2026-10-26)
 
-# USD, default role models (app/providers/roles.py), measured / derived 2026-10-14
-BRIEF = (0.010, 0.020)             # context brief (Kimi K3) + the ≤60 s listen (Qwen-Omni)
-REFINE_PER_LINE = (0.0003, 0.0006)  # Kimi K3 refine
-DRAFT_PER_LINE = (0.00002, 0.00006)  # DeepSeek V4.1 Flash
-QA_PER_LINE = (0.00001, 0.00002)   # Qwen 3.8 Flash review
+# USD per subtitle line for ONE translate pass (draft, or refine) by the role's model —
+# incl. its share of the pre-gate auto-shorten. Measured, not list prices: 2026-10-27 cost
+# pass (120 lines of job 703e…, docs/plan/G-cost-log.md) and the 2026-10-26 full run (Kimi
+# K3: $0.248 / 756 lines; today's list price, 20 $/M out, would make it ~$0.0006).
+LINE_COST: dict[str, tuple[float, float]] = {
+    "deepseek/deepseek-v4.1-flash": (0.000012, 0.000020),       # 120 lines $0.0015; run $0.0135/756
+    "openai/gpt-6-luna": (0.000012, 0.000020),                  # draft $0.0019, refine $0.0018 /120
+    "deepseek/deepseek-v4.1-flash-1017": (0.000018, 0.000030),  # refine $0.0026 / 120
+    "qwen/qwen3.8-flash": (0.00001, 0.00002),                   # AI review: $0.0058 / 756 pairs
+    "moonshotai/kimi-k3": (0.0003, 0.0006),
+}
+UNKNOWN_LINE_COST = (0.00002, 0.0006)   # a model nobody measured: cheap … Kimi-level
+# USD per context brief (one call, ~5k tokens of transcript in, ~0.3–0.7k out) by model
+BRIEF_COST: dict[str, tuple[float, float]] = {
+    "deepseek/deepseek-v4.1-flash-1017": (0.0005, 0.0015),      # $0.0007 measured
+    "deepseek/deepseek-v4.1-flash": (0.0004, 0.0012),           # $0.0005
+    "openai/gpt-6-luna": (0.0005, 0.0015),                      # $0.0008
+    "qwen/qwen3.8-flash": (0.0005, 0.0015),
+    "moonshotai/kimi-k3": (0.009, 0.019),
+}
+UNKNOWN_BRIEF_COST = (0.0005, 0.02)
+LISTEN = (0.0002, 0.001)           # the ≤60 s "who is speaking" listen (Qwen-Omni)
 ASR_PER_MIN = (0.0005, 0.0015)     # Qwen-Omni transcript (~$0.0002, 2026-10-26: $0.0048 for
 #                                    27.7 min) + Whisper word track ($0.00045 on OpenRouter)
 OCR_CLOUD_PER_MIN = (0.0007, 0.0012)  # qwen3.7-flash tiles: 137 s → $0.002
@@ -109,8 +128,23 @@ def _either(a: Range, b: Range) -> Range:
     return min(a[0], b[0]), max(a[1], b[1])
 
 
+def _role_models() -> dict[str, str]:
+    """The OpenRouter model each priced role uses right now (package + the user's picks)."""
+    from app.providers import roles
+
+    return {r: roles.model_for(r) for r in ("draft", "refine", "brief", "qa")}
+
+
+def _line_cost(model: str, notes: list[str]) -> Range:
+    if model in LINE_COST:
+        return LINE_COST[model]
+    notes.append(f"Chưa đo giá model {model} — ước tính rộng (rẻ … ngang Kimi K3).")
+    return UNKNOWN_LINE_COST
+
+
 def _model(minutes: float, opts: dict) -> tuple[Range, Range, list[str]]:
-    """(cost, seconds, notes) of the static model for these start-screen options."""
+    """(cost, seconds, notes) of the static model for these start-screen options, priced
+    with the role models chosen now (Settings → AI và mô hình)."""
     lines = (minutes * LINES_PER_MIN[0], minutes * LINES_PER_MIN[1])
     src = opts.get("subtitle_source") or "auto"
     translator = opts.get("translator") or "passthrough"
@@ -140,15 +174,23 @@ def _model(minutes: float, opts: dict) -> tuple[Range, Range, list[str]]:
         cost, secs = (0.0, 0.0), SEC_FIXED
 
     if translator != "passthrough":
-        cost = (cost[0] + DRAFT_PER_LINE[0] * lines[0], cost[1] + DRAFT_PER_LINE[1] * lines[1])
+        models = _role_models()
+        priced: list[str] = []          # each unmeasured model is noted once
+        per_line = [_line_cost(models["draft"], priced)]
         if opts.get("refine"):
-            cost = (cost[0] + REFINE_PER_LINE[0] * lines[0],
-                    cost[1] + REFINE_PER_LINE[1] * lines[1])
+            per_line.append(_line_cost(models["refine"], priced))
         if opts.get("ai_review", True):
-            cost = (cost[0] + QA_PER_LINE[0] * lines[0], cost[1] + QA_PER_LINE[1] * lines[1])
+            per_line.append(_line_cost(models["qa"], priced))
+        for lo, hi in per_line:
+            cost = (cost[0] + lo * lines[0], cost[1] + hi * lines[1])
         secs = _plus(_plus(secs, TRANSLATE_SEC_FIXED), TRANSLATE_SEC_PER_MIN, minutes)
         if brief:
-            cost, secs = _plus(cost, BRIEF), _plus(secs, BRIEF_SEC)
+            b = BRIEF_COST.get(models["brief"])
+            if b is None:
+                b = UNKNOWN_BRIEF_COST
+                priced.append(f"Chưa đo giá model {models['brief']} — ước tính rộng.")
+            cost, secs = _plus(_plus(cost, b), LISTEN), _plus(secs, BRIEF_SEC)
+        notes.extend(dict.fromkeys(priced))
         if translator != "openrouter":
             notes.append("Ước tính theo model mặc định của OpenRouter — nhà cung cấp khác giá khác.")
     else:
@@ -163,6 +205,11 @@ def estimate(duration_s: float, opts: dict, *, history: list[dict] | None = None
     cost, secs, notes = _model(minutes, opts)
     basis = STATIC_BASIS
     translator = opts.get("translator") or "passthrough"
+    if translator == "openrouter":
+        from app.providers import presets
+
+        own = " + model bạn tự chọn" if presets.is_custom() else ""
+        notes.insert(0, f"Gói mô hình: {presets.active().label}{own} (Cài đặt → AI và mô hình).")
     learned = _from_history(history, opts) if translator != "passthrough" else None
     if learned is not None:
         kc, ks, n = learned
@@ -187,10 +234,14 @@ def _from_history(history: list[dict] | None, opts: dict):
     def mid(r: Range) -> float:
         return (r[0] + r[1]) / 2
 
+    current = set(_role_models().values())
     kc, ks = [], []
     for h in rows:
         cost, secs, _notes = _model(h["minutes"], h.get("opts") or opts)
-        if mid(cost) > 0 and h.get("cost", 0) > 0:
+        # a project paid with OTHER priced models (Kimi K3 before the 2026-10-27 packages)
+        # says nothing about what the current ones cost — its time still calibrates
+        used = {m for m in h.get("models") or () if m in LINE_COST or m in BRIEF_COST}
+        if mid(cost) > 0 and h.get("cost", 0) > 0 and used <= current:
             kc.append(h["cost"] / mid(cost))
         ks.append(h["seconds"] / mid(secs))
 
@@ -243,9 +294,11 @@ def history(storage: Path, limit: int = 30) -> list[dict]:
             continue
         dur = _duration(d, meta if isinstance(meta, dict) else {})
         gate = float((data.get("seconds") or {}).get("gate") or 0)
-        cost = sum(float(m.get("cost") or 0) for m in (data.get("models") or {}).values())
+        used = data.get("models") or {}
+        cost = sum(float(m.get("cost") or 0) for m in used.values())
         if dur > 0 and gate > 0:
-            out.append({"minutes": dur / 60, "cost": cost, "seconds": gate, "opts": _opts(d)})
+            out.append({"minutes": dur / 60, "cost": cost, "seconds": gate, "opts": _opts(d),
+                        "models": sorted(used)})
         if len(out) >= limit:
             break
     return out
