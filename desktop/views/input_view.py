@@ -574,7 +574,7 @@ class InputView(QWidget):
         g.addWidget(self.ocr_fast, 8, 1)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
-        g.addWidget(self.asr_note, 9, 0, 1, 2)
+        g.addWidget(self.asr_note, 10, 0, 1, 2)
         for w in (self.source, self.ocr_region, self.ocr_engine, self.draft, self.refine,
                   self.asr, self.tts):
             compact_combo(w, 14)          # long engine names elide, never widen the panel

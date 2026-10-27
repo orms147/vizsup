@@ -161,3 +161,25 @@ def test_ocr_fast_rides_in_the_options(view):
     assert view._collect_opts()["ocr_fast"] is False
     view.ocr_fast.setChecked(True)
     assert view._collect_opts()["ocr_fast"] is True
+
+
+def test_option_checkboxes_and_notes_never_overlap(view):
+    """The "Tách vế theo nhịp nói" box was placed on the audio-privacy note's row and drew
+    over it (2026-10-27). Lay the start page out at a real size and compare every pair of
+    option boxes and notes in the same coordinates."""
+    from PySide6.QtCore import QRect
+
+    view.opt_btn.setChecked(True)           # narrow layout: the panel shows when its button is on
+    view.resize(1200, 1000)
+    view.show()
+    QApplication.processEvents()
+    names = ("auto_context", "auto_snap", "clause_split", "ai_review", "ai_frames",
+             "extract_terms", "ocr_proofread", "split_long", "ocr_fast", "asr_note")
+    rects = {}
+    for n in names:
+        w = getattr(view, n)
+        assert w.isVisibleTo(view), n
+        rects[n] = QRect(w.mapTo(view, w.rect().topLeft()), w.size())
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            assert not rects[a].intersects(rects[b]), f"{a} overlaps {b}"
