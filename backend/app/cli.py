@@ -225,11 +225,12 @@ def cmd_render(args: argparse.Namespace) -> int:
     if audio_mode == "keep_music":
         from app.pipeline import separate
 
-        print("[render] separating background music (Demucs) ...")
+        print("[render] separating the voice from the background music ...")
         try:
             separate.separate_background(job, log=print)   # before TTS (both heavy)
-        except Exception as exc:  # noqa: BLE001 - degrade to mix in assemble
-            print(f"[render] keep-music unavailable ({exc}) -> will mix instead")
+        except Exception as exc:  # noqa: BLE001 - degrade to duck in assemble
+            print(f"[render] keep-music unavailable ({exc}) -> keeping the original audio "
+                  "ducked under the dub instead")
 
     print(f"[render] synthesizing Vietnamese voice (tts={args.tts}) ...")
     segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print)

@@ -51,11 +51,46 @@ try:
 except Exception:  # noqa: BLE001
     _HAVE_MM = False
 
-MODES = (("replace", "Mic", "Thay giọng gốc", "Chỉ nghe giọng Việt"),
-         ("mix", "Volume2", "Trộn hai giọng", "Giữ tiếng gốc nhẹ"),
-         ("duck", "SlidersHorizontal", "Giảm nền tự động", "Nền nhỏ khi có lời"),
-         ("keep_music", "Music2", "Giữ nhạc nền", "AI tách lời gốc"),
-         ("original", "Captions", "Giữ giọng gốc", "Không lồng tiếng, chỉ phụ đề — hợp video hát"))
+# What each card KEEPS of the original sound (user report 2026-10-27: the old default
+# "replace" silently dropped the music and effects). "mix" stays a backend/CLI mode but
+# is no card any more — "duck" does the same job with a voice-aware level.
+MODES = (("keep_music", "Music2", "Giữ nhạc nền & hiệu ứng",
+          "Bỏ giọng Trung (AI tách giọng), lồng tiếng Việt"),
+         ("duck", "SlidersHorizontal", "Giữ nguyên âm gốc + lồng tiếng",
+          "Giọng Việt đè lên; nhạc, hiệu ứng, giọng Trung nhỏ lại"),
+         ("replace", "Mic", "Chỉ giọng Việt", "Bỏ hết âm gốc — cả nhạc và hiệu ứng"),
+         ("original", "Captions", "Giữ giọng gốc (chỉ phụ đề)",
+          "Không lồng tiếng — hợp video hát"))
+MODE_TIPS = {
+    "keep_music": "AI tách giọng nói khỏi nhạc nền: giọng Trung bị bỏ, nhạc nền + hiệu ứng "
+                  "giữ nguyên, lồng tiếng Việt đặt lên trên. Tách một lần mỗi video (vài phút), "
+                  "lần dựng sau dùng lại.",
+    "duck": "Giữ toàn bộ âm gốc (nhạc, hiệu ứng, cả giọng Trung) ở mức nhỏ hơn một chút, và nhỏ "
+            "thêm khi giọng Việt nói — kiểu thuyết minh. Không cần cài thêm gì.",
+    "replace": "Chỉ còn giọng Việt: nhạc nền, hiệu ứng, tiếng động của video gốc đều mất. Thêm "
+               "nhạc của bạn ở tab Nhạc nền nếu muốn.",
+    "original": "Không tạo giọng Việt — giữ nguyên âm thanh gốc, chỉ đốt phụ đề.",
+}
+SEP_MISSING = ("“Giữ nhạc nền & hiệu ứng” cần bộ tách giọng AI — máy này chưa cài. Đang dùng "
+               "“Giữ nguyên âm gốc + lồng tiếng”: nhạc và hiệu ứng vẫn còn.")
+SEP_FALLBACK = ("Chưa có bộ tách giọng — khi dựng sẽ tự dùng “Giữ nguyên âm gốc + lồng tiếng” "
+                "(nhạc, hiệu ứng vẫn còn).")
+
+
+def default_audio_mode(separation: bool) -> str:
+    """The audio card a project starts on: keep the original music + effects either way —
+    without the Chinese voice when a separation engine is installed, else the whole
+    original sound ducked under the dub. Pure."""
+    return "keep_music" if separation else "duck"
+
+
+def _separation_available() -> bool:
+    try:
+        from app.pipeline import separate
+
+        return bool(separate.available())
+    except Exception:  # noqa: BLE001 - a broken engine install is just "not available"
+        return False
 FRAMES = (("Giữ nguyên khung hình gốc", "source"),
           ("Dọc 9:16 · TikTok / Reels / Shorts (1080×1920)", "tiktok"))
 COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
@@ -99,6 +134,7 @@ class ModeCard(QPushButton):
         self._desc = QLabel(desc)
         for w in (self._title, self._desc):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
+            w.setWordWrap(True)              # the names say what is kept — don't clip them
         col.addWidget(self._title)
         col.addWidget(self._desc)
         h.addLayout(col, 1)
@@ -106,6 +142,12 @@ class ModeCard(QPushButton):
         self.toggled.connect(self._paint_state)
         self._paint_state(False)
         glow(self, corner=7)
+
+    def set_desc(self, text: str) -> None:
+        self._desc.setText(text)
+
+    def desc(self) -> str:
+        return self._desc.text()
 
     def _paint_state(self, on: bool) -> None:
         c = V2["purple_bright"] if on else V2["secondary"]
@@ -160,9 +202,14 @@ class RenderView(QWidget):
     cancelRequested = Signal()
     approveRequested = Signal()        # locked state → re-approve
     joinRequested = Signal(str)        # a split video's group id → join the rendered parts
+    # "Giữ nhạc nền & hiệu ứng" needs a separation engine: the main window may wire this
+    # to an installer, then call set_separation_available(True)
+    installSeparationRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
+        self._sep_ok = False           # a voice/music separation engine is installed
+        self._mode_saved = False       # this project has the user's own audio choice
         self._out: str | None = None
         self._out_frame = "source"     # frame of the output.mp4 rendered this session
         self._showing_quick = False    # the result pane holds preview.mp4, not output.mp4
@@ -276,23 +323,33 @@ class RenderView(QWidget):
         self.mode_cards: dict[str, ModeCard] = {}
         for i, (key, ic, title, desc) in enumerate(MODES):
             mc = ModeCard(ic, title, desc)
-            if key == "keep_music":
-                mc.setToolTip("Tách lời khỏi nhạc nền bằng Demucs, thay lời bằng bản lồng tiếng "
-                              "nhưng GIỮ nhạc / hiệu ứng. Cần cài Demucs (.[audio]); nếu chưa tách "
-                              "được sẽ tự chuyển sang trộn.")
+            mc.setToolTip(MODE_TIPS.get(key, ""))
             self.audio_group.addButton(mc)
             self.mode_cards[key] = mc
-            if key == "original":
-                grid.addWidget(mc, i // 2, 0, 1, 2)        # full-width last row
-            else:
-                grid.addWidget(mc, i // 2, i % 2)
-        self.mode_cards["replace"].setChecked(True)
+            grid.addWidget(mc, i // 2, i % 2)
+        self.mode_cards[default_audio_mode(False)].setChecked(True)
         self.audio_group.buttonToggled.connect(lambda *_: self._sync_audio_enabled())
+        self.audio_group.buttonClicked.connect(self._on_mode_clicked)   # the user's own choice
         ll.addLayout(grid)
+        # no separation engine: say so next to the cards, offer the install hook
+        self.sep_box = QFrame()
+        sb = QHBoxLayout(self.sep_box)
+        sb.setContentsMargins(0, 0, 0, 0)
+        sb.setSpacing(8)
+        self.sep_note = label(SEP_MISSING, "small", wrap=True)
+        sb.addWidget(self.sep_note, 1)
+        self.sep_btn = button("Cài bộ tách giọng…", "Download", variant="ghost", small=True,
+                              tip="Cài công cụ AI tách giọng nói khỏi nhạc nền (một lần)")
+        self.sep_btn.clicked.connect(self.installSeparationRequested)
+        sb.addWidget(self.sep_btn, 0, Qt.AlignTop)
+        ll.addWidget(self.sep_box)
+        self._show_separation()
         self.orig_vol, self.orig_vol_lbl = self._slider(ll, "Âm lượng gốc", 0, 150, 100,
                                                         lambda v: f"{v}%")
         self.dub_vol, self.dub_vol_lbl = self._slider(ll, "Giọng tiếng Việt", 50, 150, 100,
                                                       lambda v: f"{v}%")
+        self.music_lbl = label("", "small", wrap=True)          # the user's music clips
+        ll.addWidget(self.music_lbl)
         self._sync_audio_enabled()
 
         ll.addWidget(_hline())
@@ -608,6 +665,9 @@ class RenderView(QWidget):
             self._right_stack.setCurrentIndex(2 if self._out else 0)
         self._job = job
         self._cues = cues
+        self._sep_ok = _separation_available()
+        self._restore_audio_mode()
+        self._show_music()
         self._load_posting()
         if tts:
             self._tts = tts
@@ -805,19 +865,70 @@ class RenderView(QWidget):
 
     def suggest_original(self, singing: str | None) -> None:
         """E-8: a mostly-sung video starts on "Giữ giọng gốc" (once per job; the user's
-        own choice afterwards is kept)."""
+        own choice — this session or saved with the project — is kept)."""
         card = self.mode_cards["original"]
         card.setToolTip("AI nghe thấy video chủ yếu là hát — nên giữ giọng hát gốc."
-                        if singing == "yes" else "")
-        if singing == "yes" and not self._suggested:
+                        if singing == "yes" else MODE_TIPS["original"])
+        if singing == "yes" and not self._suggested and not self._mode_saved:
             self._suggested = True
             card.setChecked(True)
+
+    # --- audio mode: default, per-project memory, separation engine ------------------
+    def set_separation_available(self, on: bool) -> None:
+        """After an engine install (or removal): update the note, and move a project
+        that never chose to the new best default."""
+        self._sep_ok = bool(on)
+        if not self._mode_saved and self._audio_mode() != "original":
+            self.mode_cards[default_audio_mode(self._sep_ok)].setChecked(True)
+        self._show_separation()
+
+    def _restore_audio_mode(self) -> None:
+        """The project's saved choice (voice.json), else the default for this machine."""
+        saved = saved_audio_mode(self._job) if self._job is not None else None
+        self._mode_saved = saved in self.mode_cards
+        key = saved if self._mode_saved else default_audio_mode(self._sep_ok)
+        if not (self._suggested and not self._mode_saved):     # keep E-8's "original"
+            self.mode_cards[key].setChecked(True)
+        self._show_separation()
+
+    def _on_mode_clicked(self, _btn) -> None:
+        self._mode_saved = True
+        if self._job is not None:
+            _update_project_file(self._job, audio_mode=self._audio_mode())
+        self._show_separation()
+
+    def _show_separation(self) -> None:
+        """Without an engine, "Giữ nhạc nền" stays visible but says what it needs."""
+        card = self.mode_cards["keep_music"]
+        desc = MODES[0][3]
+        if self._sep_ok:
+            card.set_desc(desc)
+            self.sep_box.setVisible(False)
+            return
+        card.set_desc("Cần bộ tách giọng AI — chưa cài")
+        self.sep_box.setVisible(True)
+        fallback = self._audio_mode() == "keep_music"
+        self.sep_note.setText(SEP_FALLBACK if fallback else SEP_MISSING)
+        self.sep_note.setStyleSheet(f"color:{V2['amber'] if fallback else V2['muted']};")
+
+    def _show_music(self) -> None:
+        from app.pipeline import music
+
+        clips = music.load(self._job) if self._job is not None else []
+        if clips:
+            self.music_lbl.setText(f"{music.summary(clips)} — thêm / sửa ở tab Nhạc nền "
+                                   "(màn Sửa phụ đề).")
+            self.music_lbl.setStyleSheet(f"color:{V2['secondary']};")
+        else:
+            self.music_lbl.setText("Chưa thêm nhạc nền của bạn — thêm ở tab Nhạc nền (màn Sửa "
+                                   "phụ đề), cho cả video hoặc từng đoạn.")
+            self.music_lbl.setStyleSheet(f"color:{V2['muted']};")
 
     def _audio_mode(self) -> str:
         for key, card in self.mode_cards.items():
             if card.isChecked():
                 return key
-        return "replace"
+        return default_audio_mode(self._sep_ok)
 
     def set_voices(self, voices: list[str]) -> None:
         self.voice.blockSignals(True)
@@ -842,12 +953,9 @@ class RenderView(QWidget):
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts."""
-        import json
-
         if self._job is not None and self._has_real_voices:
-            (Path(self._job.work_dir) / VOICE_FILE).write_text(
-                json.dumps({"voice": self.voice.currentData(),
-                            "rate": self.speed.value() / 100}), encoding="utf-8")
+            _update_project_file(self._job, voice=self.voice.currentData(),
+                                 rate=self.speed.value() / 100)
 
     def _update_fit_hint(self) -> None:
         from app.pipeline import fit_estimate
@@ -945,7 +1053,8 @@ class RenderView(QWidget):
         self.p_badge.setText("0%")
         self.p_title.setText("Đang chuẩn bị…")
         self.p_detail.setText("")
-        keep = opts.get("audio_mode") == "keep_music"
+        # without an engine the worker skips separation (assemble falls back to "duck")
+        keep = opts.get("audio_mode") == "keep_music" and self._sep_ok
         self.stage_rows["separate"].setVisible(keep)
         self.stage_rows["tts"]._num = 2 if keep else 1
         self.stage_rows["assemble"]._num = 3 if keep else 2
@@ -954,7 +1063,7 @@ class RenderView(QWidget):
         self.status.setText("Kết quả sẽ được lưu vào thư mục của dự án.")
         self._right_stack.setCurrentIndex(1)
         if keep:
-            self.stage_rows["separate"].set_state("active", "Đang tách nhạc nền (Demucs)…")
+            self.stage_rows["separate"].set_state("active", "Đang tách giọng khỏi nhạc nền…")
 
     # --- progress API (driven by MainWindow) --------------------------------------
     def set_stage(self, key: str) -> None:
@@ -1202,6 +1311,38 @@ def saved_rate(job) -> float | None:
         return float(r) if r else None
     except (OSError, ValueError, AttributeError, TypeError):
         return None
+
+
+def _read_project_file(job) -> dict:
+    import json
+
+    try:
+        d = json.loads((Path(job.work_dir) / VOICE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _update_project_file(job, **fields) -> None:
+    """Merge render choices into voice.json (voice, rate, audio_mode) — one writer must
+    not drop what the other saved."""
+    import json
+
+    d = _read_project_file(job)
+    d.update(fields)
+    try:
+        (Path(job.work_dir) / VOICE_FILE).write_text(json.dumps(d), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def saved_audio_mode(job) -> str | None:
+    """The audio card the user picked for this project; the retired "mix" card maps to
+    its successor "duck" (both keep the original under the dub)."""
+    m = _read_project_file(job).get("audio_mode")
+    if m == "mix":
+        return "duck"
+    return m if isinstance(m, str) and m else None
 
 
 def saved_voice(job) -> str | None:

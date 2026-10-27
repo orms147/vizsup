@@ -421,14 +421,21 @@ class PipelineWorker(QObject):
                                    "Sửa phụ đề và bấm Duyệt và dựng.")
 
             # ENG-2: when keeping the music, separate the instrumental BEFORE TTS
-            # (both heavy → sequential, 8 GB rule). Failure degrades to mix in assemble.
+            # (both heavy → sequential, 8 GB rule). Failure — or no engine installed —
+            # degrades to "duck" in assemble: the original music + effects stay.
             if o.get("audio_mode") == "keep_music":
                 from app.pipeline import separate
-                self.progress.emit(0.1, "Đang tách nhạc nền (Demucs)…")
-                try:
-                    separate.separate_background(job, log=self.log.emit)
-                except Exception as exc:  # noqa: BLE001 - degrade, don't abort the render
-                    self.log.emit(f"⚠ Không tách được nhạc nền ({exc}) — sẽ trộn với âm gốc.")
+                if not separate.available():
+                    self.log.emit("⚠ Chưa cài bộ tách giọng — dùng “Giữ nguyên âm gốc + lồng "
+                                  "tiếng” (nhạc, hiệu ứng vẫn còn).")
+                else:
+                    self.stage_started.emit("separate")
+                    self.progress.emit(0.1, "Đang tách giọng khỏi nhạc nền…")
+                    try:
+                        separate.separate_background(job, log=self.log.emit)
+                    except Exception as exc:  # noqa: BLE001 - degrade, don't abort the render
+                        self.log.emit(f"⚠ Không tách được nhạc nền ({exc}) — dùng “Giữ nguyên "
+                                      "âm gốc + lồng tiếng”.")
 
             original = o.get("audio_mode") == "original"
             if original:

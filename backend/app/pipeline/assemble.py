@@ -276,6 +276,15 @@ def _plan_segments(segments: list[tuple[Cue, Path]]):
 
 # --- the dub track, window by window ---------------------------------------------------
 RATE = 48000
+# "Giảm nền tự động" (duck): the original stays a constant DUCK_BED_DB lower — music and
+# effects audible everywhere, the Chinese voice never back at full level between lines —
+# and the sidechain pushes it ~10 dB further down while the dub speaks. Measured
+# 2026-10-27 on a 45 s cut of a Douyin review (voice + music + effects), stereo RMS: the
+# old full-level bed was 4.6 dB LOUDER than the dub between lines and only 7 dB under it
+# during them; now between lines it sits 3.4 dB under the dub level, and under a line the
+# original (Chinese voice included, still faintly audible) is 19 dB below the dub.
+DUCK_BED_DB = -8.0
+DUCK_SC = "threshold=0.02:ratio=4:attack=15:release=400:makeup=1:level_sc=1"
 WINDOW_SEC = 300.0     # a window closes at the first line starting this long after it opened…
 WINDOW_MAX = 100       # …or after this many lines (≈ 2 KB of command line)
 WINDOW_WORKERS = 4
@@ -590,6 +599,7 @@ def _build_render(
     encoder: str | None = None,
     duration: float = 0.0,     # source length: the output is pinned to it (long-video join)
     inserts: list[tuple[float, float]] | None = None,   # F-4 pause notes (source time, length)
+    music: list[dict] | None = None,   # background music clips placed by music.place()
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -598,17 +608,19 @@ def _build_render(
     encode here, so tests can assert on the produced command/graph."""
     wd = job.work_dir
 
-    # ENG-2: "keep music" needs a FRESH Demucs instrumental (bg.wav newer than the
-    # source). Missing, or stale from a prior/re-downloaded source → fall back to mix
-    # (so a failed/degraded separation can't silently mix a truncated/mismatched stem).
+    # ENG-2: "keep music" needs a FRESH separated instrumental (bg.wav newer than the
+    # source). Missing, or stale from a prior/re-downloaded source → fall back to "duck"
+    # (so a failed/degraded separation can't silently mix a truncated/mismatched stem) —
+    # duck still keeps the original music + effects, only the Chinese voice goes down.
     if audio_mode == "keep_music":
         bg = wd / "bg.wav"
         src = job.source_video
         fresh = bg.exists() and (not src.exists() or bg.stat().st_mtime >= src.stat().st_mtime)
         if not fresh:
             if log:
-                log("⚠ Chưa tách được nhạc nền (bg.wav) — chuyển sang chế độ trộn (mix).")
-            audio_mode = "mix"
+                log("⚠ Chưa tách được nhạc nền (bg.wav) — dùng “Giữ nguyên âm gốc + lồng "
+                    "tiếng”: nhạc, hiệu ứng gốc vẫn còn, giọng Trung nhỏ lại dưới giọng Việt.")
+            audio_mode = "duck"
 
     placements, sped, flagged = plan if plan is not None else _plan_segments(segments)
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
@@ -618,6 +630,12 @@ def _build_render(
     bg_idx = 2 if dubbed else 1
     if audio_mode == "keep_music" and dubbed:
         cmd += ["-i", "bg.wav"]                                   # the instrumental
+    music = music or []
+    mus_idx = bg_idx + (1 if audio_mode == "keep_music" and dubbed else 0)
+    if music:
+        from app.pipeline import music as music_mod
+
+        cmd += music_mod.input_args(music)                        # the user's music clips
 
     # Machine-readable fit report next to the output: what got sped up, trimmed,
     # or slipped — the metric N-6 (length-aware drafting) optimizes against.
@@ -672,6 +690,7 @@ def _build_render(
             else:
                 bg_a = new
 
+    music_key = dubbed and any(p.get("duck") for p in music)
     if dubbed:
         # consistent dub level across voices/clips; before mixing with the original
         parts.append("[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[dubn]")
@@ -679,6 +698,12 @@ def _build_render(
         if abs(dub_volume - 1.0) > 1e-3:
             parts.append(f"{dub}volume={dub_volume:.3f}[dubvol]")
             dub = "[dubvol]"
+        if music_key:
+            # the voice also keys the music's ducking; padded so the music plays on
+            # after the last line (sidechaincompress stops with its key)
+            parts.append(f"{dub}asplit=2[dubm][mkey]")
+            parts.append("[mkey]apad[mkeyp]")
+            dub = "[dubm]"
 
         if audio_mode == "keep_music":
             # background = the Demucs instrumental (last input), dub on top; orig_volume
@@ -691,14 +716,17 @@ def _build_render(
             parts.append(f"[bg]{dub}amix=inputs=2:normalize=0:dropout_transition=0[outa]")
             audio_map = "[outa]"
         elif audio_mode == "duck":
-            # original ducks only while the dub plays (sidechain), then returns
+            # the original (music + effects + the Chinese voice) stays as a bed a little
+            # lower all the time (DUCK_BED_DB), and goes down further while the dub
+            # speaks (sidechain) — so between lines the Chinese voice can't jump back to
+            # full volume over the music, and under a line it is well below the dub
             parts.append(f"{dub}asplit=2[scin][dubv]")
-            parts.append(f"{src_a}volume={orig_volume:.3f}[bg]")
+            bed = orig_volume * 10 ** (DUCK_BED_DB / 20)
+            parts.append(f"{src_a}volume={bed:.3f}[bg]")
             # the key ends with the last dub line; padded with silence so the ducked
             # original keeps playing to the end (it used to stop there)
             parts.append("[scin]apad[scpad]")
-            parts.append("[bg][scpad]sidechaincompress=threshold=0.05:ratio=8:"
-                         "attack=20:release=300:makeup=1:level_sc=1[duck]")
+            parts.append(f"[bg][scpad]sidechaincompress={DUCK_SC}[duck]")
             parts.append("[duck][dubv]amix=inputs=2:normalize=0[outa]")
             audio_map = "[outa]"
         else:  # replace
@@ -710,6 +738,21 @@ def _build_render(
             audio_map = "[aout]"
     else:
         audio_map = src_a if inserts and src_a != "[0:a]" else "0:a?"
+
+    if music:
+        # the user's background music on top of whatever the mode produced; ducked under
+        # the Vietnamese voice when asked, then a limiter (three sources summed)
+        mparts, mus = music_mod.graph(music, mus_idx, key="[mkeyp]" if music_key else None)
+        parts += mparts
+        base = audio_map if audio_map.startswith("[") else ("[0:a]" if has_audio else None)
+        if base:
+            parts.append(f"{base}{mus}amix=inputs=2:normalize=0:duration=first:"
+                         f"dropout_transition=0,{music_mod.LIMIT}[amus]")
+        else:
+            parts.append(f"{mus}{'apad,' if duration > 0 else ''}{music_mod.LIMIT}[amus]")
+        audio_map = "[amus]"
+        if log:
+            log(f"♪ Nhạc nền: {len(music)} đoạn")
 
     ass = _ass_name(preview)
     vsrc = src_v
@@ -794,12 +837,18 @@ def assemble(
                       progress=lambda f: say(0.2 * f, f"Ghép lồng tiếng · {int(f * 100)}%"))
     total = probe_duration(job.source_video) if job.source_video.exists() else 0.0
     out_total = total + sum(d for _at, d in ins)
+    # the user's background music, read fresh on every render (not part of the approved
+    # revision) and placed on the output timeline like the subtitles
+    from app.pipeline import music as music_mod
+
+    placed = music_mod.place(music_mod.load(job), ins, out_total if total > 0 else 0.0,
+                             duration=probe_duration, job=job)
     encoder = _video_encoder()
     while True:
         cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
                             dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
-                            duration=total, inserts=ins)
+                            duration=total, inserts=ins, music=placed)
         try:
             _run_ffmpeg(cmd, job.work_dir, total=out_total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
@@ -817,7 +866,7 @@ def assemble(
     note_secs = sum(v.dur for v in voiced)
     (job.work_dir / RENDER_INFO).write_text(
         json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode,
-                    "encoder": encoder, "duration": round(total, 3),
+                    "encoder": encoder, "duration": round(total, 3), "music": len(placed),
                     "inserts": [[round(a, 3), round(d, 3)] for a, d in ins],
                     "commentary_s": round(note_secs, 2),
                     "commentary_share": round(cm.share(note_secs, total, out_total - total), 4)}),

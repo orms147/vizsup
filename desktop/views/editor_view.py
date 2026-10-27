@@ -29,6 +29,7 @@ from desktop.cuemodel import EditorCue, fmt_time
 from desktop.ui_thread import connect_on_ui
 from desktop.widgets.chrome import ProjectBar, badge, button, icon_button, label
 from desktop.widgets.commentary_panel import CommentaryPanel
+from desktop.widgets.music_panel import MusicPanel
 from desktop.widgets.cue_inspector import CueInspector
 from desktop.widgets.cue_list import CueList
 from desktop.widgets.style_panel import StylePanel
@@ -145,6 +146,8 @@ class EditorView(QWidget):
         self.inspector = CueInspector(self.style_panel)
         self.commentary = CommentaryPanel()                 # F-4: the user's own notes
         self.commentary_tab = self.inspector.add_page("Bình luận", self.commentary)
+        self.music = MusicPanel()                           # the user's background music
+        self.music_tab = self.inspector.add_page("Nhạc nền", self.music)
         self.gain, self.mute_cb = self.inspector.gain, self.inspector.mute_cb
         self.timeline_panel = TimelinePanel()
         self.timeline = self.timeline_panel.timeline
@@ -242,6 +245,17 @@ class EditorView(QWidget):
         cm_.previewRequested.connect(self._preview_note)
         cm_.importRequested.connect(self._import_note_audio)
         cm_.list.currentRowChanged.connect(lambda _i: self._note_warning())
+        mp = self.music
+        mp.changed.connect(self._save_music)
+        mp.addRequested.connect(self._add_music)
+        mp.startHereRequested.connect(
+            lambda: mp.update_selected(start=round(self.video.current_time(), 2)))
+        mp.endHereRequested.connect(
+            lambda: mp.update_selected(end=round(self.video.current_time(), 2)))
+        mp.seekRequested.connect(lambda t: self.video.seek_seconds(t))
+        mp.previewRequested.connect(self._preview_music)
+        mp.replaceRequested.connect(self._replace_music_file)
+        mp.list.currentRowChanged.connect(lambda _i: self._music_warning())
         ins.glossaryRequested.connect(self.glossaryRequested)
         self.gain.sliderPressed.connect(self._snapshot)   # once per slider gesture
         self.gain.valueChanged.connect(self._on_gain)
@@ -1119,6 +1133,89 @@ class EditorView(QWidget):
         self._load_waveform(job)
         self._load_speech(job)
         self._load_commentary(job)
+        self._load_music(job)
+
+    # --- background music (music.json) -------------------------------------------------
+    def _load_music(self, job) -> None:
+        from app.pipeline import music
+
+        clips = music.load(job)
+        self.music.set_clips(clips, self._duration() or 0.0)
+        self.timeline.set_music([(c.start, c.end) for c in clips])
+        self._music_warning()
+
+    def _save_music(self) -> None:
+        """Saved at once. Not part of the approved revision (approval.py): the render
+        reads the current music.json, so no re-approval is needed."""
+        from app.pipeline import music
+
+        if self.job is None:
+            return
+        clips = self.music.clips()
+        music.save(self.job, clips)
+        self.timeline.set_music([(c.start, c.end) for c in clips])
+        self._music_warning()
+
+    def _music_warning(self) -> None:
+        from app.pipeline import music
+
+        c = self.music.selected()
+        probs = music.validate(self.job, [c]) if c is not None and self.job is not None else []
+        self.music.set_warning(probs[0].split(": ", 1)[-1] if probs else "")
+
+    def _pick_music_file(self) -> Path | None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from app.pipeline import music
+
+        pats = " ".join(f"*{e}" for e in music.EXTS)
+        fn, _ = QFileDialog.getOpenFileName(self, "Chọn nhạc nền", "", f"Âm thanh ({pats})")
+        return Path(fn) if fn else None
+
+    def _add_music(self, kind: str) -> None:
+        """"all": the whole video (loops); "here": from the playhead to the end."""
+        from app.pipeline import music
+
+        if self.job is None:
+            return
+        self.video.pause()
+        src = self._pick_music_file()
+        if src is None:
+            return
+        try:
+            rel = music.import_file(self.job, src)
+        except OSError as e:
+            self._toast(f"Không dùng được file nhạc: {e}")
+            return
+        start = 0.0 if kind == "all" else round(self.video.current_time(), 2)
+        self.inspector.set_tab(self.music_tab)
+        self.music.add(music.Clip(file=rel, start=start, end=None, name=src.name))
+
+    def _replace_music_file(self) -> None:
+        from app.pipeline import music
+
+        if self.job is None or self.music.selected() is None:
+            return
+        src = self._pick_music_file()
+        if src is None:
+            return
+        try:
+            rel = music.import_file(self.job, src)
+        except OSError as e:
+            self._toast(f"Không dùng được file nhạc: {e}")
+            return
+        self.music.update_selected(file=rel, name=src.name)
+
+    def _preview_music(self) -> None:
+        c = self.music.selected()
+        if c is None or self.job is None or self._dub_player is None:
+            return
+        from PySide6.QtCore import QUrl
+
+        self.video.pause()
+        self._dub_audio.setVolume(min(1.0, c.volume))
+        self._dub_player.setSource(QUrl.fromLocalFile(str(self.job.work_dir / c.file)))
+        self._dub_player.play()
 
     # --- F-4: the user's own commentary ------------------------------------------------
     def _load_commentary(self, job) -> None:
@@ -1276,6 +1373,7 @@ class EditorView(QWidget):
     def _on_duration(self, d: float) -> None:
         self._meta["dur"] = d
         self.commentary.set_duration(d)
+        self.music.set_duration(d)
         self.timeline.set_duration(d)
         self._update_project()
 

@@ -46,6 +46,7 @@ class Timeline(QWidget):
         self._peaks: list[float] = []
         self._speech: list[tuple[float, float]] = []   # VAD spans (green band)
         self._notes: list[tuple[float, str]] = []      # F-4 commentary (time, mode) flags
+        self._music: list[tuple[float, float | None]] = []   # background music spans
         self._per_sec = 50
         self._video_dur = 0.0
         self._dur = 1.0
@@ -79,6 +80,12 @@ class Timeline(QWidget):
         """The user's commentary notes (F-4): an amber flag on the ruler + a line through
         the lanes — solid for "pause" (the video stops there), dashed for "over"."""
         self._notes = list(notes or [])
+        self.update()
+
+    def set_music(self, spans: list[tuple[float, float | None]]) -> None:
+        """The user's background music clips (start, end | None = to the end): a thin
+        purple bar under the ruler."""
+        self._music = list(spans or [])
         self.update()
 
     def set_duration(self, seconds: float) -> None:
@@ -133,6 +140,7 @@ class Timeline(QWidget):
         self._paint_ruler(p, clip)
         self._paint_wave(p, clip)
         self._paint_speech(p, clip)
+        self._paint_music(p, clip)
         self._paint_blocks(p, clip)
         self._paint_notes(p, clip)
         self._paint_playhead(p)
@@ -184,6 +192,18 @@ class Timeline(QWidget):
         p.setBrush(_c(V2["green"], 150))
         for a, b in self._speech:
             x0, x1 = a * self._pps, b * self._pps
+            if x1 < clip.left() or x0 > clip.right():
+                continue
+            p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0), 3), 1.5, 1.5)
+
+    def _paint_music(self, p: QPainter, clip) -> None:
+        if not self._music:
+            return
+        y = RULER_H + 1
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(V2["purple_bright"], 170))
+        for a, b in self._music:
+            x0, x1 = a * self._pps, (self._dur if b is None else b) * self._pps
             if x1 < clip.left() or x0 > clip.right():
                 continue
             p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0), 3), 1.5, 1.5)

@@ -11,6 +11,10 @@ vi.srt, the per-cue overrides (gain / mute), per-cue styles, the global style an
 user's own commentary notes.
 Editor-only review bookkeeping (lock, "Đã xem") is excluded — marking a line
 reviewed must not revoke an approval.
+The user's background music (music.json, pipeline/music.py) is excluded too: like the
+audio mode and the volumes it is a render-time mix setting — nothing in it is voiced
+(no TTS spend) or burned as text — so adding a song must not send the user back to
+re-approve the subtitles. Every render reads the current music.json instead.
 """
 from __future__ import annotations
 

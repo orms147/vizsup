@@ -142,15 +142,23 @@ def test_keep_music_adds_bg_input_and_mix(big_job):
     assert "amix=inputs=2" in script and "[outa]" in script
 
 
-def test_keep_music_without_bg_falls_back_to_mix(big_job):
+def _duck_bed(vol: float) -> str:
+    return f"[0:a]volume={vol * 10 ** (assemble.DUCK_BED_DB / 20):.3f}[bg]"
+
+
+def test_keep_music_without_bg_falls_back_to_duck(big_job):
+    """No separated instrumental: keep the original music + effects (ducked under the
+    dub) — never silently drop them, never mix the Chinese voice at full level."""
     job, segments = big_job                                  # no bg.wav written
-    cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
+    logs: list[str] = []
+    cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8, log=logs.append)
     assert "bg.wav" not in cmd                               # no phantom input
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[0:a]volume=0.800[bg]" in script                # mix path uses the original audio
+    assert _duck_bed(0.8) in script and "sidechaincompress" in script
+    assert any("nhạc, hiệu ứng gốc vẫn còn" in m for m in logs)
 
 
-def test_keep_music_stale_bg_falls_back_to_mix(big_job):
+def test_keep_music_stale_bg_falls_back_to_duck(big_job):
     import os
     job, segments = big_job
     job.source_video.write_bytes(b"re-downloaded video")
@@ -161,7 +169,7 @@ def test_keep_music_stale_bg_falls_back_to_mix(big_job):
     cmd = _build(job, segments[:3], audio_mode="keep_music", orig_volume=0.8)
     assert "bg.wav" not in cmd                               # stale stem not used
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[0:a]volume=0.800[bg]" in script                # fell back to mix
+    assert _duck_bed(0.8) in script                          # fell back to duck
 
 
 def test_cover_off_keeps_plain_ass_chain(big_job):
@@ -318,3 +326,16 @@ def test_duck_keeps_the_original_after_the_last_dub_line(big_job):
     _build(job, segments[:3], audio_mode="duck")
     script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "[scin]apad[scpad]" in script and "[bg][scpad]sidechaincompress" in script
+
+
+def test_duck_keeps_a_lower_bed_and_ducks_further_under_the_dub(big_job):
+    """Between lines the original (music, effects, the Chinese voice) stays a constant
+    few dB lower — it used to jump back to full level, louder than the dub — and the
+    sidechain pushes it further down while the dub speaks."""
+    job, segments = big_job
+    assert -12.0 <= assemble.DUCK_BED_DB <= -4.0
+    _build(job, segments[:3], audio_mode="duck", orig_volume=1.0)
+    script = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert _duck_bed(1.0) in script and "volume=1.000[bg]" not in script
+    assert f"[bg][scpad]sidechaincompress={assemble.DUCK_SC}[duck]" in script
+    assert "[duck][dubv]amix=inputs=2:normalize=0[outa]" in script

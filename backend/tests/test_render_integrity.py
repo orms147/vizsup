@@ -101,7 +101,8 @@ def test_render_view_locked_until_the_current_revision_is_approved(qapp):
     rv.set_approved(True)
     rv.render_btn.click()
     assert len(renders) == 1
-    assert renders[0]["audio_mode"] == "replace"
+    # never silently drop the original music/effects: the default keeps them
+    assert renders[0]["audio_mode"] == "duck"
 
 
 def test_render_view_reopens_a_finished_project_on_its_result(qapp, tmp_path):
