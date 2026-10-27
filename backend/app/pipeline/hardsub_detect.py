@@ -64,6 +64,21 @@ def _png_size(path) -> tuple[int, int] | None:
     return int(w), int(h)
 
 
+def _subtitle_row(bboxes: list) -> list:
+    """Burned-in subtitles sit on the same row frame after frame; Chinese text that is
+    part of the scene (a phone screen, a sign) is scattered. Keep the boxes whose vertical
+    centre lies within ~1.6 line heights of the densest row (a 2-line caption keeps both
+    rows). 2026-10-27: a lock screen's 中国电信 / UI text in the bottom third made the union
+    30% of the frame tall, and the glass cover a giant slab. Pure."""
+    if len(bboxes) < 3:
+        return bboxes
+    heights = sorted(b[3] - b[1] for b in bboxes)
+    h = heights[len(heights) // 2] or 1.0
+    centres = [(b[1] + b[3]) / 2 for b in bboxes]
+    best = max(centres, key=lambda c: sum(abs(o - c) <= 0.75 * h for o in centres))
+    return [b for b, c in zip(bboxes, centres, strict=True) if abs(c - best) <= 1.6 * h]
+
+
 def region_from_boxes(bboxes, crop_w: int, crop_h: int, *, crop: str = "bottom-third",
                       pad: float = 0.01) -> dict | None:
     """Union of recognized-text boxes → a normalized full-frame band {x,y,w,h}
@@ -73,6 +88,7 @@ def region_from_boxes(bboxes, crop_w: int, crop_h: int, *, crop: str = "bottom-t
     covers glyph edges."""
     if not bboxes or crop_w <= 0 or crop_h <= 0:
         return None
+    bboxes = _subtitle_row(list(bboxes))
     off_y, h_frac = _CROP_FRAC.get(crop, _CROP_FRAC["bottom-third"])
     xs0 = [b[0] / crop_w for b in bboxes]
     xs1 = [b[2] / crop_w for b in bboxes]

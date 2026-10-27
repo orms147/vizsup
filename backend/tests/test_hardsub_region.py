@@ -49,3 +49,17 @@ def test_blur_band_uses_region_then_falls_back():
     # None or a degenerate region → the byte-identical bottom-third fallback
     assert _blur_band_filters(None) == ("crop=iw:ih/3:0:ih*2/3", "overlay=0:main_h*2/3")
     assert _blur_band_filters({"x": 0, "y": 0, "w": 0, "h": 0})[0] == "crop=iw:ih/3:0:ih*2/3"
+
+
+def test_region_ignores_scene_text_off_the_subtitle_row():
+    """e2e 2026-10-27: a phone lock screen's text in the bottom third made the union 30% of
+    the frame tall (giant glass slab). Only the consistent caption row counts."""
+    from app.pipeline.hardsub_detect import region_from_boxes
+
+    caption = [(300, 200, 900, 240)] * 6                 # same row, frame after frame
+    scene = [(100, 10, 300, 50), (50, 60, 200, 90)]      # scattered scene text, higher up
+    band = region_from_boxes(caption + scene, 1200, 300)
+    assert band["y"] > 0.85 and band["h"] < 0.08
+    two_lines = [(300, 150, 900, 190)] * 4 + [(320, 200, 880, 240)] * 4
+    band2 = region_from_boxes(two_lines, 1200, 300)      # a 2-line caption keeps both rows
+    assert band2["h"] > 0.08

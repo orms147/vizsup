@@ -90,7 +90,7 @@ class CueInspector(QFrame):
         self.tabbar = QTabBar()
         self.tabbar.setExpanding(False)
         self.tabbar.setDrawBase(False)
-        for t in ("Câu đang chọn", "Kiểu chữ", "Ngữ cảnh"):
+        for t in ("Câu này", "Kiểu chữ", "Ngữ cảnh"):
             self.tabbar.addTab(t)
         tb = QFrame()
         tb.setObjectName("panelHead")
