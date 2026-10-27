@@ -23,6 +23,26 @@ web before relying on them — don't trust memory.
 > for source comprehension, refine with `claude` / `gemini` for Vietnamese register.
 > Legacy ids `deepseek-chat`/`deepseek-reasoner` deprecate **2026-07-24** — use v4.
 
+### OpenRouter roles and model packages
+
+Every OpenRouter call names a role; its model = the user's `MODEL_<ROLE>` → the package
+(`MODEL_PRESET`, Settings → AI và mô hình → "Gói mô hình", `app/providers/presets.py`) → the
+role default (`app/providers/roles.py`). Any OpenRouter id can be typed per role. Measured
+2026-10-27 (docs/plan/G-cost-log.md: app's own two-pass translate on 120 real lines, 3 blind
+judges); prices from https://openrouter.ai/api/v1/models on 2026-10-27, $/M tokens in/out.
+
+| role | default (= "Cân bằng") | Tiết kiệm | Chất lượng cao | Kimi K3 (như trước) |
+|---|---|---|---|---|
+| draft | `deepseek/deepseek-v4.1-flash` (0.14/0.42) | `openai/gpt-6-luna` (0.10/0.50) | default | default |
+| refine | `openai/gpt-6-luna` | luna | `deepseek/deepseek-v4.1-flash-1017` (0.30/1.20) | `moonshotai/kimi-k3` (0.20/20.00) |
+| shorten (auto-shorten, Rút gọn, Dịch lại) | `openai/gpt-6-luna` | luna | ds-1017 | kimi-k3 |
+| brief (1 call / video) | `deepseek/deepseek-v4.1-flash-1017` | ds-v4.1-flash | kimi-k3 | kimi-k3 |
+| proofread (OCR) · terms | `deepseek/deepseek-v4.1-flash` | default | default | default |
+| qa (AI soát) | `qwen/qwen3.8-flash` (0.15/0.47) | default | default | default |
+| vision · ocr (opt-in, not packaged) | `qwen/qwen3.7-flash` | — | — | — |
+| **$ / video-minute to the gate** (cloud ASR + translate + AI soát) | **0.0016** + 0.0007/video | 0.0014 + 0.0005 | 0.0018 + 0.013 | 0.0099 + 0.013 |
+| blind-judge mean (refine setup) | 8.86 | 8.83 (8.80 draft-only) | 8.84 (best accuracy 9.20) | 8.66 |
+
 ## TTS (Vietnamese)
 
 | id | engine | key (env) | local | notes |

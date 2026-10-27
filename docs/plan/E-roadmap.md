@@ -67,7 +67,9 @@ fixes the FINAL text and keep the first pass fast:
 |---|---|
 | ASR transcript (audio in) | `qwen/qwen3.8-omni-flash` (unchanged, `AUDIO_LLM_MODEL`) |
 | Draft · OCR proofread · terms | `deepseek/deepseek-v4.1-flash` (4–6 s / 40 lines) |
-| Refine · brief · shorten / Dịch lại | `moonshotai/kimi-k3` |
+| Refine · shorten / Dịch lại | ~~`moonshotai/kimi-k3`~~ → `openai/gpt-6-luna` since the 2026-10-27 cost pass (G-cost-log.md: 3 blind judges, luna 8.86 vs Kimi 8.66, ~1/12 the price) |
+| Brief | ~~`moonshotai/kimi-k3`~~ → `deepseek/deepseek-v4.1-flash-1017` (Kimi stays in the "Chất lượng cao" package) |
+| Packages (Settings → "Gói mô hình") | Tiết kiệm / **Cân bằng** (= the defaults) / Chất lượng cao / Kimi K3 — `app/providers/presets.py` |
 | QA reviewer (E-5) | `qwen/qwen3.8-flash` — QA bench on 39 real pairs: found 3 real issues; V4 Pro (reasoning off) 0, Kimi / GLM-prime 1 |
 | Vision (opt-in frames) | `qwen/qwen3.7-flash` — not benchmarked yet |
 

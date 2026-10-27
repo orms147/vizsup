@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     openrouter_promo_expires: str = ""  # YYYY-MM-DD; blank = no expiry
     # E-2: one OpenRouter model per ROLE (blank → the benchmarked default in
     # app/providers/roles.py). OPENROUTER_MODEL above is legacy and no longer read.
+    # MODEL_PRESET = the model package (app/providers/presets.py: economy / balanced /
+    # quality / kimi; blank = balanced); a MODEL_<ROLE> below still wins for its role.
+    model_preset: str = ""
     model_draft: str = ""
     model_refine: str = ""
     model_proofread: str = ""
