@@ -17,9 +17,17 @@ from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
+from app.pipeline.glass import look as glass_look
+
 ASS_W, ASS_H = 1920, 1080
 EDGE = 9          # px hit-zone around an edge
 MIN_W = 120       # min wrap width in ASS px (keeps the box usable)
+
+
+def glass_shrink(blur: float, frame_h: int) -> int:
+    """Down/up-scale factor that roughly matches the render's gblur ``blur`` (sigma
+    at 1080 lines) on a ``frame_h``-line frame: 22 at 1080 → 14, like before."""
+    return max(1, round(float(blur) * max(1, frame_h) / 1080 * 14 / 22))
 
 
 @dataclass
@@ -181,11 +189,13 @@ class VideoCanvas(QWidget):
 
     def _draw_glass(self, p: QPainter, fm: QFontMetrics) -> None:
         """Approximate “Kính mờ trắng”: the frame under the pill blurred (a cheap
-        down/up-scale) + a 60% white tint, rounded. The render blurs harder and also
-        covers the Chinese band; "Xem thử kiểu" burns the exact frame."""
+        down/up-scale, coarser as "Độ nhòe phía sau" rises) + the "Độ trắng của nền"
+        white tint, rounded. The render also covers the Chinese band; "Xem thử kiểu"
+        burns the exact frame."""
         pill = self.glass_rect(fm)
         if pill.width() <= 2 or pill.height() <= 2:
             return
+        lk = glass_look(self._style)
         one = self._text_h_px()
         path = QPainterPath()
         path.addRoundedRect(pill, min(pill.height() / 2, 0.5 * one), min(pill.height() / 2, 0.5 * one))
@@ -199,13 +209,14 @@ class VideoCanvas(QWidget):
                         max(1, int(pill.width() * sx)), max(1, int(pill.height() * sy)))
             src = src.intersected(img.rect())
             if not src.isEmpty():
-                small = img.copy(src).scaled(max(1, src.width() // 14), max(1, src.height() // 14),
+                k = glass_shrink(lk["blur"], img.height())
+                small = img.copy(src).scaled(max(1, src.width() // k), max(1, src.height() // k),
                                              Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
                 blur = small.scaled(src.width(), src.height(), Qt.IgnoreAspectRatio,
                                     Qt.SmoothTransformation)
                 p.drawImage(QRectF(d.x() + src.x() / sx, d.y() + src.y() / sy,
                                    src.width() / sx, src.height() / sy), blur)
-        p.fillPath(path, QColor(255, 255, 255, 153))
+        p.fillPath(path, QColor(255, 255, 255, round(lk["tint"] * 255)))
         p.restore()
 
     def _draw_box(self, p: QPainter) -> None:

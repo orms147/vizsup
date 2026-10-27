@@ -34,8 +34,20 @@ from app.models import Cue
 # Text look on the glass (forced when the cover is "glass" but the style isn't).
 GLASS_TEXT = {"primary": "#1C1C1E", "outline": "#FFFFFF", "outline_w": 0, "shadow": 0,
               "border_style": 1, "glass": True}
-TINT = 0.6            # white over the blurred picture (dark footage → light grey glass)
-BLUR_SIGMA = 22       # gblur sigma at 1080 lines (scaled with the frame height)
+# The look is adjustable in Kiểu chữ (style.json, global only — one band filter):
+#   "glass_tint" = white over the blurred picture, in % (dark footage → light grey glass)
+#   "glass_blur" = gblur sigma at 1080 lines (scaled with the frame height)
+# Defaults picked on real frames (dark presenter, black-on-white phone grid, bright
+# product shots): 60 % read "hơi đậm" (milky); 40 % is a light grey glass on dark
+# footage and keeps the dark text readable over high-contrast stripes (35 % and below
+# starts losing letters there). Blur 22 stays: it is what hides the Chinese.
+TINT = 0.4            # default white tint (fraction)
+TINT_RANGE = (0, 90)  # % — the slider; 100% would be an opaque white box
+BLUR_SIGMA = 22       # default blur
+BLUR_RANGE = (4, 40)  # the slider
+# below this a Chinese reader can still make out large (6 %-of-height) burned-in
+# captions: ~14 at 1080p, ~16 at 720p (judged on real frames, no tint — the worst case)
+BLUR_SAFE = 16
 SATURATION = 1.3      # a little "vibrancy", like iOS glass
 GAP_BRIDGE = 0.5      # s: a glass stays up across a shorter gap (no flicker, no CN flash)
 # no detected region: where Douyin/Bilibili captions usually sit (fraction of height)
@@ -57,6 +69,22 @@ _SYSTEM = {
 
 def is_glass(style: dict | None) -> bool:
     return bool((style or {}).get("glass"))
+
+
+def look(style: dict | None) -> dict:
+    """``{"tint": 0..0.9, "blur": sigma at 1080}`` from a style's ``glass_tint`` (%)
+    and ``glass_blur``, clamped to the slider ranges; defaults when unset/garbled."""
+    s = style or {}
+
+    def num(key: str, default: float, lo: float, hi: float) -> float:
+        try:
+            v = float(s.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        return min(hi, max(lo, v)) if math.isfinite(v) else default
+
+    return {"tint": round(num("glass_tint", TINT * 100, *TINT_RANGE) / 100, 2),
+            "blur": round(num("glass_blur", BLUR_SIGMA, *BLUR_RANGE), 1)}
 
 
 def text_style(style: dict | None) -> dict:
@@ -298,18 +326,22 @@ def write_mask(events: list[dict], path: Path, bnd: tuple, *, W: float, H: float
     return Path(path)
 
 
-def filter_parts(src: str, bnd: tuple, mask: str, out: str, *, height: int = 1080) -> list[str]:
+def filter_parts(src: str, bnd: tuple, mask: str, out: str, *, height: int = 1080,
+                 tint: float = TINT, blur: float = BLUR_SIGMA) -> list[str]:
     """Filter-graph chains: ``src`` → glass over the band → ``out``. The mask comes
     from the frame itself (cropped, painted black, the .ass drawn on it) so it shares
     every timestamp with the picture — F-4 pauses and VFR sources included. The
-    blur sigma follows the picture height (720p blurs as much as 1080p, relatively)."""
+    blur sigma follows the picture height (720p blurs as much as 1080p, relatively).
+    ``tint`` / ``blur`` = :func:`look` of the style (white fraction, sigma at 1080)."""
     bx, by, bw, bh = bnd
     crop = f"crop=iw*{bw:.4f}:ih*{bh:.4f}:iw*{bx:.4f}:ih*{by:.4f}"
-    sigma = max(6, round(BLUR_SIGMA * height / 1080))
+    # not rounded to whole px: 720p must blur as much as 1080p (14 → 9.3, not 9)
+    sigma = max(0.5, round(float(blur) * height / 1080, 1))
+    tint = min(1.0, max(0.0, float(tint)))
     return [
         f"{src}split=3[gmain][gblur][gmask]",
-        f"[gblur]{crop},gblur=sigma={sigma}:steps=2,eq=saturation={SATURATION},"
-        f"drawbox=c=white@{TINT}:t=fill[gtint]",
+        f"[gblur]{crop},gblur=sigma={sigma:g}:steps=2,eq=saturation={SATURATION},"
+        f"drawbox=c=white@{tint:g}:t=fill[gtint]",
         # rgb → gray lands white at 235 (limited range): stretch to a full 255 alpha,
         # else 8% of the sharp Chinese would show through the glass
         f"[gmask]{crop},format=rgb24,drawbox=c=black:t=fill,ass={mask},format=gray,"

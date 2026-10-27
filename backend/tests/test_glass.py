@@ -119,8 +119,8 @@ def test_filter_parts_blur_tint_mask_overlay():
     assert parts[0] == "[vscl]split=3[gmain][gblur][gmask]"
     crop = "crop=iw*0.9400:ih*0.1500:iw*0.0300:ih*0.8200"
     assert g.count(crop) == 2                                     # blur + mask: same band
-    assert "gblur=sigma=15:steps=2" in g                          # 22 at 1080 → 15 at 720
-    assert f"drawbox=c=white@{glass.TINT}:t=fill" in g
+    assert "gblur=sigma=14.7:steps=2" in g                        # 22 at 1080 → 14.7 at 720
+    assert "drawbox=c=white@0.4:t=fill" in g                      # today's default tint
     assert "ass=glass_mask.ass,format=gray,lut=c0=val*255/235[galpha]" in g
     assert parts[-1] == "[gmain][gglass]overlay=main_w*0.0300:main_h*0.8200[vg]"
 
@@ -148,7 +148,7 @@ def test_glass_style_renders_the_glass_cover(job):
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "[vscl]split=3[gmain][gblur][gmask]" in graph          # scaled, then glass…
     assert graph.index("[gmain][gglass]overlay") < graph.index("ass=subs.ass")  # …then text
-    assert "gblur=sigma=15" in graph
+    assert "gblur=sigma=14.7:" in graph and "white@0.4:" in graph   # default look
     assert (job.work_dir / glass.MASK_FILE).exists()
     subs = (job.work_dir / "subs.ass").read_text(encoding="utf-8")
     assert "Style: Default,Be Vietnam Pro,60,&H001E1C1C," in subs  # dark text…
@@ -255,4 +255,152 @@ def test_canvas_draws_a_frosted_pill(qapp):
     pill = c.glass_rect(QFontMetrics(f))
     inside = img.pixelColor(int(pill.left() + 4), int(pill.center().y()))
     outside = img.pixelColor(int(pill.left() - 20), int(pill.center().y()))
-    assert inside.lightness() > 120 > outside.lightness()          # white glass on dark video
+    assert inside.lightness() > 90 > 40 > outside.lightness()      # white glass on dark video
+
+
+# --- the adjustable look: "Độ trắng của nền" + "Độ nhòe phía sau" ---------------------------
+
+def test_look_defaults_and_clamps():
+    assert glass.look(None) == {"tint": glass.TINT, "blur": glass.BLUR_SIGMA}
+    assert glass.look({"glass": True}) == {"tint": 0.4, "blur": 22}       # lighter than 0.6
+    assert glass.look({"glass_tint": 25, "glass_blur": 30}) == {"tint": 0.25, "blur": 30}
+    assert glass.look({"glass_tint": 150, "glass_blur": 99}) == {"tint": 0.9, "blur": 40}
+    assert glass.look({"glass_tint": -5, "glass_blur": 0}) == {"tint": 0.0, "blur": 4}
+    assert glass.look({"glass_tint": "x", "glass_blur": None}) == glass.look(None)
+    assert glass.look({"glass_tint": float("nan")})["tint"] == glass.TINT
+    assert glass.BLUR_RANGE[0] < glass.BLUR_SAFE < glass.BLUR_SIGMA
+
+
+def test_filter_parts_takes_tint_and_blur():
+    bnd = (0.03, 0.82, 0.94, 0.15)
+    g = ";".join(glass.filter_parts("[v]", bnd, "m.ass", "[o]", height=1080, tint=0.25, blur=30))
+    assert "gblur=sigma=30:steps=2" in g and "drawbox=c=white@0.25:t=fill" in g
+    g = ";".join(glass.filter_parts("[v]", bnd, "m.ass", "[o]", height=720, tint=0, blur=16))
+    assert "gblur=sigma=10.7:" in g and "white@0:" in g      # scaled, not rounded to 11
+    g = ";".join(glass.filter_parts("[v]", bnd, "m.ass", "[o]", height=360, tint=1.5, blur=1))
+    assert "gblur=sigma=0.5:" in g and "white@1:" in g
+
+
+def test_render_follows_the_style_look(job):
+    assemble.assemble(job, [], style={"glass": True, "glass_tint": 25, "glass_blur": 30},
+                      res="720")
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "gblur=sigma=20:" in graph and "white@0.25:" in graph   # 30 at 1080 → 20 at 720
+    info = json.loads((job.work_dir / assemble.RENDER_INFO).read_text(encoding="utf-8"))
+    assert info["glass_tint"] == 25 and info["glass_blur"] == 30
+
+
+def test_quick_preview_follows_the_style_look(job):
+    assemble.assemble(job, [], style={"glass": True, "glass_tint": 10, "glass_blur": 18},
+                      preview=True)
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "gblur=sigma=18:" in graph and "white@0.1:" in graph
+
+
+def test_softsub_export_repeats_the_look(job, monkeypatch):
+    from app.pipeline import export
+
+    assemble.assemble(job, [], style={"glass": True, "glass_tint": 70, "glass_blur": 26})
+    monkeypatch.setattr(assemble, "probe_size", lambda p: (1280, 720))   # source height
+    cmd = export.softsub_cmd(job, job.work_dir / "x.mkv")
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "white@0.7:" in graph and "gblur=sigma=17.3:" in graph
+    # a render made before the sliders existed: its own 60 % / 22, not today's default
+    info = json.loads((job.work_dir / assemble.RENDER_INFO).read_text(encoding="utf-8"))
+    for k in ("glass_tint", "glass_blur"):
+        info.pop(k)
+    (job.work_dir / assemble.RENDER_INFO).write_text(json.dumps(info), encoding="utf-8")
+    cmd = export.softsub_cmd(job, job.work_dir / "x.mkv")
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "white@0.6:" in graph and "gblur=sigma=14.7:" in graph
+
+
+def test_style_preview_frame_follows_the_look(job, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+
+    monkeypatch.setattr(assemble.subprocess, "run", fake_run)
+    cues = [Cue(index=1, start=1.0, end=3.0, text="xin chào")]
+    assemble.style_preview_frame(job, cues, style={"glass": True, "glass_tint": 15,
+                                                   "glass_blur": 34})
+    graph = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+    assert "gblur=sigma=34:" in graph and "white@0.15:" in graph
+
+
+def test_style_panel_glass_sliders(qapp):
+    from desktop.widgets.style_panel import GLASS_STYLE, StylePanel
+
+    sp = StylePanel()
+    assert sp._glass_row.isHidden()                                # not for the plain styles
+    assert "glass_tint" not in sp.get_style()
+    sp.box_style.setCurrentText(GLASS_STYLE)
+    assert not sp._glass_row.isHidden()
+    st = sp.get_style()
+    assert st["glass_tint"] == 40 and st["glass_blur"] == 22       # the new defaults
+    assert sp.glass_warn.isHidden()
+    sp.glass_blur.setValue(10)                                     # Chinese may show through
+    assert not sp.glass_warn.isHidden()
+    sp.glass_blur.setValue(glass.BLUR_SAFE)
+    assert sp.glass_warn.isHidden()
+    sp.glass_tint.setValue(55)
+    saved = json.loads(json.dumps({"font": "Be Vietnam Pro", "size": 20, "style": sp.get_style()}))
+    other = StylePanel()
+    other.set_from(saved)                                          # style.json round trip
+    assert (other.glass_tint.value(), other.glass_blur.value()) == (55, glass.BLUR_SAFE)
+    assert not other._glass_row.isHidden()
+    other.set_from({"style": {"glass": True}})                     # older style.json
+    assert (other.glass_tint.value(), other.glass_blur.value()) == (40, 22)
+    sp.box_style.setCurrentText("Hộp mờ")
+    assert sp._glass_row.isHidden() and "glass_blur" not in sp.get_style()
+
+
+def test_low_tint_turns_the_text_white_and_back(qapp):
+    from desktop.widgets.style_panel import GLASS_LIGHT_TEXT_BELOW, GLASS_STYLE, StylePanel
+
+    sp = StylePanel()
+    sp.box_style.setCurrentText(GLASS_STYLE)
+    assert sp.get_style()["primary"].lower() == "#1c1c1e"
+    sp.glass_tint.setValue(30)                                     # still above: no change
+    assert sp.get_style()["primary"].lower() == "#1c1c1e"
+    sp.glass_tint.setValue(GLASS_LIGHT_TEXT_BELOW - 5)             # nearly clear glass
+    st = sp.get_style()
+    assert st["primary"].lower() == "#ffffff" and st["outline_w"] == 2
+    assert st["outline"].lower() == "#000000"
+    sp.c_text.set_hex("#f0e8d0")                                   # the user's own colour…
+    sp.glass_tint.setValue(5)                                      # …sticks below the line
+    assert sp.get_style()["primary"].lower() == "#f0e8d0"
+    sp.glass_tint.setValue(50)                                     # whiter again: dark text
+    st = sp.get_style()
+    assert st["primary"].lower() == "#1c1c1e" and st["outline_w"] == 0
+    sp.set_from({"style": {"glass": True, "glass_tint": 10, "primary": "#1c1c1e"}})
+    assert sp.get_style()["primary"].lower() == "#1c1c1e"          # loading never recolours
+
+
+def test_canvas_follows_tint_and_blur(qapp):
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage
+
+    from desktop.widgets.video_canvas import VideoCanvas, glass_shrink
+
+    assert glass_shrink(22, 1080) == 14 and glass_shrink(22, 540) == 7
+    assert glass_shrink(40, 1080) > glass_shrink(10, 1080) >= 1
+
+    def inside(tint: int) -> int:
+        c = VideoCanvas()
+        c.resize(640, 360)
+        frame = QImage(1920, 1080, QImage.Format_RGB32)
+        frame.fill(QColor("#101010"))
+        c.set_frame(frame, 1920, 1080)
+        c.set_caption("Xin chào các bạn")
+        c.set_style({"glass": True, "glass_tint": tint, "outline_w": 0, "primary": "#1c1c1e"},
+                    20, "Be Vietnam Pro")
+        img = c.grab().toImage()
+        c._compute_disp()
+        f = QFont("Be Vietnam Pro")
+        f.setPixelSize(max(8, int(c._text_h_px())))
+        pill = c.glass_rect(QFontMetrics(f))
+        return img.pixelColor(int(pill.left() + 4), int(pill.center().y())).lightness()
+
+    clear, mid, milky = inside(0), inside(40), inside(90)
+    assert clear < 40 < mid < milky and milky > 200
