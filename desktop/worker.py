@@ -396,6 +396,23 @@ class PipelineWorker(QObject):
         if has:
             self.log.emit("ℹ Video có chữ Trung in sẵn — phụ đề sẽ dùng nền hộp để che")
 
+    def _glass_region(self, job, o: dict) -> None:
+        """The glass must sit where the burned-in Chinese is: when no band was measured
+        yet (ASR job, older project) look once now — local OCR on 16 frames, a few
+        seconds, nothing uploaded. Best effort: without it the glass covers the usual
+        caption band."""
+        from app.pipeline import assemble, glass
+
+        if not (glass.is_glass(o.get("style")) or o.get("cover_mode") == "glass"):
+            return
+        if o.get("preview") or assemble._load_region(job) is not None:
+            return
+        _region, hardsubs, _cn = glass.job_context(job)
+        if not hardsubs:
+            return
+        self.progress.emit(0.6, "Đang dò vị trí chữ Trung để đặt kính mờ…")
+        self._note_hardsubs(job, o)
+
     # --- render --------------------------------------------------------------
     @Slot()
     def run_render(self) -> None:
@@ -473,6 +490,7 @@ class PipelineWorker(QObject):
             self.progress.emit(0.6, "Đang ghép video (ffmpeg)…")
             ui_size = o.get("size")
             ass_size = int(round(ui_size * 3)) if ui_size else 60  # UI px → .ass units (1080 canvas)
+            self._glass_region(job, o)
             out = assemble.assemble(
                 job, segments,
                 burn_cues=o.get("burn_cues"),  # N-13 snapshot: subs match what TTS spoke
@@ -487,6 +505,8 @@ class PipelineWorker(QObject):
                 log=self.log.emit,
                 preview=bool(o.get("preview")),     # E-15: fast low-res check first
                 frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
+                res=o.get("res") or "source",       # "Chất lượng": short side, never upscaled
+                preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
                 progress=lambda f, m: self.progress.emit(0.6 + 0.4 * f, m),
                 cancel=lambda: self._cancel,        # a long encode stops on Hủy
                 overlays=disclosure.overlays(        # F-1/F-2: credit + AI-voice label

@@ -250,6 +250,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         font=args.font,
         log=print,  # surface the "câu QUÁ DÀI" fit warnings headless too
         frame=args.frame,
+        res=getattr(args, "res", "source"),
+        preset=getattr(args, "quality", None),
     )
     print(f"[render] done -> {out}")
     return 0
@@ -323,8 +325,13 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--audio-mode", choices=["replace", "mix", "duck", "keep-music"], default=None,
                     help="audio: replace|mix|duck|keep-music (Demucs keeps the music). Overrides --keep-audio")
     rn.add_argument("--cover-hardsubs", action="store_true", help="legacy alias for --cover box")
-    rn.add_argument("--cover", choices=["off", "box", "blur"], default=None,
-                    help="hide leftover CN hardsubs: opaque box or a blurred bottom band")
+    rn.add_argument("--cover", choices=["off", "box", "blur", "glass"], default=None,
+                    help="hide leftover CN hardsubs: opaque box, a blurred bottom band, or "
+                         "frosted white glass under each line (dark text)")
+    rn.add_argument("--res", choices=["source", "1080", "720", "480"], default="source",
+                    help="output resolution (short side; never above the source)")
+    rn.add_argument("--quality", choices=["light", "balanced", "sharp"], default="sharp",
+                    help="encode quality/size: light (small) | balanced | sharp (default)")
     rn.add_argument("--font", default="Be Vietnam Pro", help="subtitle font (Vietnamese-diacritic)")
     rn.add_argument("--frame", choices=["source", "tiktok"], default="source",
                     help="output frame: source size, or tiktok = 1080x1920 (fit + black bars)")
