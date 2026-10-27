@@ -114,6 +114,30 @@ def probe_duration(path: Path) -> float:
         return 0.0
 
 
+def probe_size(path: Path) -> tuple[int, int] | None:
+    """Display size (w, h) of the first video stream — rotated phone clips swapped the
+    way ffmpeg autorotates them — or None when it can't be read."""
+    try:
+        out = subprocess.run(
+            [ffprobe_bin(), "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, check=True, encoding="utf-8", errors="replace",
+        )
+        st = (json.loads(out.stdout or "{}").get("streams") or [{}])[0]
+        w, h = int(st["width"]), int(st["height"])
+    except Exception:  # noqa: BLE001
+        return None
+    rot = st.get("tags", {}).get("rotate") or next(
+        (d.get("rotation") for d in st.get("side_data_list") or [] if "rotation" in d), 0)
+    try:
+        if abs(int(float(rot))) % 180 == 90:
+            w, h = h, w
+    except (TypeError, ValueError):
+        pass
+    return (w, h) if w > 0 and h > 0 else None
+
+
 def _has_audio_stream(src: Path) -> bool:
     """Whether the source has any audio track — mix/duck reference [0:a] and hard-
     fail on silent screen-recordings without this check. Probe failure assumes
@@ -175,12 +199,26 @@ def style_preview_frame(
                 at = c.start + min(0.4, max(0.0, (c.end - c.start) / 2))
                 break
     out = wd / "_preview.png"
+    burn = f"ass=_preview.ass{_ass_fonts(wd)}"
+    video = ["-vf", burn]
+    from app.pipeline import glass
+
+    if glass.is_glass(style):           # the frosted glass under the line, as rendered
+        src = probe_size(job.source_video) or (1920, 1080)
+        W, H = 1080.0 * src[0] / src[1], 1080.0
+        region, hardsubs, cn = glass.job_context(job)
+        events = glass.plan(cues, W=W, H=H, font=font, size=size, style=style,
+                            cue_styles=cue_styles, cn_cues=cn, region=region, hardsubs=hardsubs)
+        bnd = glass.band(events)
+        if bnd:
+            glass.write_mask(events, wd / "_preview_glass.ass", bnd, W=W, H=H)
+            parts = glass.filter_parts("[0:v]", bnd, "_preview_glass.ass", "[g]", height=src[1])
+            video = ["-filter_complex", ";".join([*parts, f"[g]{burn}[v]"]), "-map", "[v]"]
     # output-seek (-ss after -i) preserves source PTS so the ass filter shows the
     # cue actually active at `at` (input-seek would reset PTS → always cue #1).
     subprocess.run(
         [ffmpeg_bin(), "-y", "-i", "source.mp4", "-ss", f"{at:.3f}",
-         "-frames:v", "1", "-vf", f"ass=_preview.ass{_ass_fonts(wd)}", "-q:v", "2",
-         "_preview.png"],
+         "-frames:v", "1", *video, "-q:v", "2", "_preview.png"],
         cwd=str(wd), check=True, capture_output=True,
     )
     return out
@@ -444,12 +482,95 @@ def _video_encoder() -> str:
     return "h264_nvenc" if _NVENC else "libx264"
 
 
-def _video_args(encoder: str, preview: bool) -> list[str]:
+# Output quality ("Chất lượng" on the render page). Resolution = the SHORT side (720p is
+# 1280×720 landscape, 720×1280 portrait / 9:16); never above the source. Presets map to
+# libx264 CRF / h264_nvenc CQ (NVENC needs ~1–3 lower numbers for the same look) and
+# the AAC bitrate. "sharp" = the values every render used before the choice existed;
+# its 1080p NVENC output measured ~4.8 Mb/s on a talking-head video (1 GB / 28 min).
+RESOLUTIONS = {"source": None, "1080": 1080, "720": 720, "480": 480}
+PRESETS = {                      # crf, cq, audio, ~Mb/s at 1080p (size estimate only)
+    "light": {"crf": 27, "cq": 30, "audio": "128k", "mbps": 1.5},
+    "balanced": {"crf": 23, "cq": 25, "audio": "192k", "mbps": 2.8},
+    "sharp": {"crf": 20, "cq": 21, "audio": "192k", "mbps": 4.8},
+}
+DEFAULT_PRESET = "sharp"
+
+
+def _even(v: float) -> int:
+    return max(2, int(round(v / 2.0)) * 2)
+
+
+def tiktok_canvas(res: str | None) -> tuple[int, int]:
+    """The 9:16 canvas for a quality: 1080×1920 at source/1080, 720×1280, 480×854."""
+    t = RESOLUTIONS.get(res or "source")
+    if not t or t >= TIKTOK_W:
+        return TIKTOK_W, TIKTOK_H
+    return t, _even(t * TIKTOK_H / TIKTOK_W)
+
+
+def scale_filter(res: str | None) -> str | None:
+    """The downscale for a "source"-frame render: short side → the chosen lines, aspect
+    kept, even sizes, and ``min`` so a smaller source is never upscaled. Pure; None =
+    keep the source size."""
+    t = RESOLUTIONS.get(res or "source")
+    if not t:
+        return None
+    return (f"scale=w='if(gte(iw,ih),-2,min(iw,{t}))':h='if(gte(iw,ih),min(ih,{t}),-2)'"
+            ":flags=lanczos")
+
+
+def burn_size(src: tuple[int, int] | None, frame: str, res: str | None) -> tuple[int, int] | None:
+    """Size of the picture the subtitles are burned on (before 9:16 bars) — mirrors
+    :func:`scale_filter` and the tiktok fit. Pure; None when the source size is unknown."""
+    if not src:
+        return None
+    w, h = src
+    if frame == "tiktok":
+        cw, ch = tiktok_canvas(res)
+        s = min(cw / w, ch / h)        # ffmpeg's "decrease" + divisible_by=2 rounds down
+        return min(cw, int(w * s) // 2 * 2), min(ch, int(h * s) // 2 * 2)
+    t = RESOLUTIONS.get(res or "source")
+    if not t or t >= min(w, h):
+        return w, h
+    return (_even(w * t / h), t) if w >= h else (t, _even(h * t / w))
+
+
+def output_size(src: tuple[int, int] | None, frame: str, res: str | None) -> tuple[int, int] | None:
+    """Final video size (the 9:16 canvas for tiktok). Pure."""
+    if frame == "tiktok":
+        return tiktok_canvas(res)
+    return burn_size(src, frame, res)
+
+
+def estimate_size_mb(src: tuple[int, int] | None, frame: str, res: str | None,
+                     preset: str | None, duration: float) -> float | None:
+    """Rough output size in MB: the preset's 1080p bitrate scaled by pixel count
+    (^0.75 — fewer pixels compress worse per pixel) + the audio. Content changes this
+    a lot; the UI shows it as an estimate. None when the size or length is unknown."""
+    size = output_size(src, frame, res)
+    if not size or duration <= 0:
+        return None
+    p = PRESETS.get(preset or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
+    if frame == "tiktok":       # the black bars cost ~nothing: count the picture only
+        size = burn_size(src, frame, res) or size
+    mbps = p["mbps"] * ((size[0] * size[1]) / (1920 * 1080)) ** 0.75
+    audio = int(p["audio"].rstrip("k")) / 1000
+    return (mbps + audio) * duration / 8
+
+
+def _video_args(encoder: str, preview: bool, preset: str | None = None) -> list[str]:
+    p = PRESETS.get(preset or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
     if encoder == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-preset", "p1" if preview else "p5", "-rc", "vbr",
-                "-cq", "30" if preview else "21", "-b:v", "0", "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-crf", "30" if preview else "20",
+                "-cq", "30" if preview else str(p["cq"]), "-b:v", "0", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-crf", "30" if preview else str(p["crf"]),
             "-preset", "ultrafast" if preview else "veryfast", "-pix_fmt", "yuv420p"]
+
+
+def _audio_bitrate(preview: bool, preset: str | None = None) -> str:
+    if preview:
+        return "128k"
+    return PRESETS.get(preset or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])["audio"]
 
 
 def _run_ffmpeg(cmd: list[str], cwd: Path, *, total: float,
@@ -581,7 +702,7 @@ def _build_render(
     audio_mode: str,
     orig_volume: float,
     dub_volume: float,
-    cover_mode: str = "off",   # "off" | "box" (opaque box in the ASS style) | "blur"
+    cover_mode: str = "off",   # "off" | "box" (opaque ASS box) | "blur" | "glass" (glass.py)
     log: Callable[[str], None] | None = None,
     preview: bool = False,     # E-15: fast low-res preview.mp4 instead of output.mp4
     frame: str = "source",     # E-16: "source" | "tiktok" (1080x1920, fit + pad)
@@ -590,6 +711,11 @@ def _build_render(
     encoder: str | None = None,
     duration: float = 0.0,     # source length: the output is pinned to it (long-video join)
     inserts: list[tuple[float, float]] | None = None,   # F-4 pause notes (source time, length)
+    res: str = "source",       # output lines (RESOLUTIONS) — ignored by the 640p preview
+    preset: str | None = None,  # PRESETS key → CRF / CQ / audio bitrate
+    glass_band: tuple | None = None,   # cover "glass": the band (glass.band) to blur…
+    glass_mask: str = "glass_mask.ass",  # …and the mask .ass drawn by glass.write_mask
+    burn_h: int = 1080,        # height of the picture the subs are burned on (blur sigma)
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -722,16 +848,29 @@ def _build_render(
         parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         vsrc = "[vbg]"
+    if preview:
+        res = "source"              # the quick check is always the 640p proof
+    cw, ch = tiktok_canvas(res)
     if frame == "tiktok":
-        # fit inside 1080x1920 BEFORE burning (sharper text, same layout as the source
-        # render), then pad the bars — the cover/blur band stays on the picture
-        parts.append(f"{vsrc}scale={TIKTOK_W}:{TIKTOK_H}:force_original_aspect_ratio=decrease"
+        # fit inside the 9:16 canvas BEFORE burning (sharper text, same layout as the
+        # source render), then pad the bars — the cover/blur band stays on the picture
+        parts.append(f"{vsrc}scale={cw}:{ch}:force_original_aspect_ratio=decrease"
                      f":force_divisible_by=2,setsar=1[vfit]")
         vsrc = "[vfit]"
+    elif scale_filter(res):
+        # downscale BEFORE the burn: libass draws the text at the final size (sharp),
+        # and the .ass layout (PlayRes 1920x1080) scales with the frame
+        parts.append(f"{vsrc}{scale_filter(res)}[vscl]")
+        vsrc = "[vscl]"
+    if cover_mode == "glass" and glass_band:
+        from app.pipeline import glass
+
+        parts += glass.filter_parts(vsrc, glass_band, glass_mask, "[vglass]", height=burn_h)
+        vsrc = "[vglass]"
     parts.append(f"{vsrc}ass={ass}{_ass_fonts(wd)}[v]")
     vmap = "[v]"
     if frame == "tiktok":
-        parts.append(f"[v]pad={TIKTOK_W}:{TIKTOK_H}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
+        parts.append(f"[v]pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
         vmap = "[vt]"
     if preview:                     # same graph, scaled down after the subs are burned
         parts.append(f"{vmap}scale=-2:640[vp]")
@@ -740,8 +879,8 @@ def _build_render(
     cmd += [
         "-filter_complex_script", "filter_complex.txt",
         "-map", vmap, "-map", audio_map,
-        *_video_args(encoder or _video_encoder(), preview),
-        "-c:a", "aac", "-b:a", "128k" if preview else "192k", "-ar", "48000",
+        *_video_args(encoder or _video_encoder(), preview, preset),
+        "-c:a", "aac", "-b:a", _audio_bitrate(preview, preset), "-ar", "48000",
         *(["-t", f"{out_len:.3f}"] if duration > 0 else []),
         "preview.mp4" if preview else "output.mp4",
     ]
@@ -757,7 +896,7 @@ def assemble(
     orig_volume: float = 1.0,      # original-audio gain (0..1+) for mix/duck
     dub_volume: float = 1.0,       # Vietnamese dub gain
     cover_hardsubs: bool = False,        # legacy bool → "box"
-    cover_mode: str | None = None,       # "off" | "box" | "blur" (wins over the bool)
+    cover_mode: str | None = None,       # "off" | "box" | "blur" | "glass" (wins over the bool)
     font: str = "Be Vietnam Pro",
     size: int = 60,
     style: dict | None = None,
@@ -768,11 +907,22 @@ def assemble(
     cancel: Callable[[], bool] | None = None,
     overlays: list[dict] | None = None,  # F-1/F-2 corner notes (credit, "Lồng tiếng AI")
     commentary: list | None = None,      # F-4 commentary.Voiced — the user's own notes
+    res: str = "source",                 # "source" | "1080" | "720" | "480" (short side)
+    preset: str | None = None,           # "light" | "balanced" | "sharp" (default sharp)
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
+    from app.pipeline import glass
 
     mode = cover_mode or ("box" if cover_hardsubs else "off")
+    # the glass look is one thing: the "Kính mờ trắng" style always renders the glass
+    # cover, and the glass cover always gets text that reads on white
+    if glass.is_glass(style):
+        mode = "glass"
+    if mode == "glass":
+        style = glass.text_style(style)
+    res = res if res in RESOLUTIONS else "source"
+    preset = preset if preset in PRESETS else None
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
     voiced = commentary or []
     ins = cm.inserts(voiced)
@@ -783,9 +933,25 @@ def assemble(
                                        [p for _c, p in segments])] + cm.speech_cues(voiced, ins)
     # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
     # (the soft-subtitle export pairs the two)
+    cue_styles = _load_cue_styles(job)
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
-              cover_hardsubs=(mode == "box"), style=style, cue_styles=_load_cue_styles(job),
+              cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=overlays, comments=note_subs)
+    src_size = probe_size(job.source_video) if job.source_video.exists() else None
+    burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
+    glass_band = None
+    mask_name = "preview_glass.ass" if preview else glass.MASK_FILE
+    if mode == "glass":
+        # geometry on a nominal 1080-line picture of the source's shape (it is stored
+        # normalized, so it fits whatever size the picture is scaled to)
+        W, H = 1080.0 * burn[0] / burn[1], 1080.0
+        region, hardsubs, cn = glass.job_context(job)
+        events = glass.plan([*cues_for_subs, *note_subs], W=W, H=H, font=font, size=size,
+                            style=style, cue_styles=cue_styles, cn_cues=cm.shift_cues(cn, ins),
+                            region=region, hardsubs=hardsubs)
+        glass_band = glass.band(events)
+        if glass_band:
+            glass.write_mask(events, job.work_dir / mask_name, glass_band, W=W, H=H)
 
     say = progress or (lambda _f, _m: None)
     plan = _plan_segments(segments)
@@ -799,7 +965,8 @@ def assemble(
         cmd = _build_render(job, segments, audio_mode=audio_mode, orig_volume=orig_volume,
                             dub_volume=dub_volume, cover_mode=mode, log=log, preview=preview,
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
-                            duration=total, inserts=ins)
+                            duration=total, inserts=ins, res=res, preset=preset,
+                            glass_band=glass_band, glass_mask=mask_name, burn_h=burn[1])
         try:
             _run_ffmpeg(cmd, job.work_dir, total=out_total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
@@ -820,7 +987,10 @@ def assemble(
                     "encoder": encoder, "duration": round(total, 3),
                     "inserts": [[round(a, 3), round(d, 3)] for a, d in ins],
                     "commentary_s": round(note_secs, 2),
-                    "commentary_share": round(cm.share(note_secs, total, out_total - total), 4)}),
+                    "commentary_share": round(cm.share(note_secs, total, out_total - total), 4),
+                    "res": res, "preset": preset or DEFAULT_PRESET,
+                    "size": list(output_size(src_size, frame, res) or ()),
+                    "glass_band": list(glass_band) if glass_band else None}),
         encoding="utf-8")
     # the subtitles exactly as burned (output timeline, the user's notes included) — what
     # "Xuất .srt" and the long-video join use, since vi.srt stays on the source timeline

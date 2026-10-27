@@ -208,7 +208,8 @@ def write_ass(
                "margin_v": 100}
         style_block += "\n" + _style_line("Tag", tag, font, max(22, round(size * 0.42)), False)
     if comments:
-        note = {**base, "primary": "#FFD966", "italic": True}
+        # warm yellow; a dark amber on the white glass, where yellow would not read
+        note = {**base, "primary": "#7A4A00" if base.get("glass") else "#FFD966", "italic": True}
         style_block += "\n" + _style_line("Comment", note, font, size, cover_hardsubs)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]

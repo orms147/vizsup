@@ -34,7 +34,11 @@ BOX_STYLES = {
     "Viền chữ (không nền)": (1, 255),
     "Hộp mờ": (4, 110),
     "Hộp đặc (che chữ Trung)": (4, 0),
+    "Kính mờ trắng (che chữ Trung)": (1, 255),   # + "glass": the render blurs + tints
 }
+GLASS_STYLE = "Kính mờ trắng (che chữ Trung)"
+GLASS_TEXT, GLASS_OUTLINE_W = "#1c1c1e", 0     # dark text reads on the white glass
+PLAIN_TEXT, PLAIN_OUTLINE_W = "#ffffff", 2     # back to white + outline when leaving it
 
 
 def estimate_line_count(text: str, *, size_px: int, font: str, margin_l: int = 60,
@@ -167,6 +171,13 @@ class StylePanel(QScrollArea):
         self.box_style.addItems(list(BOX_STYLES))
         self.box_style.currentTextChanged.connect(self._changed)
         self.box_style.currentTextChanged.connect(self._sync_box_color)
+        self._prev_box = self.box_style.currentText()
+        self._loading = False
+        self.box_style.currentTextChanged.connect(self._sync_glass_colors)
+        self.box_style.setItemData(
+            list(BOX_STYLES).index(GLASS_STYLE),
+            "Video phía sau dòng phụ đề được làm mờ mạnh và phủ trắng trong (kiểu kính iOS), "
+            "chữ Trung in sẵn không còn đọc được; chữ Việt màu tối.", Qt.ToolTipRole)
         ll.addLayout(self._row("Kiểu nền", self.box_style))
         # "Màu nền" only matters for the box styles → hide it for "Viền chữ"
         self._box_color_row = QWidget()
@@ -247,6 +258,21 @@ class StylePanel(QScrollArea):
         border_style, _ = BOX_STYLES[self.box_style.currentText()]
         self._box_color_row.setVisible(border_style in (3, 4))
 
+    def _sync_glass_colors(self, text: str) -> None:
+        """Picking the white glass turns light text dark (white on white can't be read);
+        leaving it turns dark text white again. Loading a saved style never recolours."""
+        prev, self._prev_box = self._prev_box, text
+        if self._loading or (prev == GLASS_STYLE) == (text == GLASS_STYLE):
+            return
+        light = QColor(self.c_text.hex).lightness() > 140
+        if text == GLASS_STYLE and light:
+            self.c_text.set_hex(GLASS_TEXT)
+            self.outline_w.setValue(GLASS_OUTLINE_W)
+        elif text != GLASS_STYLE and not light:
+            self.c_text.set_hex(PLAIN_TEXT)
+            self.outline_w.setValue(PLAIN_OUTLINE_W)
+        self._changed()
+
     def _reset_pos(self) -> None:
         self._pos = None
         self.m_left.setValue(60)
@@ -291,7 +317,9 @@ class StylePanel(QScrollArea):
         border_style, box_alpha = BOX_STYLES[self.box_style.currentText()]
         ass_size = self.size.value() * 3  # UI px → .ass units (1080 canvas)
         fsp = round(ass_size * self.letter.value() / 100.0)
+        extra = {"glass": True} if self.box_style.currentText() == GLASS_STYLE else {}
         return {
+            **extra,
             "primary": self.c_text.hex,
             "outline": self.c_outline.hex,
             "box": self.c_box.hex,
@@ -334,12 +362,19 @@ class StylePanel(QScrollArea):
         if j >= 0:
             self.line_mode.setCurrentIndex(j)
         bs = (int(s.get("border_style", 1)), int(s.get("box_alpha", 255)))
-        for label, val in BOX_STYLES.items():
-            if val == bs:
-                k = self.box_style.findText(label)
-                if k >= 0:
-                    self.box_style.setCurrentIndex(k)
-                break
+        self._loading = True               # a saved style keeps its own colours
+        try:
+            if s.get("glass"):
+                self.box_style.setCurrentText(GLASS_STYLE)
+            else:
+                for label, val in BOX_STYLES.items():
+                    if val == bs and label != GLASS_STYLE:
+                        k = self.box_style.findText(label)
+                        if k >= 0:
+                            self.box_style.setCurrentIndex(k)
+                        break
+        finally:
+            self._loading = False
         self._pos = tuple(s["pos"]) if s.get("pos") else None
         self.blockSignals(False)
         self._changed()

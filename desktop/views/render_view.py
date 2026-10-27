@@ -60,7 +60,13 @@ FRAMES = (("Giữ nguyên khung hình gốc", "source"),
           ("Dọc 9:16 · TikTok / Reels / Shorts (1080×1920)", "tiktok"))
 COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
           ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
-          ("Không che", "off"))
+          ("Không che", "off"),
+          ("Kính mờ trắng · theo Kiểu chữ", "glass"))
+# "Chất lượng": output lines (short side, never above the source) × size/sharpness preset
+RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1080p", "1080"), ("720p", "720"),
+               ("480p", "480"))
+PRESETS = (("Nhẹ · file nhỏ", "light"), ("Cân bằng", "balanced"), ("Nét · file lớn", "sharp"))
+DEFAULT_PRESET = "balanced"
 SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của bạn."
 
 
@@ -300,6 +306,8 @@ class RenderView(QWidget):
         self.cover = QComboBox()
         for text, key in COVERS:
             self.cover.addItem(text, key)
+        self._glass_style = False
+        self._sync_cover()
         ll.addWidget(self.cover)
         ll.addWidget(label("Khung hình", "h3"))
         self.frame = QComboBox()
@@ -313,6 +321,33 @@ class RenderView(QWidget):
         self.frame.currentIndexChanged.connect(
             lambda _i: store.update_ui_state(render_frame=self.frame.currentData()))
         ll.addWidget(self.frame)
+        ll.addWidget(label("Chất lượng", "h3"))
+        st = store.load_ui_state()
+        qrow = QHBoxLayout()
+        qrow.setSpacing(8)
+        self.res = QComboBox()
+        for text, key in RESOLUTIONS:
+            self.res.addItem(text, key)
+        self.res.setToolTip("Độ phân giải video xuất (cạnh ngắn). Không bao giờ lớn hơn video "
+                            "nguồn. Khung dọc 9:16: 1080p = 1080×1920, 720p = 720×1280.")
+        self.res.setCurrentIndex(max(self.res.findData(st.get("render_res")), 0))
+        self.preset = QComboBox()
+        for text, key in PRESETS:
+            self.preset.addItem(text, key)
+        self.preset.setToolTip("Nhẹ: file nhỏ, hơi mềm · Cân bằng: gần như không thấy khác · "
+                               "Nét: giữ chi tiết tối đa, file lớn nhất")
+        k = self.preset.findData(st.get("render_quality") or DEFAULT_PRESET)
+        self.preset.setCurrentIndex(max(k, 0))
+        self.res.currentIndexChanged.connect(self._on_quality)
+        self.preset.currentIndexChanged.connect(self._on_quality)
+        self.frame.currentIndexChanged.connect(lambda _i: self._sync_quality())
+        qrow.addWidget(self.res, 1)
+        qrow.addWidget(self.preset, 1)
+        ll.addLayout(qrow)
+        self.size_lbl = label("", "small", wrap=True)
+        ll.addWidget(self.size_lbl)
+        self._src_size: tuple[int, int] | None = None
+        self._src_dur = 0.0
         ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
 
         # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md)
@@ -344,6 +379,8 @@ class RenderView(QWidget):
         # long choices elide instead of widening the fixed-width panel past its scroll area
         for combo in (self.voice, self.cover, self.frame):
             compact_combo(combo, 10)
+        for combo in (self.res, self.preset):     # two per row
+            compact_combo(combo, 6)
         compact_combo(self.rights, 6)            # shares its row with a caption + button
         rrow.addWidget(self.rights, 1)
         self.proof_btn = button("Bằng chứng…", "Upload", variant="ghost", small=True,
@@ -593,7 +630,8 @@ class RenderView(QWidget):
         self.project.set_project(title, meta)
 
     def set_job(self, job, *, cues: int, tts: str = "") -> None:
-        if job is not self._job:
+        changed = job is not self._job
+        if changed:
             self._suggested = False
             self._joined = None
             self._out = None
@@ -608,6 +646,8 @@ class RenderView(QWidget):
             self._right_stack.setCurrentIndex(2 if self._out else 0)
         self._job = job
         self._cues = cues
+        if changed:
+            self._probe_source(job)
         self._load_posting()
         if tts:
             self._tts = tts
@@ -901,6 +941,83 @@ class RenderView(QWidget):
 
     def set_style(self, style: dict, size_px: int, font: str) -> None:
         self.preview.set_style(style, size_px, font)
+        self._glass_style = bool((style or {}).get("glass"))
+        self._sync_cover()
+
+    # --- cover ↔ style, quality ------------------------------------------------------
+    def _sync_cover(self) -> None:
+        """“Kính mờ trắng” is a subtitle style AND a cover: with that style the cover is
+        the glass (a black box under dark text would hide it); without it the glass
+        cover can't be picked (white text on white glass can't be read)."""
+        i = self.cover.findData("glass")
+        item = self.cover.model().item(i) if i >= 0 else None
+        if item is not None:
+            item.setEnabled(self._glass_style)
+        if self._glass_style:
+            self.cover.setCurrentIndex(i)
+            self.cover.setEnabled(False)
+            self.cover.setToolTip("Kiểu chữ “Kính mờ trắng” tự làm mờ chữ Trung phía sau — đổi "
+                                  "ở tab Kiểu chữ (màn Sửa phụ đề).")
+        else:
+            self.cover.setEnabled(True)
+            self.cover.setToolTip("")
+            if self.cover.currentData() == "glass":
+                self.cover.setCurrentIndex(self.cover.findData("box"))
+
+    def _on_quality(self, *_a) -> None:
+        store.update_ui_state(render_res=self.res.currentData(),
+                              render_quality=self.preset.currentData())
+        self._sync_quality()
+
+    def _sync_quality(self) -> None:
+        """Grey out resolutions above the source (never upscale) and show a rough size."""
+        from app.pipeline import assemble
+
+        frame = self.frame.currentData()
+        src = self._src_size
+        for i in range(self.res.count()):
+            t = assemble.RESOLUTIONS.get(self.res.itemData(i))
+            item = self.res.model().item(i)
+            if item is None:
+                continue
+            # 9:16 keeps today's 1080×1920 canvas at most; a source frame never grows
+            ok = (not t or src is None or t <= min(src)) if frame != "tiktok" else True
+            item.setEnabled(ok)
+        cur = self.res.model().item(self.res.currentIndex())
+        if cur is not None and not cur.isEnabled():
+            self.res.blockSignals(True)          # not the user's choice: don't remember it
+            self.res.setCurrentIndex(0)
+            self.res.blockSignals(False)
+        size = assemble.output_size(src, frame, self.res.currentData())
+        mb = assemble.estimate_size_mb(src, frame, self.res.currentData(),
+                                       self.preset.currentData(), self._src_dur)
+        bits = []
+        if size:
+            bits.append(f"{size[0]}×{size[1]}")
+        if mb:
+            bits.append("ước tính ~" + (f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB")
+                        .replace(".", ","))
+        self.size_lbl.setText(" · ".join(bits))
+
+    def _probe_source(self, job) -> None:
+        """Source size + length for the quality choices (ffprobe, off the UI thread)."""
+        self._src_size, self._src_dur = None, 0.0
+        self._sync_quality()
+        src = getattr(job, "source_video", None)
+        if src is None or not Path(src).exists():
+            return
+
+        def work():
+            from app.pipeline import assemble
+
+            return assemble.probe_size(Path(src)), assemble.probe_duration(Path(src))
+
+        def done(r):
+            if self._job is job:
+                self._src_size, self._src_dur = r
+                self._sync_quality()
+
+        self._bg.run(work, done, lambda _m: None)
 
     def _on_primary(self) -> None:
         if not self._approved:
@@ -927,6 +1044,8 @@ class RenderView(QWidget):
             "cover_mode": self.cover.currentData(),
         }
         opts["frame"] = self.frame.currentData()   # E-16
+        opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
+        opts["preset"] = self.preset.currentData()
         opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         if preview:

@@ -40,7 +40,7 @@ def _fonts(job: Job) -> list[Path]:
 def softsub_cmd(job: Job, dest: Path) -> list[str]:
     """ffmpeg argv (cwd = job dir): video from source.mp4 (no burned subs), audio from
     the rendered output.mp4 (the dub mix), subs.ass as the default subtitle track. Re-
-    encodes the picture only when the render changed it (blur cover, F-4 pauses)."""
+    encodes the picture only when the render changed it (blur/glass cover, F-4 pauses)."""
     from app.pipeline import assemble
 
     cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4", "-i", "output.mp4", "-i", "subs.ass"]
@@ -56,6 +56,13 @@ def softsub_cmd(job: Job, dest: Path) -> list[str]:
         parts += [f"{v}split[vsrc][vband]", f"[vband]{crop_expr},boxblur=10:2[vblur]",
                   f"[vsrc][vblur]{overlay_pos}[vb]"]
         v = "[vb]"
+    from app.pipeline import glass
+
+    band = info.get("glass_band")
+    if info.get("cover_mode") == "glass" and band and (job.work_dir / glass.MASK_FILE).exists():
+        # the frosted glass is part of the picture; the dark text stays a soft subtitle
+        parts += glass.filter_parts(v, tuple(band), glass.MASK_FILE, "[vg]")
+        v = "[vg]"
     if parts:
         cmd += ["-filter_complex", ";".join(parts), "-map", v,
                 "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]

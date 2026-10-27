@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 ASS_W, ASS_H = 1920, 1080
@@ -149,8 +149,10 @@ class VideoCanvas(QWidget):
         f.setBold(bool(self._style.get("bold")))
         f.setItalic(bool(self._style.get("italic")))
         p.setFont(f)
+        if self._style.get("glass"):
+            self._draw_glass(p, QFontMetrics(f))
         # approximate box background for the "Hộp …" styles
-        if int(self._style.get("border_style", 1)) in (3, 4):
+        elif int(self._style.get("border_style", 1)) in (3, 4):
             alpha = 255 - int(self._style.get("box_alpha", 128))  # store: 0=opaque
             bg = QColor(self._style.get("box", "#000000"))
             bg.setAlpha(max(0, min(255, alpha)))
@@ -167,6 +169,44 @@ class VideoCanvas(QWidget):
                 p.drawText(rect.translated(dxo, dyo), flags, self._caption)
         p.setPen(QColor(self._style.get("primary", "#ffffff")))
         p.drawText(rect, flags, self._caption)
+
+    def glass_rect(self, fm: QFontMetrics) -> QRectF:
+        """The frosted pill around the wrapped caption (widget px) — same padding as
+        the render (app.pipeline.glass PAD_X / PAD_Y / RADIUS, × the font size)."""
+        box = self._box_rect()
+        one = self._text_h_px()
+        br = fm.boundingRect(box.toRect(), int(Qt.AlignHCenter | Qt.AlignVCenter
+                                               | Qt.TextWordWrap), self._caption)
+        return QRectF(br).adjusted(-0.65 * one, -0.22 * one, 0.65 * one, 0.22 * one)
+
+    def _draw_glass(self, p: QPainter, fm: QFontMetrics) -> None:
+        """Approximate “Kính mờ trắng”: the frame under the pill blurred (a cheap
+        down/up-scale) + a 60% white tint, rounded. The render blurs harder and also
+        covers the Chinese band; "Xem thử kiểu" burns the exact frame."""
+        pill = self.glass_rect(fm)
+        if pill.width() <= 2 or pill.height() <= 2:
+            return
+        one = self._text_h_px()
+        path = QPainterPath()
+        path.addRoundedRect(pill, min(pill.height() / 2, 0.5 * one), min(pill.height() / 2, 0.5 * one))
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setClipPath(path)
+        img, d = self._frame, self._disp
+        if img is not None and not img.isNull() and d.width() > 0:
+            sx, sy = img.width() / d.width(), img.height() / d.height()
+            src = QRect(int((pill.x() - d.x()) * sx), int((pill.y() - d.y()) * sy),
+                        max(1, int(pill.width() * sx)), max(1, int(pill.height() * sy)))
+            src = src.intersected(img.rect())
+            if not src.isEmpty():
+                small = img.copy(src).scaled(max(1, src.width() // 14), max(1, src.height() // 14),
+                                             Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                blur = small.scaled(src.width(), src.height(), Qt.IgnoreAspectRatio,
+                                    Qt.SmoothTransformation)
+                p.drawImage(QRectF(d.x() + src.x() / sx, d.y() + src.y() / sy,
+                                   src.width() / sx, src.height() / sy), blur)
+        p.fillPath(path, QColor(255, 255, 255, 153))
+        p.restore()
 
     def _draw_box(self, p: QPainter) -> None:
         if not self._show_box or self._disp.width() <= 0:
