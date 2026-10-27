@@ -294,6 +294,15 @@ class PipelineWorker(QObject):
                     self._note_hardsubs(job, o)
 
             store.debug("subtitle stage ok")
+            # 2.2) one subtitle per spoken clause, like the original captions — a line that
+            # holds "A, B, punchline." would show the punchline before it is said
+            if src == "asr" and o.get("clause_split", True):
+                from app.pipeline import clauses
+
+                try:
+                    clauses.split_job(job, log=self.log.emit)
+                except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+                    store.debug(f"clause split failed: {type(exc).__name__}: {exc}")
             # 2.3) snap fresh Chinese cues to the voice (local Silero VAD) BEFORE
             # translation, so vi.srt inherits the times. Never fails the run.
             if src != "existing" and o.get("auto_snap", True):

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from app.models import Job
 from app.pipeline import fit_estimate
 
-MIN_SECONDS = 0.8
+MIN_SECONDS = 0.6   # 2026-10-27: a 3-word clause timed to the speech (clauses.py) runs ~0.6 s
 LABELS = {
     "short": "Timing quá ngắn",
     "overlap": "Chồng lấn",

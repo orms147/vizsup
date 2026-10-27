@@ -20,6 +20,11 @@ _FORMAT_RULES = (
     "- Do not merge, split, reorder, add, or drop lines. No commentary, notes, or extra text.\n"
     "- One sentence may be spread over several numbered lines: translate each line so the lines\n"
     "  still read naturally in sequence, keeping each line's content on its own line.\n"
+    "- Each line appears on screen at the moment it is spoken. NEVER pull words from a later\n"
+    "  line into an earlier one (it gives away the next line — a joke's punchline, a reveal —\n"
+    "  before the speaker says it), and never push a line's content into the next one.\n"
+    "- Inside a line keep the Chinese clause order: where the Chinese line has clauses separated\n"
+    "  by ，/。/？/！, write the Vietnamese clauses in the same order, separated the same way.\n"
 )
 
 _TRANSLATION_RULES = (

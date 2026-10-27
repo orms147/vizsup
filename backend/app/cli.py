@@ -117,6 +117,10 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr)
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
+            if not getattr(args, "no_clause_split", False):
+                from app.pipeline import clauses
+
+                clauses.split_job(job, log=lambda m: print(f"[run] {m}"))
         # 2.3) snap the fresh cues to the voice (local Silero VAD) before translating
         if not getattr(args, "no_snap", False):
             from app.pipeline import snap
@@ -311,6 +315,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "is on screen (better xưng hô)")
     r.add_argument("--no-qa", action="store_true",
                    help="skip the AI review pass that flags suspect lines (qa_report.json)")
+    r.add_argument("--no-clause-split", action="store_true",
+                   help="keep one subtitle per ASR line (default: one per spoken clause, timed "
+                        "from the word track, so a punchline isn't shown before it is said)")
     r.add_argument("--no-snap", action="store_true",
                    help="keep ASR/OCR cue times as-is (default: snap each cue edge to the nearest "
                         "voice start/stop within 1 s, local Silero VAD)")

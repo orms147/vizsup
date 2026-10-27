@@ -547,6 +547,11 @@ class InputView(QWidget):
             "dừng (tối đa ~1 s). Chạy trên máy (Silero VAD), không gửi âm thanh đi đâu.")
         g.addWidget(self.auto_context, 5, 0)
         g.addWidget(self.auto_snap, 5, 1)
+        self.clause_split = QCheckBox("Tách vế theo nhịp nói")
+        self.clause_split.setToolTip(
+            "Câu có nhiều vế (…，…，…) được tách để mỗi vế hiện đúng lúc người nói nói ra — "
+            "như phụ đề gốc, người xem không đọc trước câu chốt. Dùng mốc thời gian từng từ.")
+        g.addWidget(self.clause_split, 9, 0)
         self.ai_review = QCheckBox("AI soát bản dịch")
         self.ai_review.setToolTip(
             "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
@@ -603,6 +608,7 @@ class InputView(QWidget):
         self.extract_terms.setChecked(bool(st.get("extract_terms")))
         self.auto_context.setChecked(bool(st.get("auto_context", True)))   # on unless turned off
         self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
+        self.clause_split.setChecked(bool(st.get("clause_split", True)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
@@ -708,6 +714,7 @@ class InputView(QWidget):
             "extract_terms": self.extract_terms.isChecked(),
             "auto_context": self.auto_context.isChecked(),
             "auto_snap": self.auto_snap.isChecked(),
+            "clause_split": self.clause_split.isChecked(),
             "ai_review": self.ai_review.isChecked(),
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),

@@ -217,6 +217,7 @@ class EditorView(QWidget):
         cl.bulkShortenRequested.connect(self._bulk_shorten)
         cl.aiSuggestionsRequested.connect(self._ai_suggestions)
         cl.tidyRequested.connect(self._tidy_timing)
+        cl.clauseSplitRequested.connect(self._split_clauses)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -643,6 +644,44 @@ class EditorView(QWidget):
         self._reload()
         tail = f" · {len(reviewed)} câu giữ nguyên đã đánh dấu Đã xem" if reviewed else ""
         self.message.emit(f"{verb} {len(chosen)} câu{tail} — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+
+    def _split_clauses(self) -> None:
+        """A line holding "A, B, punchline." shows the punchline before it is said: cut it
+        into its spoken clauses (Chinese and Vietnamese together, no re-translation), each
+        timed from the word track. One undo step; policy in app.pipeline.clauses (pure)."""
+        import json
+
+        from app.pipeline import clauses
+
+        try:
+            words = json.loads((self.job.work_dir / "asr_words.json").read_text(
+                encoding="utf-8"))["words"]
+        except (AttributeError, OSError, ValueError, KeyError, TypeError):
+            words = None
+        if not words:
+            self.message.emit("Dự án này không có mốc thời gian từng từ (phụ đề từ OCR / tệp "
+                              ".srt đã theo nhịp phụ đề gốc) — không cần tách.", "info")
+            return
+        new, split = [], 0
+        for c in self.cues:
+            parts = None if c.locked else clauses.split_pair(c.zh, c.vi, c.start, c.end, words)
+            if not parts:
+                new.append(c)
+                continue
+            split += 1
+            for zh, vi, s, e in parts:
+                piece = cuemodel.copy_cue(c)
+                piece.zh, piece.vi, piece.start, piece.end = zh, vi, round(s, 3), round(e, 3)
+                new.append(piece)
+        if not split:
+            self.message.emit("Không có câu nào tách vế được (câu một vế, hoặc bản dịch có "
+                              "số vế khác bản gốc).", "ok")
+            return
+        self._snapshot()
+        self.cues = new
+        self._reload()
+        self.message.emit(f"Đã tách {split} câu thành từng vế theo nhịp nói — Hoàn tác (Ctrl+Z) "
+                          "để bỏ.", "ok")
 
     def _tidy_timing(self) -> None:
         """Lines too short to read (ASR fragments) join their neighbour; overlaps get a
