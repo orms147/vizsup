@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSplitter,
     QStackedLayout,
     QVBoxLayout,
     QWidget,
@@ -59,8 +60,8 @@ MODES = (("keep_music", "Music2", "Giữ nhạc nền & hiệu ứng",
          ("duck", "SlidersHorizontal", "Giữ nguyên âm gốc + lồng tiếng",
           "Giọng Việt đè lên; nhạc, hiệu ứng, giọng Trung nhỏ lại"),
          ("replace", "Mic", "Chỉ giọng Việt", "Bỏ hết âm gốc — cả nhạc và hiệu ứng"),
-         ("original", "Captions", "Giữ giọng gốc (chỉ phụ đề)",
-          "Không lồng tiếng — hợp video hát"))
+         ("original", "Captions", "Không lồng tiếng — chỉ phụ đề",
+          "Giữ nguyên âm gốc, không tạo giọng Việt (không tốn TTS)"))
 MODE_TIPS = {
     "keep_music": "AI tách giọng nói khỏi nhạc nền: giọng Trung bị bỏ, nhạc nền + hiệu ứng "
                   "giữ nguyên, lồng tiếng Việt đặt lên trên. Tách một lần mỗi video (vài phút), "
@@ -120,10 +121,10 @@ class ModeCard(QPushButton):
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setObjectName("modeCard")
-        self.setMinimumHeight(54)
+        self.setMinimumHeight(60)           # grows with its text: no fixed min-height here
         self.setStyleSheet(
             f"QPushButton#modeCard{{text-align:left;background:{V2['panel']};"
-            f"border:1px solid {V2['line']};border-radius:7px;padding:0;min-height:54px;}}"
+            f"border:1px solid {V2['line']};border-radius:7px;padding:0;}}"
             f"QPushButton#modeCard:hover{{border-color:#525161;}}"
             f"QPushButton#modeCard:checked{{background:{V2['purple_soft']};"
             f"border-color:{V2['purple_line']};}}")
@@ -252,11 +253,22 @@ class RenderView(QWidget):
         self.project.add_action(self.back_btn)
         root.addWidget(self.project)
 
-        body = QHBoxLayout()
+        # options | preview: the user drags the seam; the width is remembered (ui_state)
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
+        split.addWidget(self._left())
+        split.addWidget(self._right())
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        saved = store.load_ui_state().get("render_split")
+        ok = isinstance(saved, list) and len(saved) == 2 and all(isinstance(v, int) for v in saved)
+        split.setSizes(saved if ok else [440, 900])
+        split.splitterMoved.connect(lambda *_: store.update_ui_state(render_split=split.sizes()))
+        self._split = split
+        body = QVBoxLayout()
         body.setContentsMargins(18, 4, 18, 14)
-        body.setSpacing(14)
-        body.addWidget(self._left(), 0)
-        body.addWidget(self._right(), 1)
+        body.addWidget(split)
         root.addLayout(body, 1)
         self._update_lock()
 
@@ -264,7 +276,7 @@ class RenderView(QWidget):
     def _left(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setFixedWidth(440)
+        panel.setMinimumWidth(360)          # the splitter sets the width; this is the floor
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -332,7 +344,7 @@ class RenderView(QWidget):
             mc.setToolTip(MODE_TIPS.get(key, ""))
             self.audio_group.addButton(mc)
             self.mode_cards[key] = mc
-            grid.addWidget(mc, i // 2, i % 2)
+            grid.addWidget(mc, i, 0)
         self.mode_cards[default_audio_mode(False)].setChecked(True)
         self.audio_group.buttonToggled.connect(lambda *_: self._sync_audio_enabled())
         self.audio_group.buttonClicked.connect(self._on_mode_clicked)   # the user's own choice
