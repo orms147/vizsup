@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
+import re
 from pathlib import Path
 
 from desktop import paths  # noqa: F401
@@ -84,40 +85,58 @@ def list_jobs(limit: int = 8) -> list[dict]:
     if not base.exists():
         return out
     for d in base.iterdir():
-        if not d.is_dir() or (d / "group.json").exists():   # a split video's parent folder
+        if not is_project_dir(d):    # a split video's parent folder, _models, test leftovers
             continue
         has_vi = (d / "vi.srt").exists()
         has_output = (d / "output.mp4").exists()
         partial = [p for p in (d / "cn.srt", d / "source.mp4") if p.exists()]
         if not (has_vi or has_output or (partial and (d / "job.json").exists())):
             continue
-        newest = d / "vi.srt" if has_vi else d / "output.mp4" if has_output else partial[0]
-        info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
-                "has_output": has_output, "unfinished": not (has_vi or has_output),
-                "url": None, "mtime": newest.stat().st_mtime, "group": None}
-        jf = d / "job.json"
-        if jf.exists():
-            try:
-                saved = json.loads(jf.read_text(encoding="utf-8"))
-                info["title"] = saved.get("title") or d.name
-                info["platform"] = saved.get("platform")
-                info["opts"] = saved.get("opts", {})
-                info["url"] = saved.get("url")
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
-            info["group"] = meta.get("group") if isinstance(meta, dict) else None
-            if info["title"] == d.name and isinstance(meta, dict) and meta.get("title"):
-                info["title"] = meta["title"]      # job.json is written before the download
-        except (OSError, ValueError):
-            pass
-        src = (info["opts"] or {}).get("file")
-        if info["title"] == d.name and src:
-            info["title"] = Path(src).stem         # a local file: its name, not the job id
-        out.append(info)
+        out.append(_job_row(d))
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
+
+
+def _job_row(d: Path) -> dict:
+    """What job.json / metadata.json say about one project folder (cheap: no media)."""
+    has_vi = (d / "vi.srt").exists()
+    has_output = (d / "output.mp4").exists()
+    stamps = [p for p in (d / "vi.srt", d / "output.mp4", d / "cn.srt", d / "source.mp4",
+                          d / "job.json") if p.exists()]
+    try:
+        mtime = (stamps[0] if stamps else d).stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
+            "has_output": has_output, "unfinished": not (has_vi or has_output),
+            "url": None, "mtime": mtime, "group": None, "duration": 0.0}
+    jf = d / "job.json"
+    if jf.exists():
+        try:
+            saved = json.loads(jf.read_text(encoding="utf-8"))
+            info["title"] = saved.get("title") or d.name
+            info["platform"] = saved.get("platform")
+            info["opts"] = saved.get("opts", {}) or {}
+            info["url"] = saved.get("url")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+        if isinstance(meta, dict):
+            info["group"] = meta.get("group")
+            if info["title"] == d.name and meta.get("title"):
+                info["title"] = meta["title"]      # job.json is written before the download
+            try:
+                info["duration"] = float(meta.get("duration") or 0)
+            except (TypeError, ValueError):
+                pass
+            info["platform"] = info["platform"] or meta.get("platform")
+    except (OSError, ValueError):
+        pass
+    src = (info["opts"] or {}).get("file")
+    if info["title"] == d.name and src:
+        info["title"] = Path(src).stem             # a local file: its name, not the job id
+    return info
 
 
 def list_projects(limit: int = 6) -> list[dict]:
@@ -189,10 +208,12 @@ def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:
     import subprocess
 
     out = job_dir / "thumb.jpg"
-    src = job_dir / "source.mp4"
     if out.exists():
         return out
-    if not src.exists():
+    # the source may have been cleaned away ("Chỉ xóa file nặng"): any video will do
+    src = next((job_dir / n for n in ("source.mp4", "output.mp4", "preview.mp4")
+                if (job_dir / n).exists()), None)
+    if src is None:
         return None
     try:
         from app.ffmpegutil import ffmpeg_bin
@@ -276,12 +297,229 @@ def debug(msg: str) -> None:
         pass
 
 
-def delete_job(job_id: str) -> None:
-    """Delete a project's working directory (only within storage/, for safety)."""
+# --- library: every project on disk (desktop/views/library_view.py) ------------------
+_JOB_ID = re.compile(r"[0-9a-f]{12}")
+_PROJECT_FILES = ("job.json", "metadata.json", "source.mp4", "cn.srt", "vi.srt", "output.mp4")
+# "Chỉ xóa file nặng": media the app rebuilds by itself (render caches, extracted audio,
+# the quick proof). Subtitles, settings, the user's own recordings and output.mp4 stay.
+HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3")
+HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect")
+
+
+def is_project_dir(d: Path) -> bool:
+    """A project folder: has job.json, or is named like a job id and holds project files.
+    Never ``_models`` / ``_browser`` / bench folders, a split video's parent folder
+    (group.json — listed through its parts), test leftovers like ``smoke`` or empty dirs."""
+    if not d.is_dir() or d.name.startswith(("_", ".")) or (d / "group.json").exists():
+        return False
+    if (d / "job.json").exists():
+        return True
+    return bool(_JOB_ID.fullmatch(d.name)) and any((d / f).exists() for f in _PROJECT_FILES)
+
+
+def _status(has_output: bool, has_vi: bool) -> str:
+    return "rendered" if has_output else "review" if has_vi else "unfinished"
+
+
+def library_items() -> list[dict]:
+    """Every project, newest first, a split video as ONE item (``kind="group"``). Each
+    item: id, kind, title, mtime, duration, status (rendered | review | unfinished),
+    has_source / has_output / has_preview, ``dirs`` (the folders it owns) and, for a
+    group, ``parts``. Cheap (file checks + small JSON reads); sizes: library_details."""
+    base = _storage()
+    rows: list[dict] = []
+    if not base.exists():
+        return rows
+    groups: dict[str, dict] = {}
+    for d in base.iterdir():
+        if not is_project_dir(d):
+            continue
+        j = _job_row(d)
+        j.update(has_source=(d / "source.mp4").exists(), has_preview=(d / "preview.mp4").exists(),
+                 kind="job", dirs=[str(d)], status=_status(j["has_output"], j["has_vi"]))
+        g = j.get("group") if isinstance(j.get("group"), dict) else None
+        gid = str(g.get("id") or "") if g else ""
+        if not gid or Path(gid).name != gid or gid in (".", ".."):   # not a sibling folder
+            rows.append(j)
+            continue
+        row = groups.get(gid) or _group_row(gid)
+        groups[gid] = row
+        row["parts"].append({**j, "index": g.get("index")})
+    for gfile in base.glob("*/group.json"):           # every part gone: the original stays
+        gid = gfile.parent.name
+        if gid not in groups and not gid.startswith(("_", ".")):
+            groups[gid] = _group_row(gid)
+    for row in groups.values():
+        _finish_group(row)
+        rows.append(row)
+    rows.sort(key=lambda x: x["mtime"], reverse=True)
+    return rows
+
+
+def _group_row(gid: str) -> dict:
+    info = _group_file(gid) or {}
+    try:
+        duration = float(info.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return {"kind": "group", "id": gid, "title": info.get("title") or "", "parts": [],
+            "url": info.get("url"), "duration": duration, "opts": info.get("opts") or {},
+            "total": len(info.get("parts") or [])}
+
+
+def _finish_group(row: dict) -> None:
+    parent = _storage() / row["id"]
+    parts = sorted(row["parts"], key=lambda x: x.get("index") or 0)
+    row["parts"] = parts
+    row["total"] = max(row["total"], len(parts))
+    row["title"] = row["title"] or (parts[0]["title"] if parts else row["id"])
+    joined = (parent / "output.mp4").exists()
+    row["has_output"] = joined or (bool(parts) and all(p["has_output"] for p in parts))
+    row["has_vi"] = any(p["has_vi"] for p in parts)
+    row["has_source"] = (parent / "source.mp4").exists() or any(p["has_source"] for p in parts)
+    row["has_preview"] = any(p["has_preview"] for p in parts)
+    row["status"] = _status(row["has_output"], row["has_vi"])
+    row["unfinished"] = row["status"] == "unfinished"
+    row["dirs"] = [p["dirs"][0] for p in parts] + ([str(parent)] if parent.is_dir() else [])
+    stamps = [p["mtime"] for p in parts]
+    if not stamps:
+        try:
+            stamps = [(parent / "group.json").stat().st_mtime]
+        except OSError:
+            stamps = [0.0]
+    row["mtime"] = max(stamps)
+    row["platform"] = next((p.get("platform") for p in parts if p.get("platform")), None)
+
+
+def library_item(item_id: str) -> dict | None:
+    """The library item for a job id, a split video's group id, or one of its parts."""
+    for it in library_items():
+        if it["id"] == item_id or any(p["id"] == item_id for p in it.get("parts") or []):
+            return it
+    return None
+
+
+def videos_of(item: dict) -> list[tuple[str, Path]]:
+    """Playable files, best first: (label, path). A project: bản dựng → bản xem nhanh →
+    video gốc. A split video: the joined MP4, each part's best file, the original."""
+    out: list[tuple[str, Path]] = []
+    if item.get("kind") == "group":
+        parent = _storage() / item["id"]
+        if (parent / "output.mp4").exists():
+            out.append(("Bản ghép đầy đủ", parent / "output.mp4"))
+        for p in item.get("parts") or []:
+            best = videos_of({**p, "kind": "job"})
+            if best:
+                label, path = best[0]
+                out.append((f"Phần {p.get('index') or '?'} · {label.lower()}", path))
+        if (parent / "source.mp4").exists():
+            out.append(("Video gốc", parent / "source.mp4"))
+        return out
+    d = Path(item["dirs"][0])
+    for label, name in (("Bản dựng", "output.mp4"), ("Bản xem nhanh", "preview.mp4"),
+                        ("Video gốc", "source.mp4")):
+        if (d / name).exists():
+            out.append((label, d / name))
+    return out
+
+
+def dir_size(path: Path) -> int:
+    """Bytes on disk under ``path`` (a file or a folder tree; links not followed)."""
+    try:
+        if not Path(path).is_dir():
+            return Path(path).stat().st_size if os.path.lexists(path) else 0
+    except OSError:
+        return 0
+    total = 0
+    stack = [str(path)]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        else:
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return total
+
+
+def _refetchable(job_row: dict) -> bool:
+    """source.mp4 can come back on its own: downloaded from a link, or copied from a local
+    file still on disk. A split part's source is a cut of the original — never."""
+    if job_row.get("group"):
+        return False
+    if job_row.get("url") or (job_row.get("opts") or {}).get("url"):
+        return True
+    f = (job_row.get("opts") or {}).get("file")
+    return bool(f) and Path(f).exists()
+
+
+def heavy_paths(item: dict) -> list[Path]:
+    """What "Chỉ xóa file nặng" removes from an item (existing paths only)."""
+    rows = item.get("parts") if item.get("kind") == "group" else [item]
+    out: list[Path] = []
+    for r in rows or []:
+        d = Path(r["dirs"][0])
+        names = list(HEAVY_FILES) + list(HEAVY_DIRS)
+        if _refetchable(r):
+            names.insert(0, "source.mp4")
+        out += [d / n for n in names if os.path.lexists(d / n)]
+    return out
+
+
+def library_details(items: list[dict]) -> dict[str, dict]:
+    """Per item: ``size`` (bytes on disk), ``heavy`` (what "Chỉ xóa file nặng" frees),
+    ``approved``. Blocking (walks folders) — call off the GUI thread."""
+    from app.pipeline import approval
+
+    out: dict[str, dict] = {}
+    for it in items:
+        size = sum(dir_size(Path(d)) for d in it.get("dirs") or [])
+        heavy = sum(dir_size(p) for p in heavy_paths(it))
+        approved = False
+        if it.get("kind") == "job" and it.get("has_vi"):
+            try:
+                d = Path(it["dirs"][0])
+                approved = approval.is_approved(Job(id=d.name, work_dir=d))
+            except Exception:  # noqa: BLE001 - a status must never break the list
+                approved = False
+        out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved}
+    return out
+
+
+def library_thumbs(items: list[dict]) -> dict[str, str | None]:
+    """Thumbnail per item (cached thumb.jpg, else one ffmpeg frame). Blocking."""
+    out: dict[str, str | None] = {}
+    for it in items:
+        dirs = [Path(p["dirs"][0]) for p in it.get("parts") or []] or \
+            [Path(d) for d in it.get("dirs") or []]
+        thumb = None
+        for d in dirs[:1]:
+            if d.is_dir():
+                thumb = thumbnail(d)
+        out[it["id"]] = str(thumb) if thumb else None
+    return out
+
+
+def trash_paths(targets) -> None:
+    """Move project files/folders to the Recycle Bin (desktop/trash.py). Every path must
+    sit INSIDE storage/ (never storage itself, never outside) — checked before anything
+    moves, so one bad path means nothing is deleted."""
+    from desktop import trash
+
     base = _storage().resolve()
-    d = (base / job_id).resolve()
-    if d.parent == base and d.is_dir():
-        shutil.rmtree(d, ignore_errors=True)
+    checked: list[Path] = []
+    for p in targets:
+        r = Path(p).resolve()
+        if r == base or base not in r.parents:
+            raise ValueError(f"Không xóa ngoài thư mục dự án: {p}")
+        checked.append(r)
+    trash.move_to_trash(checked)
 
 
 def load_job(job_id: str) -> tuple[Job, dict] | None:

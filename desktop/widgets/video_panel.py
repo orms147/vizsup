@@ -176,6 +176,21 @@ class VideoPanel(QFrame):
                 self._placeholder.setText("Không mở được video (tệp hỏng hoặc tải dở).")
             self._stack.setCurrentWidget(self._placeholder)
 
+    def unload(self) -> None:
+        """Stop and drop the file — Windows keeps a playing file locked, so a file shown
+        here could not be moved to the Recycle Bin until the player lets go."""
+        if self._player:
+            self._player.stop()
+            from PySide6.QtCore import QUrl
+
+            self._player.setSource(QUrl())
+        self._stack.setCurrentWidget(self._placeholder)
+
+    def set_viewer_mode(self) -> None:
+        """Plain watching (the library's player): no editor-only controls."""
+        self._expand.setVisible(False)
+        self._loop.setVisible(False)
+
     def set_dims(self, w: int, h: int) -> None:
         """Source size → the floating "720 × 1566" badge and the orientation chip."""
         self._dims = (w, h)

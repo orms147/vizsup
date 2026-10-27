@@ -138,6 +138,7 @@ class InputView(QWidget):
     groupResumeRequested = Signal(str)   # a split video: queue its unfinished parts
     groupJoinRequested = Signal(str)     # a split video: join the rendered parts
     groupDeleteRequested = Signal(str)   # a split video: delete it and all its parts
+    libraryRequested = Signal()          # "Xem tất cả (N)" → the Thư viện page
 
     def __init__(self, providers: dict) -> None:
         super().__init__()
@@ -267,6 +268,7 @@ class InputView(QWidget):
         self.recent.groupResumeRequested.connect(self.groupResumeRequested)
         self.recent.groupJoinRequested.connect(self.groupJoinRequested)
         self.recent.groupDeleteRequested.connect(self.groupDeleteRequested)
+        self.recent.libraryRequested.connect(self.libraryRequested)
         aside = QWidget()
         aside.setFixedWidth(360)
         al = QVBoxLayout(aside)

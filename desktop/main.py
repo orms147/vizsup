@@ -28,6 +28,7 @@ from desktop.settings_dialog import SettingsView
 from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
+from desktop.views.library_view import LibraryView
 from desktop.views.render_view import RenderView
 from desktop.widgets import pointer
 from desktop.widgets.chrome import AppNav, StatusBar, Toast
@@ -37,7 +38,7 @@ from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 from app.providers.registry import get_tts, list_providers  # noqa: E402
 
-INPUT, EDITOR, RENDER, SETTINGS = 0, 1, 2, 3
+INPUT, EDITOR, RENDER, SETTINGS, LIBRARY = 0, 1, 2, 3, 4
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +74,10 @@ class MainWindow(QMainWindow):
         self.settings_view = SettingsView()
         self.stack.addWidget(self.settings_view)
         self._before_settings = INPUT
+        self.library = LibraryView()
+        self.stack.addWidget(self.library)
+        self._before_library = INPUT
+        self._join_gid: str | None = None    # the split video a join is running for
         v.addWidget(self.stack, 1)
         v.addWidget(self.status)
 
@@ -107,6 +112,15 @@ class MainWindow(QMainWindow):
         self.settings_view.saved.connect(self._on_settings_saved)
         self.settings_view.closed.connect(
             lambda: self.stack.setCurrentIndex(self._before_settings))
+        # Thư viện: every project — open / watch / move to the Recycle Bin
+        self.input.libraryRequested.connect(self._open_library)
+        self.nav.libraryClicked.connect(self._open_library)
+        self.library.closed.connect(lambda: self.stack.setCurrentIndex(self._before_library))
+        self.library.openRequested.connect(self._resume)
+        self.library.groupResumeRequested.connect(self._resume_group)
+        self.library.changed.connect(self.input.refresh_recent)
+        self.library.message.connect(self.status.set_status)
+        self.library.set_guard(self._library_guard)
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -174,8 +188,9 @@ class MainWindow(QMainWindow):
         ShortcutsDialog(self).exec()
 
     def _on_page(self, idx: int) -> None:
-        if idx != SETTINGS:
+        if idx not in (SETTINGS, LIBRARY):
             self.steps.set_active(idx)
+        self.nav.library_btn.setChecked(idx == LIBRARY)
         self.nav.set_primary("Duyệt và dựng" if idx == EDITOR else None)
         self.nav.set_saved("saved" if idx == EDITOR else None)
         self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
@@ -285,7 +300,17 @@ class MainWindow(QMainWindow):
             self.input.refresh_recent()
             return
         job, opts = loaded
-        if job.vi_srt.exists():
+        if job.vi_srt.exists() and not job.source_video.exists() and opts \
+                and _source_refetchable(job, opts):
+            # "Chỉ xóa file nặng" took the source: fetch it again, every other step is kept
+            # (cn.srt / vi.srt exist → no OCR/ASR/translate), then the editor opens as usual
+            if self._busy():
+                self.status.set_status("Đợi hàng đợi xong rồi mở dự án này (cần tải lại video "
+                                       "gốc).", "warn")
+                return
+            self._run_gate(job, {**opts, "extract_terms": False},
+                           f"▶ Tải lại video gốc đã dọn (job {job.id}) — phụ đề giữ nguyên")
+        elif job.vi_srt.exists():
             self.job, self.opts = job, opts
             self._on_gate()  # reopen straight at the edit gate (no re-download/ASR)
         elif opts and self._busy():
@@ -294,22 +319,38 @@ class MainWindow(QMainWindow):
             # E-11: an unfinished run — continue from the first missing step
             self._run_gate(job, opts, f"▶ Tiếp tục dự án đang dở (job {job.id})")
 
-    def _delete_job(self, job_id: str) -> None:
-        from PySide6.QtWidgets import QMessageBox
+    # --- Thư viện (every project) -----------------------------------------------------
+    def _open_library(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx == LIBRARY:
+            return
+        self._before_library = self._before_settings if idx == SETTINGS else idx
+        self.library.refresh()
+        self.stack.setCurrentIndex(LIBRARY)
 
-        if self._any_busy():
-            self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
-            return
-        if self.job is not None and job_id == self.job.id:
-            # deleting the open job would make the next autosave write into a
-            # removed directory and crash the save timer
-            QMessageBox.information(self, "Xóa dự án",
-                                    "Dự án này đang mở — quay lại màn hình đầu trước khi xóa.")
-            return
-        if QMessageBox.question(self, "Xóa dự án", f"Xóa toàn bộ tệp của dự án này?\n{job_id}") \
-                == QMessageBox.StandardButton.Yes:
-            store.delete_job(job_id)
+    def _library_guard(self, item: dict) -> str | None:
+        """Why ``item`` (a library project / split video) must not be deleted now, or None.
+        The open project (the editor autosaves into its folder), the queued and running
+        ones, and a split video being joined are off-limits."""
+        ids = {item["id"], *(p["id"] for p in item.get("parts") or [])}
+        if self.job is not None and self.job.id in ids:
+            return "đang mở"
+        if self._queue_job is not None and self._queue_job.id in ids:
+            return "đang xử lý"
+        if ids & {o.get("_job_id") for o in self._queue if o.get("_job_id")}:
+            return "đang chờ trong hàng đợi"
+        if self._join_gid in ids and self._any_busy():
+            return "đang ghép video"
+        return None
+
+    def _delete_job(self, job_id: str) -> None:
+        """"Xóa dự án…" on a recent card: the library's flow (guard → confirm → Recycle Bin)."""
+        item = store.library_item(job_id)
+        if item is None:
+            self.status.set_status("Không tìm thấy dự án này (thư mục đã bị xóa?).", "warn")
             self.input.refresh_recent()
+            return
+        self.library.delete_items([item])
 
     def _goto_step(self, i: int) -> None:
         if i == INPUT:
@@ -609,6 +650,7 @@ class MainWindow(QMainWindow):
                                    "warn")
             return
         n = len(ready)
+        self._join_gid = gid
         self.render.set_project(group.get("title") or gid, f"Video đầy đủ · {n} phần")
         self.stack.setCurrentIndex(RENDER)
         self.render.start_join(n)
@@ -627,26 +669,9 @@ class MainWindow(QMainWindow):
         self._notify("Đã ghép xong video đầy đủ", title[:120])
 
     def _delete_group(self, gid: str) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        from app.pipeline import split
-
-        if self._any_busy():
-            self.status.setText("● Đang bận — không xóa dự án trong lúc đang chạy.")
-            return
-        group = split.load_group(settings.vizsup_storage_dir / gid) or {"parts": []}
-        ids = [p["id"] for p in group["parts"]]
-        if self.job is not None and self.job.id in ids:
-            QMessageBox.information(self, "Xóa video", "Một phần của video này đang mở — quay lại "
-                                    "màn hình đầu trước khi xóa.")
-            return
-        if QMessageBox.question(self, "Xóa video",
-                                f"Xóa video gốc và cả {len(ids)} phần (phụ đề, bản dựng)?") \
-                == QMessageBox.StandardButton.Yes:
-            self._queue = [o for o in self._queue if o.get("_job_id") not in ids]
-            for jid in [*ids, gid]:
-                store.delete_job(jid)
-            self.input.refresh_recent()
+        """A split video from the recent list: every part + the parent folder, through
+        the library's flow (guard → confirm → Recycle Bin)."""
+        self._delete_job(gid)
 
     def _on_queued_gate(self, job: Job, opts: dict) -> None:
         self._queue_ok += 1
@@ -766,6 +791,7 @@ class MainWindow(QMainWindow):
         try:
             self.editor.shutdown()  # join any preview/shorten task threads
             self.input.shutdown()   # recent-project summaries (thumbnails)
+            self.library.shutdown()  # library sizes / thumbnails
             self.render.shutdown()  # voice sample synthesis
             self.settings_view.shutdown()  # connection tests / model list
         except Exception:  # noqa: BLE001
@@ -902,6 +928,20 @@ def _group_status(job: Job) -> dict | None:
     return {"id": g["id"], "index": g.get("index"), "total": len(ready),
             "rendered": sum(r["rendered"] for r in ready),
             "approved": sum(r["approved"] for r in ready)}
+
+
+def _source_refetchable(job: Job, opts: dict) -> bool:
+    """A missing source.mp4 can come back: a link to download (not a split part — its
+    source is a cut of the original), or the local file it was copied from."""
+    from pathlib import Path
+
+    from app.pipeline import split
+
+    if split.group_info(job):
+        return False
+    if job.url or opts.get("url"):
+        return True
+    return bool(opts.get("file")) and Path(opts["file"]).exists()
 
 
 def _default_voice(job, voices: list[str], opts: dict) -> str | None:
