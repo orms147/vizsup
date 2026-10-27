@@ -115,10 +115,23 @@ def test_without_separation_defaults_to_keeping_the_original_and_says_why(rv, tm
     assert rv._audio_mode() == "duck"
     assert not rv.sep_box.isHidden() and "chưa cài" in rv.sep_note.text()
     assert "chưa cài" in rv.mode_cards["keep_music"].desc()
+    from PySide6.QtWidgets import QMessageBox
+
+    from app import tools
+
     fired = []
     rv.installSeparationRequested.connect(lambda: fired.append(1))
-    rv.sep_btn.click()
-    assert fired == [1]
+    mp = pytest.MonkeyPatch()
+    mp.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    mp.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    mp.setattr(tools, "has_nvidia_gpu", lambda: True)
+    mp.setattr(tools, "install_separation", lambda gpu: (False, "pip lỗi (giả lập)"))
+    mp.setattr(rv._bg, "run", lambda fn, done, fail=None: done(fn()))
+    try:
+        rv.sep_btn.click()                               # asks, then installs (faked here)
+    finally:
+        mp.undo()
+    assert fired == [1] and rv.sep_btn.isEnabled() and "pip lỗi" in rv.status.text()
     rv.mode_cards["keep_music"].click()                    # still choosable: explains fallback
     assert "khi dựng sẽ tự dùng" in rv.sep_note.text()
 
@@ -191,3 +204,51 @@ def test_render_options_carry_the_mode(rv, tmp_path):
     rv._emit_render()
     assert seen[0]["audio_mode"] == "duck"
     assert rv.stage_rows["separate"].isHidden()            # nothing to separate without engine
+
+
+def test_install_separation_runs_pip_for_torch_then_demucs(monkeypatch):
+    """The render page's "Cài bộ tách giọng…" (GPU → CUDA wheels), never raises."""
+    from app import tools
+
+    calls = []
+
+    class R:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(tools.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or R())
+    ok, msg = tools.install_separation(gpu=True)
+    assert ok and "GPU" in msg
+    assert "torch" in calls[0] and tools.TORCH_CUDA_INDEX in calls[0]
+    assert any("demucs" in c for c in calls[1])
+    calls.clear()
+    tools.install_separation(gpu=False)
+    assert tools.TORCH_CUDA_INDEX not in calls[0]
+
+
+def test_separation_writes_a_real_wav_from_a_tmp_name(tmp_path, monkeypatch):
+    """bg.wav.tmp: ffmpeg must be told the format (it failed on the first real run)."""
+    from app.models import Job
+    from app.pipeline import separate
+
+    job = Job(id="j", work_dir=tmp_path)
+    job.source_video.write_bytes(b"x")
+    stem = tmp_path / "stems" / "htdemucs" / "source"
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        if "demucs" in cmd:
+            stem.mkdir(parents=True, exist_ok=True)
+            (stem / "no_vocals.wav").write_bytes(b"w")
+        else:
+            Path(cmd[-1]).write_bytes(b"wav")
+
+        class R:
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(separate, "available", lambda: True)
+    monkeypatch.setattr(separate.subprocess, "run", fake_run)
+    bg = separate.separate_background(job)
+    ff = cmds[-1]
+    assert ff[ff.index("-f") + 1] == "wav" and bg.read_bytes() == b"wav"

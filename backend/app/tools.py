@@ -63,6 +63,38 @@ def update_edge_tts() -> tuple[bool, str]:
     return update_package("edge-tts")
 
 
+TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"   # CUDA 12.8 wheels (2026-10)
+_INSTALL_TIMEOUT = 3600          # PyTorch + CUDA is ~2.5–3 GB
+
+
+def has_nvidia_gpu() -> bool:
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=10)
+        return r.returncode == 0 and "GPU" in r.stdout
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def install_separation(*, gpu: bool | None = None) -> tuple[bool, str]:
+    """Install the voice/music separation engine ("Giữ nhạc nền & hiệu ứng"): PyTorch
+    (CUDA build when an NVIDIA GPU is present, else CPU) + Demucs, into this venv.
+    Returns (ok, message), never raises. The model weights (~80 MB) download on the
+    first separation."""
+    gpu = has_nvidia_gpu() if gpu is None else gpu
+    torch_cmd = [sys.executable, "-m", "pip", "install", "torch", "torchaudio"]
+    if gpu:
+        torch_cmd += ["--index-url", TORCH_CUDA_INDEX]
+    for cmd in (torch_cmd, [sys.executable, "-m", "pip", "install", "demucs>=4.0"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=_INSTALL_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Không chạy được pip ({type(exc).__name__}: {exc})"
+        if r.returncode != 0:
+            return False, f"Cài thất bại (mã {r.returncode})\n{_tail(r)}"
+    return True, ("Đã cài bộ tách giọng (Demucs, " + ("GPU" if gpu else "CPU") + ")")
+
+
 def cookie_age_days(path: str | None) -> float | None:
     """Days since the cookie file was written. None when no file is configured or it
     does not exist, so the caller can simply hide the warning."""

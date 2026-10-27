@@ -340,7 +340,7 @@ class RenderView(QWidget):
         sb.addWidget(self.sep_note, 1)
         self.sep_btn = button("Cài bộ tách giọng…", "Download", variant="ghost", small=True,
                               tip="Cài công cụ AI tách giọng nói khỏi nhạc nền (một lần)")
-        self.sep_btn.clicked.connect(self.installSeparationRequested)
+        self.sep_btn.clicked.connect(self._install_separation)
         sb.addWidget(self.sep_btn, 0, Qt.AlignTop)
         ll.addWidget(self.sep_box)
         self._show_separation()
@@ -874,6 +874,37 @@ class RenderView(QWidget):
             card.setChecked(True)
 
     # --- audio mode: default, per-project memory, separation engine ------------------
+    def _install_separation(self) -> None:
+        """One click installs PyTorch + Demucs into the app's venv (asks first: big)."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app import tools
+
+        gpu = tools.has_nvidia_gpu()
+        size = "~2,5–3 GB (PyTorch có CUDA cho card NVIDIA)" if gpu else "~1 GB (PyTorch bản CPU)"
+        if QMessageBox.question(
+                self, "Cài bộ tách giọng",
+                f"Tải và cài PyTorch + Demucs vào app: {size}, mất vài phút. Chạy trên máy "
+                "bạn, không upload âm thanh. Tiếp tục?") != QMessageBox.StandardButton.Yes:
+            return
+        self.installSeparationRequested.emit()
+        self.sep_btn.setEnabled(False)
+        self.sep_btn.setText("Đang cài… (vài phút)")
+
+        def done(res):
+            ok, msg = res
+            from app.pipeline import separate
+
+            self.sep_btn.setEnabled(True)
+            self.sep_btn.setText("Cài bộ tách giọng…")
+            self.set_separation_available(ok and separate.available())
+            self.status.setText(msg)
+            if not ok:
+                QMessageBox.warning(self, "Cài bộ tách giọng", msg)
+
+        self._bg.run(lambda: tools.install_separation(gpu=gpu), done,
+                     lambda m: QMessageBox.warning(self, "Cài bộ tách giọng", m))
+
     def set_separation_available(self, on: bool) -> None:
         """After an engine install (or removal): update the note, and move a project
         that never chose to the new best default."""

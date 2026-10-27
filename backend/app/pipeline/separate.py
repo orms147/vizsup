@@ -54,7 +54,8 @@ def separate_background(job: Job, *, model: str = "htdemucs", log=None) -> Path:
     # bg.wav that a later render would mistake for a valid (mtime-fresh) instrumental.
     tmp = bg.with_name("bg.wav.tmp")
     subprocess.run(
-        [ffmpeg_bin(), "-y", "-i", str(no_vocals), "-ar", "48000", "-ac", "2", str(tmp)],
+        [ffmpeg_bin(), "-y", "-i", str(no_vocals), "-ar", "48000", "-ac", "2",
+         "-f", "wav", str(tmp)],                 # ".tmp" says nothing about the format
         check=True, capture_output=True,
     )
     os.replace(tmp, bg)
