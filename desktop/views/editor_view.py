@@ -1457,11 +1457,25 @@ class EditorView(QWidget):
                 self._update_undo_buttons()
                 self._set_global_from_panel()
                 self.video.set_style(self._g_style, self._g_size, self._g_font)
+            else:
+                self._sync_global_glass()
         else:
             self._set_global_from_panel()                # update the global (Default) style
             self.video.set_style(self._g_style, self._g_size, self._g_font)
         self._refresh_lines_badge()
         self._mark_dirty()
+
+    def _sync_global_glass(self) -> None:
+        """The frosted glass is one blur band for the whole video, so its two sliders
+        always set the global look — even while "Áp dụng cho" targets some lines."""
+        s = self.style_panel.get_style()
+        g = self._g_style
+        if not (g and g.get("glass") and s.get("glass")):
+            return
+        new = {**g, "glass_tint": s["glass_tint"], "glass_blur": s["glass_blur"]}
+        if new != g:
+            self._g_style = new
+            self.video.set_style(self._g_style, self._g_size, self._g_font)
 
     def _scope_rows(self) -> tuple[list[int], str]:
         """Which cues a per-line style edit targets: the highlighted rows (Shift /

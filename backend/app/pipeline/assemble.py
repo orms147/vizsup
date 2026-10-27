@@ -212,7 +212,8 @@ def style_preview_frame(
         bnd = glass.band(events)
         if bnd:
             glass.write_mask(events, wd / "_preview_glass.ass", bnd, W=W, H=H)
-            parts = glass.filter_parts("[0:v]", bnd, "_preview_glass.ass", "[g]", height=src[1])
+            parts = glass.filter_parts("[0:v]", bnd, "_preview_glass.ass", "[g]", height=src[1],
+                                       **glass.look(style))
             video = ["-filter_complex", ";".join([*parts, f"[g]{burn}[v]"]), "-map", "[v]"]
     # output-seek (-ss after -i) preserves source PTS so the ass filter shows the
     # cue actually active at `at` (input-seek would reset PTS → always cue #1).
@@ -726,6 +727,7 @@ def _build_render(
     glass_band: tuple | None = None,   # cover "glass": the band (glass.band) to blur…
     glass_mask: str = "glass_mask.ass",  # …and the mask .ass drawn by glass.write_mask
     burn_h: int = 1080,        # height of the picture the subs are burned on (blur sigma)
+    glass_look: dict | None = None,  # glass.look(style): white tint + blur strength
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -908,7 +910,8 @@ def _build_render(
     if cover_mode == "glass" and glass_band:
         from app.pipeline import glass
 
-        parts += glass.filter_parts(vsrc, glass_band, glass_mask, "[vglass]", height=burn_h)
+        parts += glass.filter_parts(vsrc, glass_band, glass_mask, "[vglass]", height=burn_h,
+                                    **(glass_look or {}))
         vsrc = "[vglass]"
     parts.append(f"{vsrc}ass={ass}{_ass_fonts(wd)}[v]")
     vmap = "[v]"
@@ -1016,7 +1019,7 @@ def assemble(
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
                             duration=total, inserts=ins, music=placed, res=res,
                             preset=preset, glass_band=glass_band, glass_mask=mask_name,
-                            burn_h=burn[1])
+                            burn_h=burn[1], glass_look=glass.look(style))
         try:
             _run_ffmpeg(cmd, job.work_dir, total=out_total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
@@ -1040,7 +1043,10 @@ def assemble(
                     "commentary_share": round(cm.share(note_secs, total, out_total - total), 4),
                     "res": res, "preset": preset or DEFAULT_PRESET,
                     "size": list(output_size(src_size, frame, res) or ()),
-                    "glass_band": list(glass_band) if glass_band else None}),
+                    "glass_band": list(glass_band) if glass_band else None,
+                    # the glass look in style.json terms (export.py re-reads it via look())
+                    "glass_tint": round(glass.look(style)["tint"] * 100),
+                    "glass_blur": glass.look(style)["blur"]}),
         encoding="utf-8")
     # the subtitles exactly as burned (output timeline, the user's notes included) — what
     # "Xuất .srt" and the long-video join use, since vi.srt stays on the source timeline

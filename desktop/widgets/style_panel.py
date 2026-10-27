@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.pipeline import glass
+from desktop.theme import V2
 from desktop.widgets.chrome import button, icon_button
 from desktop.widgets.no_wheel import NoWheelComboBox, NoWheelSlider
 
@@ -39,6 +41,9 @@ BOX_STYLES = {
 GLASS_STYLE = "Kính mờ trắng (che chữ Trung)"
 GLASS_TEXT, GLASS_OUTLINE_W = "#1c1c1e", 0     # dark text reads on the white glass
 PLAIN_TEXT, PLAIN_OUTLINE_W = "#ffffff", 2     # back to white + outline when leaving it
+# below this white tint the glass is about as dark as the video: dark text stops reading,
+# so the text turns white + outline (and back to dark above it)
+GLASS_LIGHT_TEXT_BELOW = 25
 
 
 def estimate_line_count(text: str, *, size_px: int, font: str, margin_l: int = 60,
@@ -187,6 +192,30 @@ class StylePanel(QScrollArea):
         _bc.addWidget(QLabel("Màu nền (hộp)"))
         _bc.addWidget(self.c_box)
         ll.addWidget(self._box_color_row)
+        # the frosted glass' own look (global only — the render blurs one band)
+        self._glass_row = QWidget()
+        _gl = QVBoxLayout(self._glass_row)
+        _gl.setContentsMargins(0, 0, 0, 0)
+        _gl.setSpacing(3)
+        self.glass_tint = self._slider(_gl, "Độ trắng của nền", *glass.TINT_RANGE,
+                                       round(glass.TINT * 100), "%")
+        self.glass_tint.setToolTip(
+            "Lớp trắng phủ trên phần video đã làm mờ. Thấp = kính trong, thấy rõ màu video "
+            f"phía sau; dưới {GLASS_LIGHT_TEXT_BELOW}% chữ tự đổi sang trắng có viền.")
+        self.glass_blur = self._slider(_gl, "Độ nhòe phía sau", *glass.BLUR_RANGE,
+                                       glass.BLUR_SIGMA, "")
+        self.glass_blur.setToolTip(
+            "Độ làm mờ video sau dòng phụ đề (mặc định "
+            f"{glass.BLUR_SIGMA}). Từ {glass.BLUR_SAFE} trở lên chữ Trung in sẵn không còn "
+            "đọc được.")
+        self.glass_warn = QLabel(f"⚠ Dưới mức {glass.BLUR_SAFE}: chữ Trung có thể đọc được.")
+        self.glass_warn.setWordWrap(True)
+        self.glass_warn.setStyleSheet(f"color:{V2['amber']};font-size:11px;")
+        _gl.addWidget(self.glass_warn)
+        self._prev_tint = self.glass_tint.value()
+        self.glass_tint.valueChanged.connect(self._sync_tint_colors)
+        self.glass_blur.valueChanged.connect(self._sync_glass_warn)
+        ll.addWidget(self._glass_row)
 
         self.bold = QRadioButton("Đậm")
         self.italic = QRadioButton("Nghiêng")
@@ -226,6 +255,7 @@ class StylePanel(QScrollArea):
         self._applied = None   # last preset applied (for the ↻ reset button)
         self._refresh_presets()
         self._sync_box_color()
+        self._sync_glass_warn()
 
     # --- layout helpers ------------------------------------------------------
     def _row(self, label: str, w: QWidget) -> QVBoxLayout:
@@ -257,6 +287,27 @@ class StylePanel(QScrollArea):
     def _sync_box_color(self, *_a) -> None:
         border_style, _ = BOX_STYLES[self.box_style.currentText()]
         self._box_color_row.setVisible(border_style in (3, 4))
+        self._glass_row.setVisible(self.box_style.currentText() == GLASS_STYLE)
+
+    def _sync_glass_warn(self, *_a) -> None:
+        self.glass_warn.setVisible(self.glass_blur.value() < glass.BLUR_SAFE)
+
+    def _sync_tint_colors(self, value: int) -> None:
+        """Crossing the low-tint line flips the text: a nearly clear glass is as dark
+        as the video (white + outline reads), a whiter one wants the dark text. Only
+        a crossing recolours, so the user's own colour sticks; loading never does."""
+        prev, self._prev_tint = self._prev_tint, value
+        if self._loading or (prev < GLASS_LIGHT_TEXT_BELOW) == (value < GLASS_LIGHT_TEXT_BELOW):
+            return
+        light = QColor(self.c_text.hex).lightness() > 140
+        if value < GLASS_LIGHT_TEXT_BELOW and not light:
+            self.c_text.set_hex(PLAIN_TEXT)
+            self.c_outline.set_hex("#000000")
+            self.outline_w.setValue(PLAIN_OUTLINE_W)
+        elif value >= GLASS_LIGHT_TEXT_BELOW and light:
+            self.c_text.set_hex(GLASS_TEXT)
+            self.outline_w.setValue(GLASS_OUTLINE_W)
+        self._changed()
 
     def _sync_glass_colors(self, text: str) -> None:
         """Picking the white glass turns light text dark (white on white can't be read);
@@ -317,7 +368,9 @@ class StylePanel(QScrollArea):
         border_style, box_alpha = BOX_STYLES[self.box_style.currentText()]
         ass_size = self.size.value() * 3  # UI px → .ass units (1080 canvas)
         fsp = round(ass_size * self.letter.value() / 100.0)
-        extra = {"glass": True} if self.box_style.currentText() == GLASS_STYLE else {}
+        extra = {"glass": True, "glass_tint": self.glass_tint.value(),
+                 "glass_blur": self.glass_blur.value()} \
+            if self.box_style.currentText() == GLASS_STYLE else {}
         return {
             **extra,
             "primary": self.c_text.hex,
@@ -364,6 +417,10 @@ class StylePanel(QScrollArea):
         bs = (int(s.get("border_style", 1)), int(s.get("box_alpha", 255)))
         self._loading = True               # a saved style keeps its own colours
         try:
+            lk = glass.look(s)             # missing (older style.json) → today's defaults
+            self.glass_tint.setValue(round(lk["tint"] * 100))
+            self.glass_blur.setValue(round(lk["blur"]))
+            self._prev_tint = self.glass_tint.value()
             if s.get("glass"):
                 self.box_style.setCurrentText(GLASS_STYLE)
             else:

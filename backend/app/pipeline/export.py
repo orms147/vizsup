@@ -61,7 +61,11 @@ def softsub_cmd(job: Job, dest: Path) -> list[str]:
     band = info.get("glass_band")
     if info.get("cover_mode") == "glass" and band and (job.work_dir / glass.MASK_FILE).exists():
         # the frosted glass is part of the picture; the dark text stays a soft subtitle
-        parts += glass.filter_parts(v, tuple(band), glass.MASK_FILE, "[vg]")
+        # same look as output.mp4 (tint + blur; a render from before the sliders had
+        # 60 % / 22), the blur scaled to the source height like the render's
+        src = assemble.probe_size(job.source_video) or (1920, 1080)
+        lk = glass.look({"glass_tint": 60, "glass_blur": 22, **info})
+        parts += glass.filter_parts(v, tuple(band), glass.MASK_FILE, "[vg]", height=src[1], **lk)
         v = "[vg]"
     if parts:
         cmd += ["-filter_complex", ";".join(parts), "-map", v,
