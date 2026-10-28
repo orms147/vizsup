@@ -279,9 +279,9 @@ class _Row(QFrame):
         al = QHBoxLayout(acts)
         al.setContentsMargins(8, 0, 0, 0)
         al.setSpacing(4)
-        self.open_btn = button("Thêm tập" if compiled else "Mở", small=True,
+        self.open_btn = button("Thêm tập" if compiled else "Sửa", small=True,   # "Mở" read as "play"
                                tip="Ghép video này với các tập mới thành một video dài hơn"
-                               if compiled else "Mở để sửa phụ đề / dựng video")
+                               if compiled else "Mở để sửa phụ đề / dựng video (Enter)")
         self.open_btn.clicked.connect(lambda: self.openRequested.emit(iid))
         if compiled:
             self.open_btn.setMinimumWidth(84)    # the small-button hint cut "Thêm tập" at 150 %

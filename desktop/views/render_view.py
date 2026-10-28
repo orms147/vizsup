@@ -612,6 +612,8 @@ class RenderView(QWidget):
         if hasattr(self, "wm_cb"):
             self._on_watermark(save=False)
         self.preview.durationChanged.connect(lambda _d: self._show_commentary())
+        self.frame.currentIndexChanged.connect(self._sync_frame_aspect)
+        self._sync_frame_aspect()
         pv.addWidget(self.preview, 1)
         self._right_stack.addWidget(prev)
 
@@ -1159,6 +1161,10 @@ class RenderView(QWidget):
         else:
             self._tick.stop()
             self._update_lock()
+
+    def _sync_frame_aspect(self, *_a) -> None:
+        """"Dọc 9:16": the preview (and its platform safe zones) shows the 9:16 composition."""
+        self.preview.set_frame_aspect(9 / 16 if self.frame.currentData() == "tiktok" else None)
 
     def set_preview(self, video_path: Path, cues: list | None = None) -> None:
         self.preview.load(video_path)

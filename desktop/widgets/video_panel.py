@@ -10,9 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QActionGroup, QImage
 from PySide6.QtWidgets import (
     QComboBox,
+    QMenu,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -28,6 +29,7 @@ from desktop.cuemodel import fmt_time
 from desktop.icons import icon
 from desktop.theme import V2
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
+from desktop.widgets import safe_zones
 from desktop.widgets.video_canvas import VideoCanvas
 
 try:
@@ -50,6 +52,7 @@ class VideoPanel(QFrame):
     expandRequested = Signal()               # ⤢ in the panel head
     playStateChanged = Signal(bool)          # playing?
     dimsChanged = Signal(int, int)           # source frame size (w, h)
+    safeZoneChanged = Signal(str)            # platform key, "" = off
 
     def __init__(self, title: str = "Video nguồn", *, scrub: bool = False) -> None:
         super().__init__()
@@ -72,9 +75,11 @@ class VideoPanel(QFrame):
         self._orient.setVisible(False)
         self._expand = icon_button("Maximize2", "Toàn màn hình (F) — Esc để thoát")
         self._expand.clicked.connect(self.expandRequested)
+        self._zone_btn = self._build_zone_button()
         hh.addWidget(self.title)
         hh.addStretch(1)
         hh.addWidget(self._orient)
+        hh.addWidget(self._zone_btn)
         hh.addWidget(self._expand)
         root.addWidget(head)
 
@@ -87,6 +92,7 @@ class VideoPanel(QFrame):
         self._placeholder.setStyleSheet(f"color:{V2['muted']};")
         self._stack.addWidget(self._placeholder)
         self._canvas = VideoCanvas()
+        self._canvas.set_safe_zone(self._zone_btn.property("zone") or None)
         self._canvas.marginsChanged.connect(self.marginsChanged)
         self._canvas.dragCommitted.connect(self.dragCommitted)
         self._stack.addWidget(self._canvas)
@@ -161,6 +167,55 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._speed)
         tl.addLayout(ctl)
         root.addWidget(bar)
+
+    # --- platform safe zones ---------------------------------------------------
+    def _build_zone_button(self):
+        """"Vùng an toàn": which platform's UI strips to draw on the picture (remembered)."""
+        b = icon_button("Smartphone", "Vùng an toàn của TikTok / Reels / Shorts / YouTube — "
+                                      "phần màn hình mà ứng dụng che mất", checkable=True)
+        menu = QMenu(b)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        self._zone_actions: dict[str, object] = {}
+        for key, text in (("", "Tắt"),
+                          *((k, safe_zones.SAFE_ZONES[k].label +
+                             ("" if safe_zones.SAFE_ZONES[k].portrait else " (video ngang)"))
+                            for k in safe_zones.ORDER)):
+            a = menu.addAction(text)
+            a.setCheckable(True)
+            a.setData(key)
+            group.addAction(a)
+            self._zone_actions[key] = a
+            a.triggered.connect(lambda _c=False, k=key: self.set_safe_zone(k, remember=True))
+        b.setMenu(menu)
+        b.setPopupMode(b.ToolButtonPopupMode.InstantPopup)
+        saved = store.load_ui_state().get("safe_zone") or ""
+        saved = saved if saved in safe_zones.SAFE_ZONES else ""
+        b.setProperty("zone", saved)
+        b.setChecked(bool(saved))
+        self._zone_actions[saved].setChecked(True)
+        return b
+
+    def set_safe_zone(self, key: str | None, *, remember: bool = False) -> None:
+        key = key if key in safe_zones.SAFE_ZONES else ""
+        self._zone_btn.setProperty("zone", key)
+        self._zone_btn.setChecked(bool(key))
+        self._zone_actions[key].setChecked(True)
+        self._canvas.set_safe_zone(key or None)
+        if remember:
+            store.update_ui_state(safe_zone=key)
+        self.safeZoneChanged.emit(key)
+
+    def safe_zone(self) -> str:
+        return self._zone_btn.property("zone") or ""
+
+    def safe_zone_hint(self) -> str:
+        return self._canvas.safe_zone_hint()
+
+    def set_frame_aspect(self, ratio: float | None) -> None:
+        """"Dọc 9:16" in the render options: the picture sits in a 9:16 composition and the
+        zones (and the subtitle box margins) refer to that canvas."""
+        self._canvas.set_frame_aspect(ratio)
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
         super().resizeEvent(ev)

@@ -49,11 +49,21 @@ PAGE_IDLE = {INPUT: "Sẵn sàng", EDITOR: EDITOR_IDLE, RENDER: "Chọn âm than
              SETTINGS: "Cài đặt", LIBRARY: "Thư viện — mọi dự án trên máy"}
 
 
+def _first_size(want: tuple[int, int] = (1380, 880)) -> tuple[int, int]:
+    """The window's opening size: ``want``, clamped to the primary screen's usable area (a
+    1366×768 laptop used to open it partly off the screen)."""
+    scr = QApplication.primaryScreen()
+    if scr is None:
+        return want
+    g = scr.availableGeometry()
+    return min(want[0], max(900, g.width() - 16)), min(want[1], max(560, g.height() - 40))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("vizsup")
-        self.resize(1380, 880)
+        self.resize(*_first_size())      # 1380 × 880, but never bigger than the screen it opens on
         self.providers = list_providers()
         self.job: Job | None = None
         self.opts: dict = {}

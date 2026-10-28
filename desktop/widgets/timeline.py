@@ -24,6 +24,50 @@ EDGE = 6                  # px edge grab zone
 MIN_PPS, MAX_PPS = 8.0, 400.0
 MIN_LEN = 0.2
 OVERVIEW_H = 22           # the whole-episode strip above the zoomed timeline
+SNAP_PX = 7               # a dragged edge sticks to the playhead / a neighbour within this many px
+
+
+def drag_cue(mode: str, s0: float, e0: float, dt: float, *, prev_end: float | None,
+             next_start: float | None, playhead: float, video_dur: float | None,
+             snap: float = 0.0, free: bool = False) -> tuple[float, float]:
+    """The (start, end) of a cue dragged by ``dt`` seconds. Pure (tested headlessly).
+
+    ``mode``: "move" the whole cue, "l" its start edge, "r" its end edge. Unless ``free``
+    (Alt held): an edge within ``snap`` seconds of the playhead or a neighbour's edge sticks to
+    it, and the cue cannot cross its neighbours — a neighbour it already overlapped does not
+    constrain it (old data must stay movable)."""
+    lo = prev_end if (not free and prev_end is not None and prev_end <= s0 + 1e-6) else 0.0
+    hi = next_start if (not free and next_start is not None and next_start >= e0 - 1e-6) else None
+    if hi is None and video_dur:
+        hi = video_dur
+    targets = [] if free else [playhead] + [t for t in (prev_end, next_start) if t is not None]
+
+    def stick(v: float) -> float:
+        if not targets or snap <= 0:
+            return v
+        best = min(targets, key=lambda t: abs(t - v))
+        return best if abs(best - v) <= snap else v
+
+    if mode == "move":
+        length = e0 - s0
+        ns = s0 + dt
+        a, b = stick(ns), stick(ns + length)
+        if a != ns and (b == ns + length or abs(a - ns) <= abs(b - (ns + length))):
+            ns = a
+        elif b != ns + length:
+            ns = b - length
+        ns = max(lo, ns)
+        if hi is not None:
+            ns = min(ns, hi - length)
+        ns = max(0.0, ns)
+        return ns, ns + length
+    if mode == "l":
+        ns = max(lo, stick(s0 + dt))
+        return max(0.0, min(e0 - MIN_LEN, ns)), e0
+    ne = max(s0 + MIN_LEN, stick(e0 + dt))
+    if hi is not None:
+        ne = min(ne, hi)
+    return s0, max(s0 + MIN_LEN, ne)
 
 
 def _c(hex_str: str, alpha: int | None = None) -> QColor:
@@ -58,6 +102,7 @@ class Timeline(QWidget):
         self._pps = 40.0
         self._sel = -1
         self._drag = None   # (idx, mode, startX, s0, e0)
+        self._snap_t: float | None = None   # a dragged edge is stuck here (drawn as a guide)
         self._scrub = False  # held down outside a cue: the playhead follows the mouse
         self.setMinimumHeight(TOTAL_H)
         self.setMouseTracking(True)
@@ -160,6 +205,7 @@ class Timeline(QWidget):
         self._paint_music(p, clip)
         self._paint_blocks(p, clip)
         self._paint_notes(p, clip)
+        self._paint_snap(p)
         self._paint_playhead(p)
 
     def _paint_ruler(self, p: QPainter, clip) -> None:
@@ -282,6 +328,13 @@ class Timeline(QWidget):
                 p.setPen(_c("#ffffff") if selected else _c(V2["text"]))
                 p.drawText(r.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, txt)
 
+    def _paint_snap(self, p: QPainter) -> None:
+        if self._snap_t is None or self._drag is None:
+            return
+        x = self._snap_t * self._pps
+        p.setPen(QPen(_c(V2["amber"], 230), 1, Qt.DashLine))
+        p.drawLine(QPointF(x, RULER_H), QPointF(x, self.height()))
+
     def _paint_playhead(self, p: QPainter) -> None:
         x = self._t * self._pps
         p.setPen(QPen(_c(V2["purple_bright"]), 1.4))
@@ -356,18 +409,18 @@ class Timeline(QWidget):
         idx, mode, x0, s0, e0 = self._drag
         dt = (ev.position().x() - x0) / self._pps
         c = self._cues[idx]
-        hi = self._video_dur if self._video_dur > 0 else None
-        if mode == "move":
-            ns = max(0.0, s0 + dt)
-            if hi is not None:
-                ns = min(ns, hi - (e0 - s0))
-            c.end = round(e0 + (ns - s0), 3)
-            c.start = round(ns, 3)
-        elif mode == "l":
-            c.start = round(max(0.0, min(e0 - MIN_LEN, s0 + dt)), 3)
-        else:
-            ne = max(s0 + MIN_LEN, e0 + dt)
-            c.end = round(min(ne, hi) if hi is not None else ne, 3)
+        prev_end = self._cues[idx - 1].end if idx > 0 else None
+        nxt = self._cues[idx + 1].start if idx + 1 < len(self._cues) else None
+        free = bool(ev.modifiers() & Qt.AltModifier)           # Alt: no snapping, no limits
+        ns, ne = drag_cue(mode, s0, e0, dt, prev_end=prev_end, next_start=nxt, playhead=self._t,
+                          video_dur=self._video_dur if self._video_dur > 0 else None,
+                          snap=SNAP_PX / self._pps, free=free)
+        c.start, c.end = round(ns, 3), round(ne, 3)
+        # the guide: where the edge being dragged stuck (playhead / neighbour), else nothing
+        edges = (c.start, c.end) if mode == "move" else (c.end,) if mode == "r" else (c.start,)
+        stuck = [t for t in (self._t, prev_end, nxt)
+                 if t is not None and any(abs(t - e) < 1e-3 for e in edges)]
+        self._snap_t = stuck[0] if stuck and not free else None
         self.cueChanged.emit(idx)
         self.update()
 
@@ -376,6 +429,8 @@ class Timeline(QWidget):
         if self._drag:
             idx = self._drag[0]
             self._drag = None
+            self._snap_t = None
+            self.update()
             if self.cursor().shape() == Qt.ClosedHandCursor:
                 self.setCursor(Qt.OpenHandCursor)    # still over the cue it let go of
             self._update_dur()

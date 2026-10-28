@@ -110,3 +110,25 @@ def test_app_keys_open_and_leave_library_and_settings(win):
     win.stack.setCurrentIndex(m.LIBRARY)
     QTest.keyClick(win, Qt.Key_1, Qt.ControlModifier)
     assert win.stack.currentIndex() == m.INPUT
+
+
+def test_the_window_opens_inside_a_small_screen(monkeypatch):
+    from PySide6.QtGui import QScreen
+
+    from desktop import main as m
+
+    class _Geo:
+        def __init__(self, w, h):
+            self.w, self.h = w, h
+
+        def width(self):
+            return self.w
+
+        def height(self):
+            return self.h
+
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: _Geo(1366, 728))
+    w, h = m._first_size()
+    assert w <= 1366 and h <= 728                          # a 1366×768 laptop minus the taskbar
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: _Geo(2560, 1400))
+    assert m._first_size() == (1380, 880)                   # a big screen: the wish stands

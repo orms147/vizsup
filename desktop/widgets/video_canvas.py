@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainte
 from PySide6.QtWidgets import QWidget
 
 from app.pipeline.glass import look as glass_look
+from desktop.widgets import safe_zones
 
 ASS_W, ASS_H = 1920, 1080
 EDGE = 9          # px hit-zone around an edge
@@ -54,7 +55,10 @@ class VideoCanvas(QWidget):
         self._font = "Be Vietnam Pro"
         self._box = SubBox()
         self._show_box = False                 # only after set_style (editor uses it; render preview doesn't)
-        self._disp = QRectF()
+        self._disp = QRectF()                  # the composition (the frame the render makes)
+        self._pic = QRectF()                   # the source picture inside it
+        self._zone: str | None = None          # platform whose UI strips are drawn (safe_zones)
+        self._comp_aspect: float | None = None  # 9/16 when the render frames a clip as TikTok
         self._drag: str | None = None
         self._press = QPointF()
         self._press_box = SubBox()
@@ -89,16 +93,94 @@ class VideoCanvas(QWidget):
         self.update()
 
     # --- geometry ------------------------------------------------------------
+    @staticmethod
+    def _fit(w: float, h: float, ar: float) -> QRectF:
+        """The largest ``ar`` (width / height) rectangle centred in w × h."""
+        if h * ar <= w:
+            dh, dw = h, h * ar
+        else:
+            dw, dh = w, w / ar
+        return QRectF((w - dw) / 2, (h - dh) / 2, dw, dh)
+
     def _compute_disp(self) -> None:
         w, h = self.width(), self.height()
-        ar = (self._nw / self._nh) if self._nh else 0.5625
-        if h * ar <= w:
-            dh = h
-            dw = h * ar
+        src = (self._nw / self._nh) if self._nh else 0.5625
+        # the composition is the source frame, or the 9:16 canvas the render builds for
+        # "Dọc 9:16" (the picture then sits inside it, bars around)
+        self._disp = self._fit(w, h, self._comp_aspect or src)
+        d = self._disp
+        if self._comp_aspect and abs(self._comp_aspect - src) > 1e-3:
+            inner = self._fit(d.width(), d.height(), src)
+            self._pic = inner.translated(d.x(), d.y())
         else:
-            dw = w
-            dh = w / ar
-        self._disp = QRectF((w - dw) / 2, (h - dh) / 2, dw, dh)
+            self._pic = QRectF(d)
+
+    # --- platform safe zones ---------------------------------------------------
+    def set_safe_zone(self, key: str | None) -> None:
+        """Draw the UI strips of platform ``key`` (safe_zones.SAFE_ZONES) over the picture,
+        or nothing for None / ""."""
+        self._zone = key if key in safe_zones.SAFE_ZONES else None
+        self.update()
+
+    def safe_zone(self) -> str | None:
+        return self._zone
+
+    def set_frame_aspect(self, ratio: float | None) -> None:
+        """The aspect of the frame the render composes (9/16 for "Dọc 9:16"), None = the
+        source's own."""
+        self._comp_aspect = ratio if ratio and ratio > 0 else None
+        self.update()
+
+    def safe_zone_hint(self) -> str:
+        """Why the subtitle box is in a covered strip ("" when it is clear or no zone)."""
+        if not self._zone or not self._show_box:
+            return ""
+        self._compute_disp()
+        d, b = self._disp, self._box_rect()
+        if d.width() <= 0 or b.width() <= 0:
+            return ""
+        return safe_zones.hint_for(self._zone, ((b.left() - d.x()) / d.width(),
+                                                (b.top() - d.y()) / d.height(),
+                                                (b.right() - d.x()) / d.width(),
+                                                (b.bottom() - d.y()) / d.height()))
+
+    def _draw_safe_zone(self, p: QPainter) -> None:
+        if not self._zone or self._disp.width() <= 0:
+            return
+        d = self._disp
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, False)
+        fill, edge = QColor(239, 68, 68, 58), QColor(248, 113, 113, 150)
+        for z in safe_zones.zones(self._zone):
+            r = QRectF(d.x() + z.x0 * d.width(), d.y() + z.y0 * d.height(),
+                       (z.x1 - z.x0) * d.width(), (z.y1 - z.y0) * d.height())
+            p.fillRect(r, fill)
+            p.setPen(QPen(edge, 1, Qt.DashLine))
+            if z.name == "top":
+                p.drawLine(r.bottomLeft(), r.bottomRight())
+            elif z.name == "bottom":
+                p.drawLine(r.topLeft(), r.topRight())
+            else:
+                p.drawLine(r.topLeft(), r.bottomLeft())
+        hint = self.safe_zone_hint()
+        if hint:
+            f = QFont(self._font)
+            f.setPixelSize(11)
+            f.setBold(True)
+            p.setFont(f)
+            fm = QFontMetrics(f)
+            wrap = Qt.TextWordWrap | Qt.AlignCenter
+            inner = max(40, int(d.width()) - 28)
+            br = fm.boundingRect(QRect(0, 0, inner, 400), int(wrap), hint)    # wraps on a narrow picture
+            pill = QRectF(d.x() + (d.width() - br.width() - 16) / 2, d.y() + 6, br.width() + 16,
+                          br.height() + 8)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(17, 18, 24, 225))
+            p.drawRoundedRect(pill, 7, 7)
+            p.setPen(QColor("#fbbf24"))
+            p.drawText(pill.adjusted(8, 4, -8, -4), int(wrap), hint)
+        p.restore()
 
     def _text_h_px(self) -> float:
         """Approximate one-line text height in widget px (ASS size = ui_px*3)."""
@@ -140,7 +222,7 @@ class VideoCanvas(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), QColor("#000000"))
-        d = self._disp
+        d = self._pic
         if self._burned is not None and not self._burned.isNull():
             p.drawImage(d, self._burned)
         elif self._frame is not None and not self._frame.isNull():
@@ -150,6 +232,7 @@ class VideoCanvas(QWidget):
             p.setPen(QColor("#666"))
             p.drawText(self.rect(), Qt.AlignCenter, "…")
         self._draw_watermark(p)
+        self._draw_safe_zone(p)
         self._draw_box(p)
         p.end()
 
@@ -244,7 +327,7 @@ class VideoCanvas(QWidget):
         p.save()
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setClipPath(path)
-        img, d = self._frame, self._disp
+        img, d = self._frame, self._pic
         if img is not None and not img.isNull() and d.width() > 0:
             sx, sy = img.width() / d.width(), img.height() / d.height()
             src = QRect(int((pill.x() - d.x()) * sx), int((pill.y() - d.y()) * sy),
