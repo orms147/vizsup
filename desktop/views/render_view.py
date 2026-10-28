@@ -339,6 +339,13 @@ class RenderView(QWidget):
         self.voice_sub = label("Tiếng Việt", "small")
         vc.addWidget(self.voice)
         vc.addWidget(self.voice_sub)
+        self.by_gender_cb = QCheckBox("Giọng theo nhân vật (nam/nữ)")
+        self.by_gender_cb.setChecked(bool(store.load_ui_state().get("voice_by_gender", False)))
+        self.by_gender_cb.setToolTip(
+            "Câu của nam đọc bằng giọng nam, câu của nữ bằng giọng nữ (đoán theo cao độ giọng gốc; "
+            "sửa từng câu trong màn Sửa phụ đề). Câu không rõ dùng giọng đã chọn ở trên.")
+        self.by_gender_cb.toggled.connect(lambda on: store.update_ui_state(voice_by_gender=on))
+        vc.addWidget(self.by_gender_cb)
         ch.addLayout(vc, 1)
         self.listen_btn = QPushButton()
         self.listen_btn.setObjectName("icon")
@@ -980,7 +987,8 @@ class RenderView(QWidget):
         self.orig_vol.setEnabled(keep)
         self.orig_vol_lbl.setEnabled(keep)
         dub = mode != "original"
-        for w in (self.dub_vol, self.dub_vol_lbl, self.voice, self.speed, self.speed_lbl):
+        for w in (self.dub_vol, self.dub_vol_lbl, self.voice, self.speed, self.speed_lbl,
+                  self.by_gender_cb):
             w.setEnabled(dub)
         if hasattr(self, "ai_label_cb"):           # built after the audio cards
             self.ai_label_cb.setEnabled(dub)
@@ -1420,6 +1428,7 @@ class RenderView(QWidget):
             # to edge-tts as a literal voice name broke every render without voices()
             "voice": self.voice.currentData() if self._has_real_voices else None,
             "rate": f"{int(round((speed - 1) * 100)):+d}%",
+            "voice_by_gender": self.by_gender_cb.isChecked() and self._has_real_voices,
             "audio_mode": self._audio_mode(),
             "orig_volume": self.orig_vol.value() / 100.0,
             "dub_volume": self.dub_vol.value() / 100.0,

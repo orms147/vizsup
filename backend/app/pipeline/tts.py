@@ -104,6 +104,20 @@ def _synth_retry(tts, text: str, seg: Path, *, voice, rate, sleep) -> None:
             sleep(delay)
 
 
+def _line_voices(tts, ov: list[dict], n: int, voice: str | None, by_gender: bool) -> list[str | None]:
+    """The voice of each line: ``voice`` for all, or the tag's voice when ``by_gender``."""
+    if not by_gender:
+        return [voice] * n
+    from app.pipeline import voices
+
+    try:
+        names = list(tts.voices() or [])
+    except Exception:  # noqa: BLE001 - a provider without a voice list keeps the one voice
+        names = []
+    rows = [ov[i] if i < len(ov) else {} for i in range(n)]
+    return voices.line_voices(rows, names, voice)
+
+
 def synthesize(
     job: Job,
     *,
@@ -113,10 +127,15 @@ def synthesize(
     log: Callable[[str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    voice_by_gender: bool = False,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[tuple[Cue, Path]]:
     """``progress(done, total)``: lines ready so far (cache hits included) — a 717-line
-    dub takes ~13 min, a bar frozen at one value looked like a hang."""
+    dub takes ~13 min, a bar frozen at one value looked like a hang.
+
+    ``voice_by_gender``: a line tagged "f" / "m" in overrides.json (pipeline/voices.py)
+    is read by the provider's female / male voice; untagged lines (and providers without
+    such voices) keep ``voice``. The line's voice is part of its cache key."""
     tts = get_tts(provider)
     if not tts.available():
         raise RuntimeError(f"TTS provider '{provider}' is not available (missing key or dependency).")
@@ -126,6 +145,7 @@ def synthesize(
     manifest = _load_manifest(job)
     rules = speak.load_rules(job)
     said = {c.index: speak.spoken(c.text, rules) for c in cues}     # what the voice reads
+    lv = _line_voices(tts, ov, len(cues), voice, voice_by_gender)
     if log and (n := sum(said[c.index] != c.text.strip() for c in cues if c.text.strip())):
         log(f"✎ Chuẩn hoá cách đọc (số, đơn vị, từ viết tắt, từ điển phát âm): {n} câu")
 
@@ -133,7 +153,7 @@ def synthesize(
     # event loop with bounded concurrency; others keep the per-cue path below.
     if getattr(tts, "supports_batch", False):
         return _synthesize_batch(job, tts, cues, ov, manifest, said, provider=provider,
-                                 voice=voice, rate=rate, log=log, cancel=cancel,
+                                 line_voices=lv, rate=rate, log=log, cancel=cancel,
                                  progress=progress)
 
     segments: list[tuple[Cue, Path]] = []
@@ -146,12 +166,12 @@ def synthesize(
             manifest.pop(key, None)   # muted/empty line → no dub, and no stale cache
             continue
         seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
-        want = _seg_hash(provider, voice, rate, said[c.index])
+        want = _seg_hash(provider, lv[i], rate, said[c.index])
         if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
             kept += 1
         else:
             try:
-                _synth_retry(tts, said[c.index], seg, voice=voice, rate=rate, sleep=_sleep)
+                _synth_retry(tts, said[c.index], seg, voice=lv[i], rate=rate, sleep=_sleep)
             except Exception as exc:  # noqa: BLE001
                 if _unvoiceable(exc):
                     manifest.pop(key, None)
@@ -174,7 +194,7 @@ def synthesize(
 
 def _synthesize_batch(
     job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, said: dict[int, str], *,
-    provider: str, voice: str | None, rate: str | None,
+    provider: str, line_voices: list[str | None], rate: str | None,
     log: Callable[[str], None] | None, cancel: Callable[[], bool] | None,
     progress: Callable[[int, int], None] | None = None,
 ) -> list[tuple[Cue, Path]]:
@@ -186,6 +206,7 @@ def _synthesize_batch(
     index-keyed manifest and a mid-run crash keeps every finished segment."""
     # Phase A — scan.
     todo: list[tuple[str, str, Path]] = []
+    voice_of: dict[str, str | None] = {}
     want_of: dict[str, str] = {}
     seg_of: dict[str, Path] = {}
     kept = 0
@@ -195,7 +216,8 @@ def _synthesize_batch(
             manifest.pop(key, None)          # muted/empty line → no dub, no stale cache
             continue
         seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
-        want = _seg_hash(provider, voice, rate, said[c.index])
+        want = _seg_hash(provider, line_voices[i], rate, said[c.index])
+        voice_of[key] = line_voices[i]
         seg_of[key] = seg
         want_of[key] = want
         if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
@@ -227,8 +249,13 @@ def _synthesize_batch(
         elif fatal is None:
             fatal = exc                      # first real failure → raise after the drain
 
-    if todo:
-        tts.synthesize_many(todo, voice=voice, rate=rate, retry_delays=_RETRY_DELAYS,
+    groups: dict[str | None, list[tuple[str, str, Path]]] = {}
+    for item in todo:                        # one batch per voice (the provider takes one)
+        groups.setdefault(voice_of[item[0]], []).append(item)
+    for v, items in groups.items():
+        if fatal is not None or (cancel and cancel()):
+            break
+        tts.synthesize_many(items, voice=v, rate=rate, retry_delays=_RETRY_DELAYS,
                             on_done=_done, cancel=cancel)
     _save_manifest(job, manifest)            # persists mute-drops even when nothing made
     if fatal is not None:

@@ -349,3 +349,61 @@ def test_no_brief_when_a_kept_vi_srt_means_no_translation(stages, tmp_path, brie
     (wd / "vi.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nđã sửa\n", encoding="utf-8")
     run("run", "https://b23.tv/x", "--workdir", str(wd), "--source", "asr", "--auto-context")
     assert brief_calls == []
+
+
+# --- Bộ phim + per-line voices ---------------------------------------------------
+
+def test_run_links_the_picked_series(stages, tmp_path, capsys):
+    from app.pipeline import series
+
+    p = series.create("甲")
+    wd = tmp_path / "job"
+    assert run("run", "https://b23.tv/x", "--workdir", str(wd), "--source", "asr",
+               "--series", p.slug) == 0
+    assert series.link_of(wd)["slug"] == p.slug
+    assert "Bộ phim: 《甲》" in capsys.readouterr().out
+
+
+def test_run_series_none_and_unrelated_title_link_nothing(stages, tmp_path):
+    from app.pipeline import series
+
+    series.create("甲")
+    wd = tmp_path / "job"
+    assert run("run", "https://b23.tv/x", "--workdir", str(wd), "--source", "asr",
+               "--series", "none") == 0
+    assert series.link_of(wd) is None
+    wd2 = tmp_path / "job2"
+    assert run("run", "https://b23.tv/y", "--workdir", str(wd2), "--source", "asr") == 0
+    assert series.link_of(wd2) is None            # "tiêu đề" has no 《…》 and no match
+
+
+def test_run_guesses_voices_after_translating_unless_told_not_to(stages, tmp_path, monkeypatch):
+    from app.pipeline import voices
+
+    calls = []
+    monkeypatch.setattr(voices, "guess_job", lambda job, **kw: calls.append(job.id))
+    run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr")
+    assert len(calls) == 1
+    run("run", "https://b23.tv/y", "--workdir", str(tmp_path / "b"), "--source", "asr",
+        "--no-voice-guess")
+    assert len(calls) == 1
+
+
+def test_a_failing_voice_guess_does_not_stop_the_run(stages, tmp_path, monkeypatch, capsys):
+    from app.pipeline import voices
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no ffmpeg")
+
+    monkeypatch.setattr(voices, "guess_job", boom)
+    assert run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr") == 0
+    assert "voice guess skipped" in capsys.readouterr().out
+
+
+def test_render_passes_voice_by_gender(render_stages, tmp_path):
+    run("render", "--workdir", str(_gated_job(tmp_path)), "--voice-by-gender")
+    assert render_stages["tts"]["voice_by_gender"] is True
+    other = tmp_path / "x"
+    other.mkdir()
+    run("render", "--workdir", str(_gated_job(other)))
+    assert render_stages["tts"]["voice_by_gender"] is False

@@ -317,6 +317,7 @@ class EditorView(QWidget):
         self.gain.sliderPressed.connect(self._snapshot)   # once per slider gesture
         self.gain.valueChanged.connect(self._on_gain)
         self.mute_cb.toggled.connect(self._on_mute)
+        ins.voice_combo.activated.connect(self._on_voice)
 
         tl.seeked.connect(vid.seek_seconds)
         tl.blockSelected.connect(lambda i: cl.selectRow(i, center=False))
@@ -957,6 +958,15 @@ class EditorView(QWidget):
             self.cues[self._sel].mute = on
             self.cue_list.refresh_row(self._sel)
             self._mark_dirty()
+
+    def _on_voice(self, _i: int) -> None:
+        """Per-line voice tag ("f" / "m" / "" = the picked voice) — one undo step."""
+        if 0 <= self._sel < len(self.cues):
+            tag = self.inspector.voice_combo.currentData() or ""
+            if self.cues[self._sel].voice != tag:
+                self._snapshot()
+                self.cues[self._sel].voice = tag
+                self._mark_dirty()
 
     def _on_lock(self, on: bool) -> None:
         if 0 <= self._sel < len(self.cues) and self.cues[self._sel].locked != on:

@@ -139,6 +139,17 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             except Exception as exc:  # noqa: BLE001 - an aid, never fatal
                 print(f"[run] timing pass skipped ({exc})")
 
+    # 2.38) Bộ phim: link the episode to its series, take over its style / render settings
+    from app.pipeline import series as _series
+
+    try:
+        prof = _series.resolve(job, getattr(args, "series", None) or "auto")
+        if prof is not None:
+            print(f"[run] {_series.summary(prof)}")
+            _series.inherit(job, prof, log_fn=lambda m: print(f"[run] {m}"))
+    except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+        print(f"[run] series skipped ({exc})")
+
     # 2.4) optional: per-video brief (AI skim and/or your own note) for the translator
     note = (getattr(args, "context", None) or "").strip()
     if (getattr(args, "auto_context", False) or note) and (force or not job.vi_srt.exists()):
@@ -178,6 +189,14 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             qa.review(job, args.refine or args.translator,
                       context={"_brief": brief.load_brief(job) or ""},
                       log=lambda m: print(f"[run] {m}"))
+        # 3.6) which lines are a man's / a woman's (pitch) for `render --voice-by-gender`
+        if not getattr(args, "no_voice_guess", False):
+            from app.pipeline import voices
+
+            try:
+                voices.guess_job(job, log=lambda m: print(f"[run] {m}"))
+            except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+                print(f"[run] voice guess skipped ({exc})")
 
     print("\n" + "=" * 64)
     print("EDIT GATE — review/fix the Vietnamese subtitles, then render:")
@@ -275,7 +294,8 @@ def cmd_render(args: argparse.Namespace) -> int:
                   "ducked under the dub instead")
 
     print(f"[render] synthesizing Vietnamese voice (tts={args.tts}) ...")
-    segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print)
+    segments = tts.synthesize(job, provider=args.tts, voice=args.voice, log=print,
+                              voice_by_gender=getattr(args, "voice_by_gender", False))
     print(f"[render] {len(segments)} segments; assembling with FFmpeg ...")
     from app.pipeline import commentary
 
@@ -362,6 +382,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-snap", action="store_true",
                    help="keep ASR/OCR cue times as-is (default: snap each cue edge to the nearest "
                         "voice start/stop within 1 s, local Silero VAD)")
+    r.add_argument("--series", default="auto", metavar="auto|SLUG|none",
+                   help="series profile (\"Bộ phim\"): auto = from the 《…》 in the title, a saved "
+                        "series' slug, or none")
+    r.add_argument("--no-voice-guess", action="store_true",
+                   help="do not guess each line's male/female voice from the pitch")
     r.add_argument("--no-timing-pass", action="store_true",
                    help="skip the timing tidy-up (default: 2-frame gaps, chain gaps < 0.5 s, "
                         "lines at least 20 frames long)")
@@ -375,6 +400,9 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--workdir", required=True, help="job working directory from 'run'")
     rn.add_argument("--tts", default=settings.vizsup_default_tts, help="TTS provider (default: edge)")
     rn.add_argument("--voice", default=None, help="voice id (e.g. vi-VN-NamMinhNeural)")
+    rn.add_argument("--voice-by-gender", action="store_true",
+                    help="read each line with the male / female voice guessed from the pitch "
+                         "(see overrides.json); other lines use --voice")
     rn.add_argument("--keep-audio", action="store_true", help="mix the dub over the original audio")
     rn.add_argument("--audio-mode", choices=["replace", "mix", "duck", "keep-music"], default=None,
                     help="audio: replace|mix|duck|keep-music (Demucs keeps the music). Overrides --keep-audio")

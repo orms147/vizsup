@@ -26,6 +26,7 @@ class EditorCue:
     style: dict | None = None     # per-line subtitle style override (sparse)
     locked: bool = False          # timing locked against accidental nudges / drags (v2)
     reviewed: str = ""            # fingerprint() at the moment the user marked it "Đã xem"
+    voice: str = ""               # "f" / "m": read by the female / male voice ("" = the picked one)
 
     @property
     def dur(self) -> float:
@@ -113,7 +114,8 @@ def load_pair(job) -> list[EditorCue]:
         out.append(EditorCue(start=c.start, end=c.end, vi=c.text, zh=zh_texts[i],
                              gain_db=float(o.get("gain_db", 0.0)), mute=bool(o.get("mute", False)),
                              style=sov.get(str(i + 1)), locked=bool(o.get("lock", False)),
-                             reviewed=str(o.get("reviewed", "") or "")))
+                             reviewed=str(o.get("reviewed", "") or ""),
+                             voice=o.get("voice") if o.get("voice") in ("f", "m") else ""))
     return out
 
 
@@ -141,6 +143,8 @@ def _override_row(c: EditorCue) -> dict:
         row["lock"] = True
     if c.reviewed:
         row["reviewed"] = c.reviewed
+    if c.voice:
+        row["voice"] = c.voice
     return row
 
 
@@ -230,9 +234,9 @@ def split_cue(c: EditorCue) -> tuple[EditorCue, EditorCue]:
     words = c.vi.split()
     half = len(words) // 2
     a = EditorCue(start=c.start, end=mid, vi=" ".join(words[:half]), zh=c.zh,
-                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+                  gain_db=c.gain_db, mute=c.mute, style=c.style, voice=c.voice)
     b = EditorCue(start=mid, end=c.end, vi=" ".join(words[half:]), zh="",
-                  gain_db=c.gain_db, mute=c.mute, style=c.style)
+                  gain_db=c.gain_db, mute=c.mute, style=c.style, voice=c.voice)
     return a, b
 
 
@@ -247,6 +251,7 @@ def merge_cues(a: EditorCue, b: EditorCue) -> EditorCue:
         gain_db=a.gain_db if abs(a.gain_db) >= abs(b.gain_db) else b.gain_db,
         mute=a.mute or b.mute,
         style=a.style,
+        voice=a.voice or b.voice,
     )
 
 

@@ -31,6 +31,7 @@ from desktop.cuemodel import EditorCue, fmt_time, parse_time
 from desktop.icons import icon
 from desktop.theme import V2, cjk_font
 from desktop.widgets.chrome import badge, button, hbox, icon_label, label
+from desktop.widgets.no_wheel import NoWheelComboBox
 
 NUDGES = (-200, -50, 50, 200)
 
@@ -313,6 +314,17 @@ class CueInspector(QFrame):
         gr.addWidget(self.gain_lbl)
         gr.addWidget(self.mute_cb)
         vb.addLayout(gr)
+        vr = QHBoxLayout()
+        vr.addWidget(label("Giọng", "small"))
+        self.voice_combo = NoWheelComboBox()
+        self.voice_combo.addItem("Theo lựa chọn chung", "")
+        self.voice_combo.addItem("Giọng nữ", "f")
+        self.voice_combo.addItem("Giọng nam", "m")
+        self.voice_combo.setToolTip(
+            "Chỉ có tác dụng khi bật “Giọng theo nhân vật (nam/nữ)” ở trang dựng. "
+            "Máy đoán theo cao độ giọng gốc — sửa ở đây nếu đoán sai.")
+        vr.addWidget(self.voice_combo, 1)
+        vb.addLayout(vr)
         self.btn_listen = button("Nghe thử", "Volume2")
         self.btn_listen.clicked.connect(self.listenRequested)
         vb.addWidget(self.btn_listen, 0, Qt.AlignLeft)
@@ -415,6 +427,9 @@ class CueInspector(QFrame):
         self.mute_cb.setChecked(c.mute)
         self.gain.blockSignals(False)
         self.mute_cb.blockSignals(False)
+        self.voice_combo.blockSignals(True)
+        self.voice_combo.setCurrentIndex(max(0, self.voice_combo.findData(c.voice)))
+        self.voice_combo.blockSignals(False)
         self.lines_lbl.setText(f"đang {lines} dòng" if lines else "")
         self.set_reading(c.vi, c.end - c.start)
 
