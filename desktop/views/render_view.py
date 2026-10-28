@@ -272,6 +272,9 @@ class RenderView(QWidget):
         scroll.setWidget(split)
         split.splitterMoved.connect(lambda *_: store.update_ui_state(render_split=split.sizes()))
         self._split = split
+        # ⤢ on either video: the options step aside and the picture takes the whole width
+        self.preview.expandRequested.connect(self._toggle_focus)
+        self.result.expandRequested.connect(self._toggle_focus)
         body = QVBoxLayout()
         body.setContentsMargins(18, 4, 18, 14)
         body.addWidget(scroll)
@@ -1175,6 +1178,11 @@ class RenderView(QWidget):
                 self._sync_quality()
 
         self._bg.run(work, done, lambda _m: None)
+
+    def _toggle_focus(self) -> None:
+        """Phóng to: hide / show the options column next to the video."""
+        panel = self._split.widget(0)
+        panel.setVisible(panel.isHidden())
 
     def _on_primary(self) -> None:
         if not self._approved:

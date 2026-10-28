@@ -54,3 +54,75 @@ def test_audio_output_follows_the_default_device(qapp):
     watcher.audioOutputsChanged.emit()        # plugging headphones in/out re-points the output
     if not default.isNull():
         assert out.device().id() == QMediaDevices.defaultAudioOutput().id()
+
+
+def test_main_window_can_shrink_to_a_small_screen(qapp):
+    """The window's minimum used to be the largest page's (1346 px wide, taller once scaled by
+    the display DPI): on a smaller screen it could not shrink and ran off the display."""
+    from desktop import main as desktop_main
+
+    win = desktop_main.MainWindow()
+    hint = win.minimumSizeHint()
+    assert hint.width() < 1000 and hint.height() < 300      # the nav bar (~952 px) is all that is left
+
+
+def test_video_priority_layout_gives_the_picture_the_room(qapp):
+    """"Phóng to" could not enlarge the video: the editing panel keeps ~650 px, so the
+    video pane stayed ~400 px. The video-priority layout now hides that panel."""
+    from desktop.views import editor_view
+
+    v = editor_view.EditorView()
+    v.resize(1500, 800)
+    v.show()
+    QApplication.processEvents()
+    v._apply_layout("balanced")
+    QApplication.processEvents()
+    balanced = v.top.sizes()[0]
+    assert not v.inspector.isHidden()
+    v._apply_layout("video")
+    QApplication.processEvents()
+    assert v.inspector.isHidden()
+    assert v.top.sizes()[0] > balanced * 1.4              # the video pane really grew
+    v._apply_layout("balanced")
+    QApplication.processEvents()
+    assert not v.inspector.isHidden()                     # and the panel comes back
+    assert editor_view.split_sizes(1400, "video", 385)[2] == 0
+
+
+def test_render_page_expand_hides_and_restores_the_options(qapp):
+    from desktop.views import render_view
+
+    v = render_view.RenderView()
+    v.resize(1500, 800)
+    v.show()
+    QApplication.processEvents()
+    assert not v._split.widget(0).isHidden()
+    v.result.expandRequested.emit()                 # ⤢ on the result video
+    assert v._split.widget(0).isHidden()
+    v.preview.expandRequested.emit()                # ⤢ again (either video) brings them back
+    assert not v._split.widget(0).isHidden()
+
+
+def test_video_canvas_scales_smoothly(qapp):
+    """The in-app preview drew frames nearest-neighbour: subtitle text looked jagged."""
+    from PySide6.QtGui import QImage, QPainter
+
+    from desktop.widgets.video_canvas import VideoCanvas
+
+    seen = {}
+    real = QPainter.setRenderHint
+
+    def spy(self, hint, on=True):
+        seen[hint] = on
+        return real(self, hint, on)
+
+    c = VideoCanvas()
+    c.resize(400, 300)
+    c._frame = QImage(1280, 720, QImage.Format_RGB32)
+    c._frame.fill(0xFFFFFF)
+    QPainter.setRenderHint = spy
+    try:
+        c.grab()
+    finally:
+        QPainter.setRenderHint = real
+    assert seen.get(QPainter.SmoothPixmapTransform) is True

@@ -135,6 +135,10 @@ class VideoCanvas(QWidget):
     def paintEvent(self, _e) -> None:
         self._compute_disp()
         p = QPainter(self)
+        # smooth scaling: without it a 1080p frame shrunk into the panel (or 720p stretched)
+        # is nearest-neighbour — thin subtitle text looks jagged and "soft" (2026-10-28)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), QColor("#000000"))
         d = self._disp
         if self._burned is not None and not self._burned.isNull():

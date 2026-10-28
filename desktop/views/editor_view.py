@@ -47,7 +47,7 @@ except Exception:  # noqa: BLE001
 
 SAVE_MS, RETRY_MS = 600, 4000
 LAYOUTS = {"balanced": ("Bố cục: cân bằng", (36, 38, 26)),
-           "video": ("Bố cục: ưu tiên video", (50, 27, 23))}
+           "video": ("Bố cục: ưu tiên video", (64, 36, 0))}   # 0 = the inspector hides
 COVER_STYLE = "Hộp đặc (che chữ Trung)"   # style_panel.BOX_STYLES key
 BULK_TARGET_CPS = 20.0     # "Rút gọn hàng loạt" aims under the 25 cps flag, with headroom
 # wide windows: past these widths the inspector / cue list only spread their content
@@ -60,7 +60,7 @@ def split_sizes(total: int, layout: str, inspector_min: int = 0) -> list[int]:
     the inspector never below what its tabs need (``inspector_min``) nor above
     INSPECTOR_MAX, the list capped at LIST_MAX, the video takes the rest."""
     rv, rl, ri = LAYOUTS[layout][1]
-    ins = max(inspector_min, min(int(total * ri / 100), INSPECTOR_MAX))
+    ins = 0 if ri == 0 else max(inspector_min, min(int(total * ri / 100), INSPECTOR_MAX))
     rest = max(0, total - ins)
     lst = min(int(rest * rl / (rv + rl)), LIST_MAX)
     return [rest - lst, lst, ins]
@@ -205,7 +205,7 @@ class EditorView(QWidget):
         self.project.add_action(self.undo_btn)
         self.project.add_action(self.redo_btn)
         self.layout_btn = button("Cân bằng", "PanelRightClose", variant="ghost",
-                                 tip="Đổi bố cục: cân bằng / ưu tiên video")
+                                 tip="Đổi bố cục: cân bằng / ưu tiên video (video to hơn, tạm ẩn bảng chỉnh sửa bên phải)")
         self.layout_btn.clicked.connect(self._toggle_layout)
         self.project.add_action(self.layout_btn)
         gl = button("Thuật ngữ", "BookOpen", tip="Sửa bảng thuật ngữ Trung → Việt (tự nạp khi dịch)")
@@ -341,6 +341,9 @@ class EditorView(QWidget):
     def _apply_layout(self, name: str, *, initial: bool = False) -> None:
         self._layout = name
         self.layout_btn.setText(LAYOUTS[name][0])
+        # "ưu tiên video" = the picture gets the room: the editing panel steps aside until
+        # the user picks "cân bằng" again (a wider video cannot grow while it keeps ~650 px)
+        self.inspector.setVisible(name != "video")
         self._user_split = False
         self._fit_split()
         if initial:

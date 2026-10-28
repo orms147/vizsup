@@ -12,8 +12,10 @@ import uuid
 from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QLabel,
     QMainWindow,
+    QScrollArea,
     QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -68,14 +70,14 @@ class MainWindow(QMainWindow):
         self.input = InputView(self.providers)
         self.editor = EditorView()
         self.render = RenderView()
-        self.stack.addWidget(self.input)
-        self.stack.addWidget(self.editor)
-        self.stack.addWidget(self.render)
+        self.stack.addWidget(_scrolled(self.input))
+        self.stack.addWidget(_scrolled(self.editor))
+        self.stack.addWidget(_scrolled(self.render))
         self.settings_view = SettingsView()
-        self.stack.addWidget(self.settings_view)
+        self.stack.addWidget(_scrolled(self.settings_view))
         self._before_settings = INPUT
         self.library = LibraryView()
-        self.stack.addWidget(self.library)
+        self.stack.addWidget(_scrolled(self.library))
         self._before_library = INPUT
         self._join_gid: str | None = None    # the split video a join is running for
         v.addWidget(self.stack, 1)
@@ -942,6 +944,18 @@ def _source_refetchable(job: Job, opts: dict) -> bool:
     if job.url or opts.get("url"):
         return True
     return bool(opts.get("file")) and Path(opts["file"]).exists()
+
+
+def _scrolled(page: QWidget) -> QScrollArea:
+    """A page keeps its own minimum size and scrolls when the window is smaller. Without
+    this the window's minimum is the largest page's (1346 px wide, taller once scaled by
+    the display's DPI), so on a smaller screen it could not shrink and ran off the
+    display — "phóng to" and the render page looked cut off (2026-10-28 report)."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setWidget(page)
+    return area
 
 
 def _default_voice(job, voices: list[str], opts: dict) -> str | None:

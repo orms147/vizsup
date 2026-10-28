@@ -87,10 +87,11 @@ def test_editor_split_caps_inspector_and_list_on_wide_windows():
     from desktop.views.editor_view import INSPECTOR_MAX, LIST_MAX, split_sizes
 
     for total in (1300, 1850, 2490):
-        for layout in ("balanced", "video"):
-            v, lst, ins = split_sizes(total, layout, inspector_min=390)
-            assert v + lst + ins == total
-            assert 390 <= ins <= max(390, INSPECTOR_MAX) and lst <= LIST_MAX
+        v, lst, ins = split_sizes(total, "balanced", inspector_min=390)
+        assert v + lst + ins == total
+        assert 390 <= ins <= max(390, INSPECTOR_MAX) and lst <= LIST_MAX
+        v, lst, ins = split_sizes(total, "video", inspector_min=390)   # the panel steps aside
+        assert ins == 0 and v + lst == total and lst <= LIST_MAX and v > lst
     v, lst, ins = split_sizes(2490, "balanced", 390)
     assert v > lst and ins == INSPECTOR_MAX             # the extra width went to the video
 
