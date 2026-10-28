@@ -1060,7 +1060,10 @@ def assemble(
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
                             duration=total, inserts=ins, music=placed, res=res,
                             preset=preset, glass_band=glass_band, glass_mask=mask_name,
-                            burn_h=burn[1], burn_w=burn[0] if src_size else None,
+                            burn_h=burn[1],
+                            # the exact size only for a real downscale: a source kept at its
+                            # own (maybe odd, VP9) size keeps the even-rounding scale=-2
+                            burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
                             glass_look=glass.look(style), fill=fill)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
