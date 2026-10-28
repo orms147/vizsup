@@ -181,3 +181,8 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   its CLAUDE.md notes (ASR constraint, model ids → roles/presets/catalog, storage dirs, CLI flags,
   approval = revision hash) → 10e6414. sesion 1 done for the night.
 - 03:29 — auto-continue check: full suite on 10e6414+ running (hang detection on; the 02:57 run was stopped after 33 min — likely sesion 2's since-fixed hanging test). sesion 2 pushed cf6e0ea (filter chip + timeline min height) and 5fd1fcf (U6 overview throttle) to feat/ux-render, report pending. sesion 1 done.
+- 03:58 — merged feat/ux-render (sesion 2: editor at 150 % DPI — the video picture's 300 px
+  minimum made the page scroll and hid the timeline lanes; filter chip → "Xem lại"; U6 playback tick
+  8.5 → 0.7 ms with 700 cues) → aaf9964. Real window re-checked: overview + ruler + wave + voice band +
+  cue lane all visible, chip fits. Trade-off at logical 667 px height: the cue list shows ~2.5 rows
+  (splitters can be dragged). sesion 2: all assigned work done.
