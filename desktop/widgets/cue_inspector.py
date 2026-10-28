@@ -36,14 +36,19 @@ NUDGES = (-200, -50, 50, 200)
 
 
 class ViEdit(QPlainTextEdit):
-    """Enter commits and moves on; Shift+Enter inserts a line break."""
+    """Enter commits and moves on; Shift+Enter inserts a line break; Esc hands the
+    keyboard back to the list (so ↑/↓ and the plain-letter keys work again)."""
 
     commitNext = Signal()
     focused = Signal()
+    escaped = Signal()
 
     def keyPressEvent(self, ev) -> None:  # noqa: N802
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter) and not (ev.modifiers() & Qt.ShiftModifier):
             self.commitNext.emit()
+            return
+        if ev.key() == Qt.Key_Escape and not ev.modifiers():
+            self.escaped.emit()
             return
         super().keyPressEvent(ev)
 
@@ -77,6 +82,7 @@ class CueInspector(QFrame):
     shortenRequested = Signal()
     listenRequested = Signal()
     glossaryRequested = Signal()
+    leaveRequested = Signal()          # Esc in the text box → focus back to the list
 
     def __init__(self, style_panel: QWidget) -> None:
         super().__init__()
@@ -180,9 +186,11 @@ class CueInspector(QFrame):
 
         self.vi_edit = ViEdit()
         self.vi_edit.setFixedHeight(62)
-        self.vi_edit.setToolTip("Enter: lưu và sang câu sau · Shift+Enter: xuống dòng")
+        self.vi_edit.setToolTip("Enter: lưu và sang câu sau · Shift+Enter: xuống dòng · "
+                                "Ctrl+↑/↓: câu trước/sau · Esc: về danh sách")
         self.vi_edit.textChanged.connect(self._on_text)
         self.vi_edit.commitNext.connect(self._commit)
+        self.vi_edit.escaped.connect(self.leaveRequested)
         self.vi_edit.focused.connect(self.editFocused)
         lay.addWidget(self.vi_edit)
 

@@ -278,6 +278,7 @@ class EditorView(QWidget):
         ins.editStarted.connect(self._snapshot)        # one undo step per editing session
         ins.viEdited.connect(self._on_vi_edited)
         ins.commitNext.connect(self._commit_next)
+        ins.leaveRequested.connect(lambda: self.cue_list.view.setFocus())
         ins.editFocused.connect(vid.pause)
         ins.nudgeRequested.connect(self._nudge)
         ins.setEdgeRequested.connect(self._set_edge)
@@ -373,6 +374,10 @@ class EditorView(QWidget):
         sc("Left", lambda: self.seek_by(-SEEK_STEP))
         sc("Right", lambda: self.seek_by(+SEEK_STEP))
         sc("F", self.toggle_fullscreen)
+        sc("D", self._mark_reviewed)            # "Đã xem" + jump to the next pending line
+        sc("Ctrl+D", self._mark_reviewed)       # the same from inside the text box
+        sc("Ctrl+Up", lambda: self.step_cue(-1, keep_typing=True))
+        sc("Ctrl+Down", lambda: self.step_cue(+1, keep_typing=True))
         sc("F8", lambda: self._goto_pending(+1))
         sc("Shift+F8", lambda: self._goto_pending(-1))
         sc("Ctrl+Return", self.approveRequested.emit)
@@ -387,9 +392,10 @@ class EditorView(QWidget):
                 sc(f"{pre}+Right", lambda w=which, d=step: self._nudge(w, d))
 
     # --- keyboard navigation / full screen --------------------------------------------
-    def step_cue(self, step: int) -> None:
+    def step_cue(self, step: int, *, keep_typing: bool = False) -> None:
         """↑ / ↓: the previous / next line (from the one at the playhead when none is
-        selected); the video jumps to it."""
+        selected); the video jumps to it. ``keep_typing`` (Ctrl+↑/↓ from the text box)
+        leaves the cursor in the box of the new line."""
         if not self.cues:
             return
         cur = self._sel
@@ -405,8 +411,11 @@ class EditorView(QWidget):
             else:
                 idx = max((i for i, c in enumerate(self.cues) if c.end <= t), default=0)
         idx = max(0, min(len(self.cues) - 1, idx))
+        typing = keep_typing and self._editing()
         self.cue_list.selectRow(idx)
         self._select(idx, seek=True)
+        if typing:
+            self.inspector.focus_text()
 
     def seek_by(self, seconds: float) -> None:
         """← / →: jump back / ahead (10 s, like YouTube), clamped to the video."""

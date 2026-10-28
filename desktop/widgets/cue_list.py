@@ -327,7 +327,7 @@ class CueList(QFrame):
         fh.addWidget(self.pos_lbl)
         fh.addStretch(1)
         self.reviewed_btn = button("Đã xem", "Check", variant="ghost",
-                                   tip="Đánh dấu đã kiểm tra rồi tới câu còn chờ")
+                                   tip="Đánh dấu đã kiểm tra rồi tới câu còn chờ (D hoặc Ctrl+D)")
         self.reviewed_btn.clicked.connect(self.reviewedRequested)
         fh.addWidget(self.reviewed_btn)
         nxt = button("Xem lại", "ChevronRight", variant="ghost", tip="Tới câu cần xem lại (F8)")
