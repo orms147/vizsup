@@ -22,6 +22,11 @@ def _no_audio(exc: Exception) -> bool:
     return type(exc).__name__ == "NoAudioReceived"
 
 
+# 2026-10-29: ~40 % of single requests came back "no audio" AT RANDOM while the next try
+# of the same line worked; every such answer paused ALL workers 5–60 s and a batch fell
+# to ~5 lines/min. A line first retries on its own a few times (QUICK_RETRIES, nobody
+# else waits); only then the shared cooldown below starts.
+QUICK_RETRIES = (0.3, 1.0, 2.0)
 THROTTLE_DELAYS = (5.0, 15.0, 30.0, 60.0)   # "no audio" on a speakable line: back off
 GIVE_UP_AFTER = 5     # lines in a row still empty after every retry → stop the batch
 # Oct 2026: edge-tts's endpoint answers many valid requests with no audio (rany2/edge-tts
@@ -90,7 +95,7 @@ class EdgeTTS(TTSProvider):
         asyncio.run(_run())
         return out_path
 
-    def synthesize_many(self, items, *, voice=None, rate=None, concurrency=3,
+    def synthesize_many(self, items, *, voice=None, rate=None, concurrency=6,
                         retry_delays=(1.0, 4.0), on_done=None, cancel=None):
         """One asyncio.run for the whole job: a single aiohttp connection pool +
         Semaphore(concurrency) instead of a fresh WSS/TLS handshake per cue. The
@@ -139,6 +144,7 @@ class EdgeTTS(TTSProvider):
                 async def _speak(key: str, text: str, out_path):
                     delays = list(retry_delays)
                     throttled = 0
+                    quick = list(QUICK_RETRIES)
                     while True:
                         wait = cool["until"] - loop.time()
                         if wait > 0:
@@ -155,6 +161,9 @@ class EdgeTTS(TTSProvider):
                             if _no_audio(exc):
                                 if not has_speakable(text):
                                     return key, exc  # nothing to say → skip, no retry
+                                if quick:                # random miss: this line retries
+                                    await _asyncio.sleep(quick.pop(0))
+                                    continue
                                 if throttled >= len(THROTTLE_DELAYS):
                                     streak["n"] += 1
                                     if streak["n"] >= GIVE_UP_AFTER:

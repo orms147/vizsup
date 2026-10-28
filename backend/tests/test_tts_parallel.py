@@ -190,6 +190,7 @@ def _fake_edge(monkeypatch, empty: dict[str, int]):
     monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=Communicate))
     monkeypatch.setattr(edge, "_keep_alive_connector", lambda n: Conn())
     monkeypatch.setattr(edge, "THROTTLE_DELAYS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(edge, "QUICK_RETRIES", (0.0, 0.0, 0.0))
     return edge.EdgeTTS()
 
 
@@ -267,3 +268,21 @@ def test_edge_batch_keeps_going_until_a_streak_of_empty_lines(tmp_path, monkeypa
     kinds = [type(res[str(i)]).__name__ if res[str(i)] else "ok" for i in range(12)]
     assert kinds[:5] == ["TTSThrottled", "ok", "TTSThrottled", "TTSThrottled", "TTSThrottled"]
     assert set(kinds[5:]) == {"InterruptedError"}             # stopped after 3 in a row
+
+
+def test_a_random_miss_retries_that_line_without_pausing_the_others(tmp_path, monkeypatch):
+    """2026-10-29: random "no audio" answers (~40 %) paused every worker 5–60 s; a line
+    now retries on its own first — the shared cooldown is never reached."""
+    from app.providers.tts import edge
+
+    prov = _fake_edge(monkeypatch, {"câu hai": 2})
+    waits = []
+    monkeypatch.setattr(edge, "THROTTLE_DELAYS", (99.0, 99.0, 99.0, 99.0))  # would hang
+    items = [(str(k), f"câu {w}", tmp_path / f"{k}.mp3") for k, w in
+             enumerate(("một", "hai", "ba", "bốn"), 1)]
+    import time
+
+    t = time.monotonic()
+    res = dict(prov.synthesize_many(items, on_done=lambda k, e: waits.append(k)))
+    assert all(v is None for v in res.values()) and len(waits) == 4
+    assert time.monotonic() - t < 5.0                     # no 99 s shared cooldown
