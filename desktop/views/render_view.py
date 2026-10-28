@@ -246,6 +246,7 @@ class RenderView(QWidget):
     cancelRequested = Signal()
     approveRequested = Signal()        # locked state → re-approve
     joinRequested = Signal(str)        # a split video's group id → join the rendered parts
+    showLinesRequested = Signal(list, str)   # "Xem N câu": 0-based cue rows + why → the editor
     # "Giữ nhạc nền & hiệu ứng" needs a separation engine: the main window may wire this
     # to an installer, then call set_separation_available(True)
     installSeparationRequested = Signal()
@@ -375,13 +376,19 @@ class RenderView(QWidget):
         self.fit_hint = label("", "small", wrap=True)
         self.fit_btn = button("", variant="ghost", small=True)
         self.fit_btn.clicked.connect(lambda: self.speed.setValue(int(round(self._fit_rate * 100))))
+        self.fit_lines_btn = button("", variant="ghost", small=True,
+                                    tip="Mở màn Sửa phụ đề, chỉ hiện các câu này để rút gọn")
+        self.fit_lines_btn.clicked.connect(self._on_fit_lines)
         fit_row.addWidget(self.fit_hint, 1)
+        fit_row.addWidget(self.fit_lines_btn)
         fit_row.addWidget(self.fit_btn)
         ll.addLayout(fit_row)
+        self._fit_rows: list[int] = []
         self._fit_cues: list = []
         self._fit_rate = 1.0
         self.fit_hint.setVisible(False)
         self.fit_btn.setVisible(False)
+        self.fit_lines_btn.setVisible(False)
         self.speed.valueChanged.connect(lambda _v: self._update_fit_hint())
         self.speed.valueChanged.connect(self._remember_voice)   # slider, keys, "Dùng 1.30×"
 
@@ -1200,6 +1207,9 @@ class RenderView(QWidget):
         show = share > 0.15 and self._audio_mode() != "original"
         self.fit_hint.setVisible(show)
         self.fit_btn.setVisible(False)
+        self._fit_rows = fit_estimate.late_indexes(self._fit_cues, cur) if show else []
+        self.fit_lines_btn.setVisible(show and bool(self._fit_rows))
+        self.fit_lines_btn.setText(f"Xem {len(self._fit_rows)} câu")
         if not show:
             return
         rate, then = fit_estimate.suggest_rate(self._fit_cues)
@@ -1213,6 +1223,11 @@ class RenderView(QWidget):
             msg += " Nên rút gọn thêm ở màn Sửa phụ đề."
         self.fit_hint.setText(msg)
         self.fit_hint.setStyleSheet(f"color:{V2['amber']};")
+
+    def _on_fit_lines(self) -> None:
+        if self._fit_rows:
+            self.showLinesRequested.emit(list(self._fit_rows),
+                                         f"Không kịp ở {self.speed.value() / 100:.2f}×")
 
     def set_rendering(self, on: bool) -> None:
         """Lock/unlock this screen around a render run. Every exit path (done,

@@ -38,6 +38,17 @@ def fits(vi_text: str, slot: float, rate: float = 1.0) -> bool:
     return speech_seconds(vi_text, rate) <= slot * MAX_TEMPO
 
 
+def late_indexes(cues, rate: float = 1.0) -> list[int]:
+    """0-based positions of the non-empty lines that won't fit their slot at voice speed
+    ``rate`` — the lines behind ``late_share``. Pure."""
+    out = []
+    for i, c in enumerate(cues):
+        t = getattr(c, "vi", None) or getattr(c, "text", "")
+        if t.strip() and not fits(t, slot_seconds(cues, i), rate):
+            out.append(i)
+    return out
+
+
 def late_share(cues, rate: float = 1.0) -> float:
     """Share of non-empty lines that won't fit their slot at voice speed ``rate``. Pure."""
     texts = [(i, getattr(c, "vi", None) or getattr(c, "text", "")) for i, c in enumerate(cues)]
