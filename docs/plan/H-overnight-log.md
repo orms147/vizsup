@@ -190,3 +190,5 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   Final-head run (0b66ad2) in progress, using one core steadily (not hung). NOTE: the suite took ~100 s
   at 00:30 and takes 10+ min alone now — some of tonight's tests are slow (likely subprocess / 1.5×
   scale UI tests); to profile with --durations after this run. Both sessions done; nothing to merge.
+- 04:34 — FINAL HEAD 0b66ad2: full suite 1489 passed, 1 skipped, ruff clean. But it took 34 min
+  with the machine idle (≈100 s at 00:30) → profiling tonight's new test files with --durations.
