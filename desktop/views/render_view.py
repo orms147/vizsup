@@ -43,7 +43,15 @@ from desktop.cuemodel import fmt_time
 from desktop.icons import icon, pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
-from desktop.widgets.chrome import ProjectBar, badge, button, compact_combo, icon_label, label
+from desktop.widgets.chrome import (
+    Collapsible,
+    ProjectBar,
+    badge,
+    button,
+    compact_combo,
+    icon_label,
+    label,
+)
 from desktop.widgets.pointer import glow
 from desktop.widgets.video_panel import VideoPanel
 from app.fsutil import atomic_write_text
@@ -175,6 +183,10 @@ class ModeCard(QPushButton):
 
     def set_desc(self, text: str) -> None:
         self._desc.setText(text)
+        lay = self.layout()
+        if lay is not None:          # measure the NEW wrapped text, not the cached layout
+            lay.invalidate()
+            lay.activate()
         self._fit_height()
 
     def desc(self) -> str:
@@ -473,10 +485,15 @@ class RenderView(QWidget):
         self._src_dur = 0.0
         ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
 
-        # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md)
+        # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md) — folded
+        # into one section with a one-line summary: it is set once per channel, not per episode
         ll.addWidget(_hline())
-        ll.addWidget(label("Đăng tải", "h3"))
         st = store.load_ui_state()
+        self.post_section = Collapsible("Đăng tải & thương hiệu",
+                                        expanded=bool(st.get("render_post_open", False)))
+        self.post_section.toggled.connect(lambda on: store.update_ui_state(render_post_open=on))
+        pb = self.post_section.body
+        ll.addWidget(self.post_section)
         self.credit_cb = QCheckBox("Ghi nguồn trên video (5 giây đầu)")
         self.credit_cb.setChecked(bool(st.get("credit_overlay", True)))
         self.credit_cb.toggled.connect(lambda on: store.update_ui_state(credit_overlay=on))
@@ -486,10 +503,10 @@ class RenderView(QWidget):
             "Một nhãn nhỏ ở góc trên. TikTok yêu cầu gắn nhãn nội dung AI chân thực; Luật AI "
             "134/2025 yêu cầu khi giọng AI mô phỏng người thật. Không ảnh hưởng chất lượng.")
         self.ai_label_cb.toggled.connect(lambda on: store.update_ui_state(ai_label=on))
-        ll.addWidget(self.credit_cb)
-        ll.addWidget(self.ai_label_cb)
-        ll.addWidget(self._build_watermark(st))
-        ll.addWidget(self._build_episode_card(st))
+        pb.addWidget(self.credit_cb)
+        pb.addWidget(self.ai_label_cb)
+        pb.addWidget(self._build_watermark(st))
+        pb.addWidget(self._build_episode_card(st))
         rrow = QHBoxLayout()
         rrow.setSpacing(8)
         cap = label("Quyền sử dụng", "secondary")
@@ -512,9 +529,12 @@ class RenderView(QWidget):
                                 tip="Đính kèm ảnh chụp / email cho phép — được chép vào thư mục dự án")
         self.proof_btn.clicked.connect(self._attach_proof)
         rrow.addWidget(self.proof_btn)
-        ll.addLayout(rrow)
+        pb.addLayout(rrow)
         self.rights_note = label("", "small", wrap=True)
-        ll.addWidget(self.rights_note)
+        pb.addWidget(self.rights_note)
+        for cb in (self.credit_cb, self.ai_label_cb):
+            cb.toggled.connect(lambda _on: self._update_post_summary())
+        self._update_post_summary()
         self.comment_lbl = label("", "small", wrap=True)          # F-4
         ll.addWidget(self.comment_lbl)
         ll.addStretch(1)
@@ -879,6 +899,27 @@ class RenderView(QWidget):
         self.rights.setCurrentIndex(max(0, self.rights.findData(basis)))
         self.rights.blockSignals(False)
         self._show_rights_note(basis)
+        self._update_post_summary()
+
+    def _update_post_summary(self, *_a) -> None:
+        """What the folded "Đăng tải & thương hiệu" section holds, in one line. A missing
+        right to use is shown in amber — folding it away must not hide the warning."""
+        if not hasattr(self, "rights") or not hasattr(self, "card_cb"):
+            return                                   # still being built
+        bits = []
+        if self.credit_cb.isChecked():
+            bits.append("ghi nguồn")
+        if self.ai_label_cb.isChecked():
+            bits.append("nhãn AI")
+        if self.wm_cb.isChecked() and self.wm_text.text().strip():
+            bits.append(f"watermark “{self.wm_text.text().strip()[:18]}”")
+        if self.card_cb.isChecked():
+            bits.append("thẻ tập")
+        basis = self.rights.currentData() or "unknown"
+        unknown = basis == "unknown"
+        rights = "quyền: chưa ghi" if unknown else f"quyền: {self.rights.currentText().lower()}"
+        self.post_section.set_summary(" · ".join((bits or ["không bật mục nào"]) + [rights]),
+                                      warn=unknown)
 
     def _show_rights_note(self, basis: str) -> None:
         from app.pipeline import disclosure
@@ -897,10 +938,12 @@ class RenderView(QWidget):
     def _on_rights(self, _i: int) -> None:
         from app.pipeline import disclosure
 
+        self._update_post_summary()
         if self._job is None:
             return
         disclosure.save_rights(self._job, self.rights.currentData() or "unknown")
         self._show_rights_note(self.rights.currentData() or "unknown")
+        self._update_post_summary()
 
     def _attach_proof(self) -> None:
         from app.pipeline import disclosure
@@ -1253,6 +1296,7 @@ class RenderView(QWidget):
         self.wm_size_lbl.setText(f"{wm['size']}px")
         if hasattr(self, "preview"):        # the preview is built after the options
             self.preview.set_watermark(wm if wm["on"] and wm["text"] else None)
+        self._update_post_summary()
         if save:
             store.update_ui_state(watermark=wm)
 
@@ -1311,6 +1355,7 @@ class RenderView(QWidget):
         chip, end = disclosure.card_texts(card, title)
         self.card_hint.setText(f"Video này: “{chip}” … “{end}”" if chip or end else
                                "Tiêu đề video này không có số tập — sẽ không hiện thẻ.")
+        self._update_post_summary()
         if save:
             store.update_ui_state(episode_card=card)
 
