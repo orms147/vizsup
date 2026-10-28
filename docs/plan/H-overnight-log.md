@@ -143,3 +143,10 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 02:29 — auto-continue check: both sessions idle since ~01:35–01:41 with uncommitted work
   (voice2: pitch.py/voices.py; ux4: render_view.py/chrome.py) and no report → pinged both to continue
   or say what blocks them. Nothing new to merge.
+- 02:31 — sesion 2 not blocked (long test wait + a hanging test of its own); render-page work
+  continues (collapsible "Đăng tải & thương hiệu" done; the action footer was already sticky).
+- 02:31 — merged feat/voice-guess-2 (sesion 1) → 3e5367e. Cause of the bad guess: a strict YIN
+  voicing threshold (only 32/82 lines measurable, octave errors) + a fixed 165 Hz split (the male lead
+  speaks at 170–190 Hz). Now: voicing 0.2, per-video split (widest gap 150–260 Hz), Demucs speech stem
+  when there is no vocals.wav (GPU only). ep 7: 2 m / 30 f / 50 ? → 25 m / 43 f / 14 ?; text-cue check
+  20 agree / 2 disagree. Render option "Giọng theo nhân vật" stays default OFF. Related tests 168 passed.
