@@ -58,3 +58,11 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   with digits / % / units will re-voice once on the next render (cache key = spoken text).
 - 01:40 — sesion 1 vizup → next: timing post-pass (gaps / min gap / min duration, optional
   scene-cut snap), branch feat/timing-pass.
+- 00:35 — commit af2f480 fix(tts): edge-tts answered ~40 % of requests "no audio" at random
+  tonight; each paused every worker 5–60 s (batch crawled at ~5 lines/min). Lines now retry
+  alone first; 6 in flight. 30 real lines: 122 s → 57 s, 0 failed.
+- 00:35 — merged feat/timing-pass (sesion 1, 59946aa): timing post-pass after ASR/OCR
+  (2-frame gaps, chained short gaps, min duration; optional scene snap) + editor menu action
+  + input option "Chỉnh thời gian chuẩn". 1139 tests pass. → 5192596.
+- 00:35 — sesion 1 → next: "Bộ phim" series profile (branch feat/series).
+- NOTE: times above 00:20–01:40 were estimates (wrong); real clock from here on.
