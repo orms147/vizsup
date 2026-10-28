@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from desktop.theme import V2
 from desktop.widgets.chrome import button, icon_label, label
@@ -329,3 +337,26 @@ class PostDialog(VzDialog):
         self.ai_btn.setEnabled(True)
         self.ai_btn.setText("Gợi ý tiêu đề + hashtag (AI)")
         self.status.setText(f"✗ {msg}")
+
+
+class CsvImportDialog(VzDialog):
+    """What importing a proof-read CSV would change, and the choice to take its times too."""
+
+    def __init__(self, parent, *, texts: int, times: int, total: int,
+                 time_problem: str = "") -> None:
+        super().__init__("Nhập bảng CSV đã sửa", parent, width=480)
+        self.body.addWidget(label(
+            f"Có {texts} / {total} câu đổi chữ tiếng Việt." if texts else
+            "Chữ tiếng Việt không có gì khác so với trong vizsup.", "secondary", wrap=True))
+        self.with_times = QCheckBox(f"Cập nhật cả thời gian ({times} câu khác)")
+        self.with_times.setEnabled(times > 0)
+        self.body.addWidget(self.with_times)
+        if time_problem:
+            self.body.addWidget(label("Thời gian trong file không dùng được: " + time_problem,
+                                      "warnText", wrap=True))
+        self.body.addWidget(label("Chỉ đổi những câu khác nhau, thành một bước hoàn tác (Ctrl+Z).  "
+                                  "Câu đã khóa timing giữ nguyên giờ.", "small", wrap=True))
+        self.add_button("Hủy")
+        ok = self.add_button("Nhập", icon_name="Check", primary=True, accept=True)
+        ok.setEnabled(texts > 0 or times > 0)
+        self.ok_btn = ok

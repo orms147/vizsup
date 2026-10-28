@@ -283,6 +283,8 @@ class EditorView(QWidget):
         cl, ins, tl, vid = self.cue_list, self.inspector, self.timeline, self.video
         cl.rowSelected.connect(self._on_row_selected)
         cl.contextRequested.connect(self._show_cue_menu)
+        cl.csvExportRequested.connect(self._export_csv)
+        cl.csvImportRequested.connect(self._import_csv)
         tl.contextRequested.connect(self._show_cue_menu)
         cl.editRequested.connect(lambda: ins.focus_text(select_all=True))
         cl.splitRequested.connect(self._split)
@@ -1902,6 +1904,90 @@ class EditorView(QWidget):
         if idx == self._sel and 0 <= idx < len(self.cues):
             self.inspector.refresh_timing(self.cues[idx])
         self._mark_dirty()
+
+    # --- CSV for proof-reading (app/pipeline/subcsv.py) ---------------------------------
+    def export_csv_to(self, path) -> Path:
+        """index,start,end,zh,vi — UTF-8 with a BOM, so Excel shows Vietnamese correctly."""
+        from app.pipeline import subcsv
+
+        self.flush()
+        return subcsv.write_file(path, self.cues)
+
+    def _export_csv(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        folder = store.load_ui_state().get("export_dir") or (
+            str(self.job.work_dir) if self.job is not None else "")
+        name = "".join(ch if ch not in '\\/:*?"<>|' else " " for ch in (
+            self._meta.get("title") or "phu-de")).strip()[:60] or "phu-de"
+        fn, _ = QFileDialog.getSaveFileName(self, "Xuất bảng phụ đề (CSV)",
+                                            str(Path(folder) / f"{name}.csv"), "CSV (*.csv)")
+        if not fn:
+            return
+        try:
+            out = self.export_csv_to(fn)
+        except OSError as exc:
+            self.message.emit(f"Chưa xuất được CSV: {exc}", "warn")
+            return
+        self.message.emit(f"Đã xuất {len(self.cues)} câu ra {out.name} — mở bằng Google Sheets "
+                          "hoặc Excel, sửa cột vi rồi nhập lại.", "ok")
+
+    def plan_csv_import(self, text: str, *, with_times: bool = False):
+        """(rows in cue order, rows whose text changes, rows whose times change) for a CSV of
+        THIS project; subcsv.CsvError says why when it is not one."""
+        from app.pipeline import subcsv
+
+        ordered = subcsv.match(self.cues, subcsv.read_rows(text))
+        text_rows, time_rows = subcsv.changes(self.cues, ordered, with_times=with_times)
+        return ordered, text_rows, time_rows
+
+    def apply_csv_import(self, ordered, text_rows, time_rows, *, with_times: bool) -> int:
+        """One undo step: the Vietnamese of ``text_rows`` (and, on request, the times of
+        ``time_rows``) from the file. Returns how many cues changed."""
+        touched = set(text_rows) | (set(time_rows) if with_times else set())
+        if not touched:
+            return 0
+        self._snapshot()
+        for i in text_rows:
+            self.cues[i].vi = ordered[i]["vi"]
+        if with_times:
+            from app.pipeline import subcsv
+
+            for i in time_rows:
+                self.cues[i].start = round(subcsv.parse_ts(ordered[i]["start"]), 3)
+                self.cues[i].end = round(subcsv.parse_ts(ordered[i]["end"]), 3)
+        self._reload()
+        return len(touched)
+
+    def _import_csv(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from app.pipeline import subcsv
+        from desktop.widgets.dialogs import CsvImportDialog
+
+        fn, _ = QFileDialog.getOpenFileName(self, "Nhập bảng phụ đề đã sửa (CSV)", "",
+                                            "CSV (*.csv *.txt)")
+        if not fn:
+            return
+        try:
+            ordered, texts, _t = self.plan_csv_import(subcsv.read_text(fn))
+        except subcsv.CsvError as exc:
+            QMessageBox.warning(self, "Không nhập được file CSV", str(exc))
+            return
+        except OSError as exc:
+            QMessageBox.warning(self, "Không đọc được file", str(exc))
+            return
+        times, time_problem = [], ""
+        try:                                   # the times only matter when the box is ticked
+            times = subcsv.changes(self.cues, ordered, with_times=True)[1]
+        except subcsv.CsvError as exc:
+            time_problem = str(exc)
+        dlg = CsvImportDialog(self, texts=len(texts), times=len(times), total=len(self.cues),
+                              time_problem=time_problem)
+        if not dlg.exec():
+            return
+        n = self.apply_csv_import(ordered, texts, times, with_times=dlg.with_times.isChecked())
+        self.message.emit(f"Đã nhập {n} câu từ CSV — Ctrl+Z để hoàn tác.", "ok")
 
     # --- right-click menu (list row / timeline block) --------------------------------
     def _cue_menu(self, row: int):
