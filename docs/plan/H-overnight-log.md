@@ -180,3 +180,4 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   order + sidecar/approval table + threads; docs/providers.md model catalog section) → c228539; applied
   its CLAUDE.md notes (ASR constraint, model ids → roles/presets/catalog, storage dirs, CLI flags,
   approval = revision hash) → 10e6414. sesion 1 done for the night.
+- 03:29 — auto-continue check: full suite on 10e6414+ running (hang detection on; the 02:57 run was stopped after 33 min — likely sesion 2's since-fixed hanging test). sesion 2 pushed cf6e0ea (filter chip + timeline min height) and 5fd1fcf (U6 overview throttle) to feat/ux-render, report pending. sesion 1 done.
