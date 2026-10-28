@@ -346,17 +346,32 @@ class ProjectBar(QFrame):
         h.addWidget(ic)
         self.title = label("", "h2")
         self.meta = label("", "mono")
-        h.addLayout(vbox(self.title, self.meta, spacing=1))
-        h.addStretch(1)
+        # a long title (a Douyin caption can run to 100 characters) must give way, not push the
+        # actions off the page and make the whole editor wider than the window: the labels take
+        # the room that is left and elide to it
+        for lab in (self.title, self.meta):
+            lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lab.setMinimumWidth(40)
+        self._title_full = ""
+        self._meta_full = ""
+        h.addLayout(vbox(self.title, self.meta, spacing=1), 1)
         self.actions = QHBoxLayout()
         self.actions.setSpacing(8)
         h.addLayout(self.actions)
 
     def set_project(self, title: str, meta: str) -> None:
-        fm = self.title.fontMetrics()
-        self.title.setText(fm.elidedText(title, Qt.ElideRight, 620))
+        self._title_full, self._meta_full = title, meta
         self.title.setToolTip(title)
-        self.meta.setText(meta)
+        self._elide()
+
+    def _elide(self) -> None:
+        for lab, full in ((self.title, self._title_full), (self.meta, self._meta_full)):
+            room = max(60, lab.width())
+            lab.setText(lab.fontMetrics().elidedText(full, Qt.ElideRight, room))
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._elide()
 
     def add_action(self, w: QWidget) -> QWidget:
         self.actions.addWidget(w)
