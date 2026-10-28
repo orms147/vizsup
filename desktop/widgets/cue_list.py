@@ -338,6 +338,8 @@ class CueList(QFrame):
         super().__init__()
         self.setObjectName("panel")
         self._review_only = False
+        self._lines: set[int] | None = None   # "Xem N câu" from the render page: only these rows
+        self._lines_total = 0
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -400,6 +402,20 @@ class CueList(QFrame):
         self.f_all.clicked.connect(lambda: self.set_review_only(False))
         self.f_review.clicked.connect(lambda: self.set_review_only(True))
         v.addLayout(frow)
+        self.lines_bar = QFrame()                      # shown while the render page's list is on
+        lb = QHBoxLayout(self.lines_bar)
+        lb.setContentsMargins(10, 0, 10, 8)
+        self.lines_btn = QPushButton("")
+        self.lines_btn.setCursor(Qt.PointingHandCursor)
+        self.lines_btn.setToolTip("Bấm để hiện lại tất cả các câu")
+        self.lines_btn.setStyleSheet(
+            f"QPushButton{{background:{V2['amber']}22;border:1px solid {V2['amber']}66;"
+            f"border-radius:12px;padding:3px 12px;color:{V2['amber']};min-height:0;}}")
+        self.lines_btn.clicked.connect(self.clear_lines_filter)
+        lb.addWidget(self.lines_btn)
+        lb.addStretch(1)
+        self.lines_bar.setVisible(False)
+        v.addWidget(self.lines_bar)
 
         # list | "all reviewed" empty state
         body = QWidget()
@@ -511,6 +527,9 @@ class CueList(QFrame):
     # --- data ---------------------------------------------------------------------
     def load(self, cues: list[EditorCue], issues: list[list[str]] | None = None) -> None:
         cur = self.currentRow()
+        if self._lines is not None and len(cues) != self._lines_total:
+            self._lines = None                       # split / merge / delete: row numbers moved
+            self.lines_bar.setVisible(False)
         self.model.reset(cues, issues if issues is not None else [[] for _ in cues])
         self.count.setText(f"{len(cues)} câu")
         self._apply_filter()
@@ -537,10 +556,40 @@ class CueList(QFrame):
         ix = self.view.currentIndex()
         return ix.row() if ix.isValid() else -1
 
+    # --- "these lines only" (the render page's "Xem N câu") ------------------------
+    def set_lines_filter(self, rows, why: str = "") -> None:
+        rows = {r for r in rows if 0 <= r < self.model.rowCount()}
+        if not rows:
+            self.clear_lines_filter()
+            return
+        self._lines, self._lines_total = rows, self.model.rowCount()
+        self.lines_btn.setText(f"{why or 'Chỉ các câu đã chọn'} · {len(rows)} câu  ✕")
+        self.lines_bar.setVisible(True)
+        self._apply_filter()
+        if not self.visible_rows():                  # the review filter and this list share no row
+            self.set_review_only(False)
+        shown = self.visible_rows()
+        if shown:
+            self.selectRow(shown[0])
+
+    def clear_lines_filter(self) -> None:
+        if self._lines is None:
+            return
+        self._lines = None
+        self.lines_bar.setVisible(False)
+        self._apply_filter()
+
+    def lines_filter(self) -> set[int] | None:
+        return set(self._lines) if self._lines is not None else None
+
+    def visible_rows(self) -> list[int]:
+        return [i for i in range(self.model.rowCount()) if not self.view.isRowHidden(i)]
+
     def selectRow(self, row: int, *, center: bool = True) -> None:  # noqa: N802
         if not (0 <= row < self.model.rowCount()):
             return
         if self.view.isRowHidden(row):
+            self.clear_lines_filter()
             self.set_review_only(False)
         ix = self.model.index(row)
         if self.view.currentIndex() != ix:
@@ -581,9 +630,11 @@ class CueList(QFrame):
 
     def _apply_filter(self) -> None:
         pending = set(self.pending_rows()) if self._review_only else None
+        lines = self._lines
         for i in range(self.model.rowCount()):
-            self.view.setRowHidden(i, pending is not None and i not in pending)
-        empty = pending is not None and not pending
+            self.view.setRowHidden(i, (pending is not None and i not in pending)
+                                   or (lines is not None and i not in lines))
+        empty = pending is not None and not pending and lines is None
         self._stack.setCurrentIndex(1 if empty else 0)
         self._update_badge()
         r = self.currentRow()

@@ -443,6 +443,12 @@ class EditorView(QWidget):
             else:
                 idx = max((i for i, c in enumerate(self.cues) if c.end <= t), default=0)
         idx = max(0, min(len(self.cues) - 1, idx))
+        if self.cue_list.lines_filter() is not None and self.cue_list.view.isRowHidden(idx):
+            shown = self.cue_list.visible_rows()      # a "these lines only" list: stay inside it
+            ahead = [r for r in shown if (r > cur if step > 0 else r < cur)] if cur >= 0 else []
+            if not ahead:
+                return
+            idx = ahead[0] if step > 0 else ahead[-1]
         typing = keep_typing and self._editing()
         self.cue_list.selectRow(idx)
         self._select(idx, seek=True)
@@ -1274,6 +1280,13 @@ class EditorView(QWidget):
 
     def pending_count(self) -> int:
         return len(self.cue_list.pending_rows())
+
+    def show_lines(self, rows, why: str = "") -> None:
+        """"Xem N câu" on the render page's speed warning: only these lines (0-based), the first
+        selected, the keyboard on the list. ↑/↓ then walk just these; the bar above the list
+        clears it."""
+        self.cue_list.set_lines_filter(rows, why)
+        self.cue_list.view.setFocus()
 
     def show_pending(self) -> None:
         """"Xem N câu" in the approve dialog: only the lines still to look at, the first

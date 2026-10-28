@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.render.renderRequested.connect(self._start_render)
         self.render.cancelRequested.connect(self._cancel_render)
         self.render.backRequested.connect(self._back_to_editor)
+        self.render.showLinesRequested.connect(self._show_lines)
         self.render.approveRequested.connect(self._approve)
         self.render.joinRequested.connect(self._start_join)
         self.editor.previewStyleRequested.connect(self._preview_style)
@@ -521,6 +522,12 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    def _show_lines(self, rows: list, why: str) -> None:
+        """Render page's "Xem N câu": back to the editor with only those lines listed."""
+        self.editor.reload_fit_report()
+        self.stack.setCurrentIndex(EDITOR)
+        self.editor.show_lines(rows, why)
 
     def _back_to_editor(self) -> None:
         # the voice speed may have changed on the render page: "Quá dài" and the late

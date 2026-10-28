@@ -327,6 +327,63 @@ class AppNav(QFrame):
 
 # --- project bar ----------------------------------------------------------------
 
+class Collapsible(QFrame):
+    """A titled section that folds: a header button (chevron + title) with, while folded, a one-line
+    summary under it — so what is hidden is still readable (and a warning in it is seen).
+    ``body`` is the content layout; ``toggled(bool)`` says expanded / folded."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str, *, expanded: bool = False) -> None:
+        super().__init__()
+        self.setObjectName("bare")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.header = QPushButton(title)
+        self.header.setObjectName("collapseHead")
+        self.header.setCheckable(True)
+        self.header.setCursor(Qt.PointingHandCursor)
+        self.header.setStyleSheet(
+            f"QPushButton#collapseHead{{text-align:left;background:transparent;border:none;"
+            f"padding:4px 0;font-weight:600;font-size:13px;color:{V2['text']};min-height:0;}}"
+            f"QPushButton#collapseHead:hover{{color:{V2['purple_bright']};}}")
+        self.header.toggled.connect(self._on_toggled)
+        v.addWidget(self.header)
+        self.summary = label("", "small", wrap=True)
+        v.addWidget(self.summary)
+        self._content = QWidget()
+        self._content.setObjectName("bare")
+        self.body = QVBoxLayout(self._content)
+        self.body.setContentsMargins(0, 2, 0, 0)
+        self.body.setSpacing(8)
+        v.addWidget(self._content)
+        self.set_expanded(expanded)
+
+    def _icon(self, on: bool) -> None:
+        self.header.setIcon(icon("ChevronDown" if on else "ChevronRight", V2["secondary"], 14))
+
+    def _on_toggled(self, on: bool) -> None:
+        self._content.setVisible(on)
+        self.summary.setVisible(not on and bool(self.summary.text()))
+        self._icon(on)
+        self.toggled.emit(on)
+
+    def set_expanded(self, on: bool) -> None:
+        self.header.blockSignals(True)
+        self.header.setChecked(on)
+        self.header.blockSignals(False)
+        self._on_toggled(on)
+
+    def is_expanded(self) -> bool:
+        return self.header.isChecked()
+
+    def set_summary(self, text: str, *, warn: bool = False) -> None:
+        self.summary.setText(text)
+        self.summary.setStyleSheet(f"color:{V2['amber'] if warn else V2['muted']};")
+        self.summary.setVisible(not self.is_expanded() and bool(text))
+
+
 class ProjectBar(QFrame):
     """Under the app bar on Sửa phụ đề / Dựng video: file icon · title · meta, then a
     right-hand slot the page fills with its own actions."""

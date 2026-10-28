@@ -43,7 +43,15 @@ from desktop.cuemodel import fmt_time
 from desktop.icons import icon, pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
-from desktop.widgets.chrome import ProjectBar, badge, button, compact_combo, icon_label, label
+from desktop.widgets.chrome import (
+    Collapsible,
+    ProjectBar,
+    badge,
+    button,
+    compact_combo,
+    icon_label,
+    label,
+)
 from desktop.widgets.pointer import glow
 from desktop.widgets.video_panel import VideoPanel
 from app.fsutil import atomic_write_text
@@ -175,6 +183,10 @@ class ModeCard(QPushButton):
 
     def set_desc(self, text: str) -> None:
         self._desc.setText(text)
+        lay = self.layout()
+        if lay is not None:          # measure the NEW wrapped text, not the cached layout
+            lay.invalidate()
+            lay.activate()
         self._fit_height()
 
     def desc(self) -> str:
@@ -234,6 +246,7 @@ class RenderView(QWidget):
     cancelRequested = Signal()
     approveRequested = Signal()        # locked state → re-approve
     joinRequested = Signal(str)        # a split video's group id → join the rendered parts
+    showLinesRequested = Signal(list, str)   # "Xem N câu": 0-based cue rows + why → the editor
     # "Giữ nhạc nền & hiệu ứng" needs a separation engine: the main window may wire this
     # to an installer, then call set_separation_available(True)
     installSeparationRequested = Signal()
@@ -363,13 +376,19 @@ class RenderView(QWidget):
         self.fit_hint = label("", "small", wrap=True)
         self.fit_btn = button("", variant="ghost", small=True)
         self.fit_btn.clicked.connect(lambda: self.speed.setValue(int(round(self._fit_rate * 100))))
+        self.fit_lines_btn = button("", variant="ghost", small=True,
+                                    tip="Mở màn Sửa phụ đề, chỉ hiện các câu này để rút gọn")
+        self.fit_lines_btn.clicked.connect(self._on_fit_lines)
         fit_row.addWidget(self.fit_hint, 1)
+        fit_row.addWidget(self.fit_lines_btn)
         fit_row.addWidget(self.fit_btn)
         ll.addLayout(fit_row)
+        self._fit_rows: list[int] = []
         self._fit_cues: list = []
         self._fit_rate = 1.0
         self.fit_hint.setVisible(False)
         self.fit_btn.setVisible(False)
+        self.fit_lines_btn.setVisible(False)
         self.speed.valueChanged.connect(lambda _v: self._update_fit_hint())
         self.speed.valueChanged.connect(self._remember_voice)   # slider, keys, "Dùng 1.30×"
 
@@ -473,10 +492,15 @@ class RenderView(QWidget):
         self._src_dur = 0.0
         ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
 
-        # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md)
+        # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md) — folded
+        # into one section with a one-line summary: it is set once per channel, not per episode
         ll.addWidget(_hline())
-        ll.addWidget(label("Đăng tải", "h3"))
         st = store.load_ui_state()
+        self.post_section = Collapsible("Đăng tải & thương hiệu",
+                                        expanded=bool(st.get("render_post_open", False)))
+        self.post_section.toggled.connect(lambda on: store.update_ui_state(render_post_open=on))
+        pb = self.post_section.body
+        ll.addWidget(self.post_section)
         self.credit_cb = QCheckBox("Ghi nguồn trên video (5 giây đầu)")
         self.credit_cb.setChecked(bool(st.get("credit_overlay", True)))
         self.credit_cb.toggled.connect(lambda on: store.update_ui_state(credit_overlay=on))
@@ -486,10 +510,10 @@ class RenderView(QWidget):
             "Một nhãn nhỏ ở góc trên. TikTok yêu cầu gắn nhãn nội dung AI chân thực; Luật AI "
             "134/2025 yêu cầu khi giọng AI mô phỏng người thật. Không ảnh hưởng chất lượng.")
         self.ai_label_cb.toggled.connect(lambda on: store.update_ui_state(ai_label=on))
-        ll.addWidget(self.credit_cb)
-        ll.addWidget(self.ai_label_cb)
-        ll.addWidget(self._build_watermark(st))
-        ll.addWidget(self._build_episode_card(st))
+        pb.addWidget(self.credit_cb)
+        pb.addWidget(self.ai_label_cb)
+        pb.addWidget(self._build_watermark(st))
+        pb.addWidget(self._build_episode_card(st))
         rrow = QHBoxLayout()
         rrow.setSpacing(8)
         cap = label("Quyền sử dụng", "secondary")
@@ -512,9 +536,12 @@ class RenderView(QWidget):
                                 tip="Đính kèm ảnh chụp / email cho phép — được chép vào thư mục dự án")
         self.proof_btn.clicked.connect(self._attach_proof)
         rrow.addWidget(self.proof_btn)
-        ll.addLayout(rrow)
+        pb.addLayout(rrow)
         self.rights_note = label("", "small", wrap=True)
-        ll.addWidget(self.rights_note)
+        pb.addWidget(self.rights_note)
+        for cb in (self.credit_cb, self.ai_label_cb):
+            cb.toggled.connect(lambda _on: self._update_post_summary())
+        self._update_post_summary()
         self.comment_lbl = label("", "small", wrap=True)          # F-4
         ll.addWidget(self.comment_lbl)
         ll.addStretch(1)
@@ -540,6 +567,9 @@ class RenderView(QWidget):
         self.gate_lbl.setWordWrap(True)
         srow.addWidget(self.gate_lbl, 1)
         fl.addLayout(srow)
+        # what "Dựng video" will do, in one line — the options above scroll, this does not
+        self.summary_lbl = label("", "small", wrap=True)
+        fl.addWidget(self.summary_lbl)
         self.render_btn = button("Dựng video", "MonitorPlay", variant="primary")
         self.render_btn.setStyleSheet("QPushButton{min-height:40px;}")
         self.render_btn.clicked.connect(self._on_primary)
@@ -578,6 +608,11 @@ class RenderView(QWidget):
         self.group_box.setVisible(False)
         fl.addWidget(self.group_box)
         v.addWidget(foot)
+        for sig in (self.voice.currentIndexChanged, self.speed.valueChanged,
+                    self.audio_group.buttonToggled, self.preset.currentIndexChanged,
+                    self.res.currentIndexChanged, self.frame.currentIndexChanged):
+            sig.connect(lambda *_a: self._update_summary())
+        self._update_summary()
         return panel
 
     def _slider(self, parent: QVBoxLayout, title: str, lo: int, hi: int, val: int, fmt):
@@ -879,6 +914,45 @@ class RenderView(QWidget):
         self.rights.setCurrentIndex(max(0, self.rights.findData(basis)))
         self.rights.blockSignals(False)
         self._show_rights_note(basis)
+        self._update_post_summary()
+
+    def _update_summary(self, *_a) -> None:
+        """The footer's line: "Hoài My 1.00× · Giữ nhạc nền & hiệu ứng · 540×960 · Nét · ước tính
+        ~223 MB" — the choices that decide the output, visible without scrolling the options."""
+        if not hasattr(self, "summary_lbl") or not hasattr(self, "size_lbl"):
+            return
+        mode = self._audio_mode()
+        title = next((t for k, _i, t, _d in MODES if k == mode), "")
+        bits = []
+        if mode != "original" and self.voice.currentText():
+            bits.append(f"{self.voice.currentText()} {self.speed.value() / 100:.2f}×")
+        bits.append(title)
+        size = [b for b in self.size_lbl.text().split(" · ") if b]
+        if size:
+            bits.append(size[0])                                     # 540×960
+        bits.append(self.preset.currentText().split(" · ")[0])
+        bits += size[1:]                                              # ước tính ~223 MB
+        self.summary_lbl.setText(" · ".join(b for b in bits if b))
+
+    def _update_post_summary(self, *_a) -> None:
+        """What the folded "Đăng tải & thương hiệu" section holds, in one line. A missing
+        right to use is shown in amber — folding it away must not hide the warning."""
+        if not hasattr(self, "rights") or not hasattr(self, "card_cb"):
+            return                                   # still being built
+        bits = []
+        if self.credit_cb.isChecked():
+            bits.append("ghi nguồn")
+        if self.ai_label_cb.isChecked():
+            bits.append("nhãn AI")
+        if self.wm_cb.isChecked() and self.wm_text.text().strip():
+            bits.append(f"watermark “{self.wm_text.text().strip()[:18]}”")
+        if self.card_cb.isChecked():
+            bits.append("thẻ tập")
+        basis = self.rights.currentData() or "unknown"
+        unknown = basis == "unknown"
+        rights = "quyền: chưa ghi" if unknown else f"quyền: {self.rights.currentText().lower()}"
+        self.post_section.set_summary(" · ".join((bits or ["không bật mục nào"]) + [rights]),
+                                      warn=unknown)
 
     def _show_rights_note(self, basis: str) -> None:
         from app.pipeline import disclosure
@@ -897,10 +971,12 @@ class RenderView(QWidget):
     def _on_rights(self, _i: int) -> None:
         from app.pipeline import disclosure
 
+        self._update_post_summary()
         if self._job is None:
             return
         disclosure.save_rights(self._job, self.rights.currentData() or "unknown")
         self._show_rights_note(self.rights.currentData() or "unknown")
+        self._update_post_summary()
 
     def _attach_proof(self) -> None:
         from app.pipeline import disclosure
@@ -1101,6 +1177,7 @@ class RenderView(QWidget):
         for v in voices or ["(mặc định)"]:
             self.voice.addItem(_voice_name(v) if voices else v, v)
         self.voice.blockSignals(False)
+        self._update_summary()
 
     def select_voice(self, voice: str | None) -> None:
         i = self.voice.findData(voice) if voice else -1
@@ -1114,6 +1191,7 @@ class RenderView(QWidget):
         self.speed.blockSignals(False)
         self.speed_lbl.setText(f"{self.speed.value() / 100:.2f}×")
         self._update_fit_hint()
+        self._update_summary()
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts."""
@@ -1129,6 +1207,9 @@ class RenderView(QWidget):
         show = share > 0.15 and self._audio_mode() != "original"
         self.fit_hint.setVisible(show)
         self.fit_btn.setVisible(False)
+        self._fit_rows = fit_estimate.late_indexes(self._fit_cues, cur) if show else []
+        self.fit_lines_btn.setVisible(show and bool(self._fit_rows))
+        self.fit_lines_btn.setText(f"Xem {len(self._fit_rows)} câu")
         if not show:
             return
         rate, then = fit_estimate.suggest_rate(self._fit_cues)
@@ -1142,6 +1223,11 @@ class RenderView(QWidget):
             msg += " Nên rút gọn thêm ở màn Sửa phụ đề."
         self.fit_hint.setText(msg)
         self.fit_hint.setStyleSheet(f"color:{V2['amber']};")
+
+    def _on_fit_lines(self) -> None:
+        if self._fit_rows:
+            self.showLinesRequested.emit(list(self._fit_rows),
+                                         f"Không kịp ở {self.speed.value() / 100:.2f}×")
 
     def set_rendering(self, on: bool) -> None:
         """Lock/unlock this screen around a render run. Every exit path (done,
@@ -1253,6 +1339,7 @@ class RenderView(QWidget):
         self.wm_size_lbl.setText(f"{wm['size']}px")
         if hasattr(self, "preview"):        # the preview is built after the options
             self.preview.set_watermark(wm if wm["on"] and wm["text"] else None)
+        self._update_post_summary()
         if save:
             store.update_ui_state(watermark=wm)
 
@@ -1311,6 +1398,7 @@ class RenderView(QWidget):
         chip, end = disclosure.card_texts(card, title)
         self.card_hint.setText(f"Video này: “{chip}” … “{end}”" if chip or end else
                                "Tiêu đề video này không có số tập — sẽ không hiện thẻ.")
+        self._update_post_summary()
         if save:
             store.update_ui_state(episode_card=card)
 
@@ -1368,6 +1456,7 @@ class RenderView(QWidget):
             bits.append("ước tính ~" + (f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB")
                         .replace(".", ","))
         self.size_lbl.setText(" · ".join(bits))
+        self._update_summary()
 
     def _probe_source(self, job) -> None:
         """Source size + length for the quality choices (ffprobe, off the UI thread)."""
