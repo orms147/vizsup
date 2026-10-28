@@ -224,6 +224,7 @@ class EditorView(QWidget):
         self.top.setHandleWidth(8)
         self.top.setChildrenCollapsible(False)
         self.video.setMinimumWidth(260)
+        self.video.set_min_picture_height(140)   # a short window: the picture gives height to the timeline
         self.cue_list.setMinimumWidth(320)
         self.inspector.setMinimumWidth(280)
         for w in (self.video, self.cue_list, self.inspector):

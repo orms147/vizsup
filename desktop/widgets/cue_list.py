@@ -378,7 +378,8 @@ class CueList(QFrame):
         sh.setContentsMargins(3, 3, 3, 3)
         sh.setSpacing(2)
         self.f_all = QPushButton("Tất cả")
-        self.f_review = QPushButton("Cần xem lại")
+        self.f_review = QPushButton("Xem lại")           # short: the column can be 320 px
+        self.f_review.setToolTip("Chỉ các câu cần xem lại (F8 nhảy tới câu kế)")
         for b in (self.f_all, self.f_review):
             b.setObjectName("seg")
             b.setCheckable(True)
