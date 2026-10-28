@@ -250,7 +250,7 @@ def project_summary(job_id: str) -> dict:
         pass
     if job.vi_srt.exists():
         try:
-            from app.pipeline import approval, review
+            from app.pipeline import approval, review, vi_lint
             from desktop import cuemodel
 
             cues = cuemodel.load_pair(job)
@@ -259,6 +259,7 @@ def project_summary(job_id: str) -> dict:
             issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term,
                                        guess_spans=review.load_guess_spans(job),
                                        qa_findings=_qa_load(job), rate=rate,
+                                       lint=vi_lint.context(job),      # same flags as the editor
                                        late=review.load_late(
                                            job, rate=f"{int(round((rate - 1) * 100)):+d}%"))
             info["cues"] = len(cues)

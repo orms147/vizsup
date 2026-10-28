@@ -289,3 +289,23 @@ def test_start_screen_option(qapp, storage):
     assert v.vi_lint.isChecked() and v._collect_opts()["vi_lint"] is True
     v.vi_lint.setChecked(False)
     assert v._collect_opts()["vi_lint"] is False
+
+
+def test_latin_skips_english_that_is_in_the_source_line_too():
+    assert vi_lint.flags("Ngoại hình check", "外貌 check") == []
+    assert vi_lint.flags("Can we go home", "Can we go home") == []
+    assert vi_lint.flags("Ngoại hình check", "外貌") == ["latin"]            # not in the source
+    assert vi_lint.flags("Anh gặp Zhang", "他遇见Zhang") == []              # case-insensitive match
+    assert vi_lint.flags("Anh gặp zhang", "他遇见Zhang") == []
+
+
+def test_library_summary_counts_lint_flags(storage, monkeypatch):
+    from desktop import store
+
+    job = Job(id="abcdef123456", work_dir=storage / "abcdef123456")
+    write_srt([Cue(1, 0, 3, "Anh nói 你好")], job.vi_srt)
+    write_srt([Cue(1, 0, 3, "他说你好")], job.cn_srt)
+    store.save_job(job, {}, "await_edit")
+    assert store.project_summary(job.id)["pending"] == 1             # "han" flag
+    write_srt([Cue(1, 0, 3, "Anh nói xin chào")], job.vi_srt)
+    assert store.project_summary(job.id)["pending"] == 0
