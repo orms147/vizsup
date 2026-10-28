@@ -211,6 +211,10 @@ class VideoPanel(QFrame):
     def set_burned_overlay(self, path: str) -> None:
         self._canvas.set_burned_overlay(QImage(str(path)))
 
+    def set_watermark(self, wm: dict | None) -> None:
+        """Show the translator's watermark on the preview as it will be burned."""
+        self._canvas.set_watermark(wm)
+
     def set_fullscreen_icon(self, on: bool) -> None:
         from desktop.icons import icon as _icon
 

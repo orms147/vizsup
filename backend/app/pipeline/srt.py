@@ -170,6 +170,8 @@ def write_ass(
     cue_styles: dict[int, dict] | None = None,
     extra: list[dict] | None = None,
     comments: list[Cue] | None = None,
+    mark: list[dict] | None = None,
+    mark_look: dict | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
@@ -210,6 +212,15 @@ def write_ass(
                "outline_w": 6, "bold": True, "alignment": 7, "margin_l": 36, "margin_r": 36,
                "margin_v": 100}
         style_block += "\n" + _style_line("Tag", tag, font, max(22, round(size * 0.42)), False)
+    if mark:
+        # the translator's watermark: white, thin dark outline, see-through (opacity %)
+        look = mark_look or {}
+        alpha = round(255 * (1 - max(5, min(100, int(look.get("opacity", 35)))) / 100))
+        wm = {**DEFAULT_STYLE, "primary": "#FFFFFF", "outline": "#000000", "outline_w": 1,
+              "text_alpha": alpha, "border_style": 1, "bold": True, "alignment": 9,
+              "margin_l": 40, "margin_r": 40, "margin_v": 40}
+        style_block += "\n" + _style_line("Mark", wm, font,
+                                          max(16, int(look.get("size", 14)) * 3), False)
     if comments:
         # warm yellow; a dark amber on the white glass, where yellow would not read
         note = {**base, "primary": "#7A4A00" if base.get("glass") else "#FFD966", "italic": True}
@@ -224,6 +235,14 @@ def write_ass(
     for c in comments or []:
         text = c.text.replace("\n", "\\N")
         lines.append(f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Comment,,"
+                     f"0,0,0,,{text}")
+    for e in mark or []:
+        # top corners: below the 5-second Tag notes (their margin 100 + one line)
+        al = int(e.get("align", 9))
+        x = 1880 if al in (9, 3) else 40
+        y = 170 if al in (7, 9) else 1040
+        text = "{\\an%d}{\\pos(%d,%d)}" % (al, x, y) + str(e["text"]).replace("\n", " ")
+        lines.append(f"Dialogue: 2,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Mark,,"
                      f"0,0,0,,{text}")
     for e in extra or []:
         text = "{\\an%d}" % int(e.get("align", 7)) + str(e["text"]).replace("\n", "\\N")

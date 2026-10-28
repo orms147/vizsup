@@ -603,6 +603,7 @@ class PipelineWorker(QObject):
                 job, credit=bool(o.get("credit_overlay")),
                 ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
             commentary=voiced,
+            watermark=o.get("watermark"),      # the translator's own mark
         )
         review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
         self.progress.emit(1.0, "Hoàn tất")

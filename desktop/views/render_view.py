@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QPlainTextEdit,
     QProgressBar,
@@ -446,6 +447,7 @@ class RenderView(QWidget):
         self.ai_label_cb.toggled.connect(lambda on: store.update_ui_state(ai_label=on))
         ll.addWidget(self.credit_cb)
         ll.addWidget(self.ai_label_cb)
+        ll.addWidget(self._build_watermark(st))
         rrow = QHBoxLayout()
         rrow.setSpacing(8)
         cap = label("Quyền sử dụng", "secondary")
@@ -565,6 +567,8 @@ class RenderView(QWidget):
         pv.setContentsMargins(0, 0, 0, 0)
         pv.setSpacing(0)
         self.preview = VideoPanel("Video nguồn")
+        if hasattr(self, "wm_cb"):
+            self._on_watermark(save=False)
         self.preview.durationChanged.connect(lambda _d: self._show_commentary())
         pv.addWidget(self.preview, 1)
         self._right_stack.addWidget(prev)
@@ -1125,6 +1129,81 @@ class RenderView(QWidget):
         self._glass_style = bool((style or {}).get("glass"))
         self._sync_cover()
 
+    # --- the translator's own watermark (disclosure.watermark_events) -------------------
+    WM_POS = (("tr", "Góc trên phải"), ("tl", "Góc trên trái"), ("br", "Góc dưới phải"),
+              ("bl", "Góc dưới trái"), ("move", "Đổi góc mỗi 30 giây"))
+
+    def _build_watermark(self, st: dict) -> QWidget:
+        from app.pipeline import disclosure
+
+        wm = {**disclosure.WM_DEFAULT, **(st.get("watermark") or {})}
+        box = QWidget()
+        box.setObjectName("bare")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(6)
+        self.wm_cb = QCheckBox("Watermark của bạn (cả video)")
+        self.wm_cb.setToolTip("Chữ của bạn (vd. tên kênh) in mờ ở góc video, suốt video. "
+                              "Giữ nguyên dấu của tác giả gốc.")
+        self.wm_cb.setChecked(bool(wm["on"]))
+        v.addWidget(self.wm_cb)
+        self.wm_body = QWidget()
+        self.wm_body.setObjectName("bare")
+        g = QGridLayout(self.wm_body)
+        g.setContentsMargins(24, 0, 0, 0)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
+        self.wm_text = QLineEdit(str(wm["text"]))
+        self.wm_text.setPlaceholderText("Vd. Vietsub: Tên kênh của bạn")
+        self.wm_text.setMaxLength(60)
+        g.addWidget(label("Chữ", "secondary"), 0, 0)
+        g.addWidget(self.wm_text, 0, 1, 1, 2)
+        self.wm_pos = QComboBox()
+        for key, text in self.WM_POS:
+            self.wm_pos.addItem(text, key)
+        self.wm_pos.setCurrentIndex(max(0, self.wm_pos.findData(wm["pos"])))
+        self.wm_pos.setToolTip("“Đổi góc mỗi 30 giây”: khó bị cắt khỏi video hơn")
+        g.addWidget(label("Vị trí", "secondary"), 1, 0)
+        g.addWidget(self.wm_pos, 1, 1, 1, 2)
+        self.wm_opacity = QSlider(Qt.Horizontal)
+        self.wm_opacity.setRange(10, 100)
+        self.wm_opacity.setValue(int(wm["opacity"]))
+        self.wm_opacity_lbl = label("", "mono")
+        g.addWidget(label("Độ rõ", "secondary"), 2, 0)
+        g.addWidget(self.wm_opacity, 2, 1)
+        g.addWidget(self.wm_opacity_lbl, 2, 2)
+        self.wm_size = QSlider(Qt.Horizontal)
+        self.wm_size.setRange(8, 30)
+        self.wm_size.setValue(int(wm["size"]))
+        self.wm_size_lbl = label("", "mono")
+        g.addWidget(label("Cỡ chữ", "secondary"), 3, 0)
+        g.addWidget(self.wm_size, 3, 1)
+        g.addWidget(self.wm_size_lbl, 3, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(self.wm_body)
+        self.wm_cb.toggled.connect(self._on_watermark)
+        self.wm_text.textChanged.connect(self._on_watermark)
+        self.wm_pos.currentIndexChanged.connect(self._on_watermark)
+        self.wm_opacity.valueChanged.connect(self._on_watermark)
+        self.wm_size.valueChanged.connect(self._on_watermark)
+        self._on_watermark(save=False)
+        return box
+
+    def watermark(self) -> dict:
+        return {"on": self.wm_cb.isChecked(), "text": self.wm_text.text().strip(),
+                "pos": self.wm_pos.currentData() or "tr", "opacity": self.wm_opacity.value(),
+                "size": self.wm_size.value()}
+
+    def _on_watermark(self, *_a, save: bool = True) -> None:
+        wm = self.watermark()
+        self.wm_body.setEnabled(wm["on"])
+        self.wm_opacity_lbl.setText(f"{wm['opacity']}%")
+        self.wm_size_lbl.setText(f"{wm['size']}px")
+        if hasattr(self, "preview"):        # the preview is built after the options
+            self.preview.set_watermark(wm if wm["on"] and wm["text"] else None)
+        if save:
+            store.update_ui_state(watermark=wm)
+
     # --- cover ↔ style, quality ------------------------------------------------------
     def _sync_cover(self) -> None:
         """“Kính mờ trắng” is a subtitle style AND a cover: with that style the cover is
@@ -1255,6 +1334,8 @@ class RenderView(QWidget):
         opts["preset"] = self.preset.currentData()
         opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
+        wm = self.watermark()
+        opts["watermark"] = wm if wm["on"] and wm["text"] else None
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         return opts

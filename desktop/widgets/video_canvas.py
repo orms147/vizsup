@@ -149,8 +149,42 @@ class VideoCanvas(QWidget):
         else:
             p.setPen(QColor("#666"))
             p.drawText(self.rect(), Qt.AlignCenter, "…")
+        self._draw_watermark(p)
         self._draw_box(p)
         p.end()
+
+    def set_watermark(self, wm: dict | None) -> None:
+        self._wm = wm
+        self.update()
+
+    def _draw_watermark(self, p: QPainter) -> None:
+        """The translator's mark, placed like the render (1920×1080 layout scaled to
+        the picture): a corner, top corners below the 5-second notes; "move" shows the
+        first corner."""
+        wm = getattr(self, "_wm", None)
+        if not wm or self._frame is None:
+            return
+        d = self._disp
+        sx, sy = d.width() / 1920.0, d.height() / 1080.0
+        f = QFont(self._font)
+        f.setBold(True)
+        f.setPixelSize(max(6, int(int(wm.get("size", 14)) * 3 * sy)))
+        p.save()
+        p.setFont(f)
+        p.setOpacity(max(5, min(100, int(wm.get("opacity", 35)))) / 100.0)
+        pos = wm.get("pos") or "tr"
+        pos = "tr" if pos == "move" else pos
+        fm = QFontMetrics(f)
+        text = str(wm.get("text") or "")
+        w, h = fm.horizontalAdvance(text), fm.height()
+        x = d.x() + (1880 * sx - w if pos in ("tr", "br") else 40 * sx)
+        y = d.y() + (170 * sy if pos in ("tr", "tl") else 1040 * sy - h)
+        p.setPen(QColor("#000000"))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            p.drawText(QRectF(x + dx, y + dy, w + 2, h), int(Qt.AlignLeft | Qt.AlignTop), text)
+        p.setPen(QColor("#ffffff"))
+        p.drawText(QRectF(x, y, w + 2, h), int(Qt.AlignLeft | Qt.AlignTop), text)
+        p.restore()
 
     def _draw_caption(self, p: QPainter) -> None:
         if not self._caption:

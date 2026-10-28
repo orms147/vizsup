@@ -103,6 +103,34 @@ def overlays(job: Job, *, credit: bool, ai_voice: bool, duration: float | None =
     return out
 
 
+# The translator's own mark (2026-10-28): any text the user picks, faint, for the whole
+# video. A corner, or hopping corner to corner every WM_HOP seconds so it is not simply
+# cropped away. Top corners sit lower than the 5-second "Tag" notes (credit / AI label).
+WM_POSITIONS = {"tr": 9, "tl": 7, "br": 3, "bl": 1}
+WM_HOP = 30.0
+WM_DEFAULT = {"on": False, "text": "", "pos": "tr", "opacity": 35, "size": 14}
+
+
+def watermark_events(wm: dict | None, duration: float) -> list[dict]:
+    """``{start, end, text, align}`` for the "Mark" style: one event for a fixed corner,
+    one per WM_HOP seconds cycling the corners for "move". [] when off or empty. Pure."""
+    if not wm or not wm.get("on") or not str(wm.get("text") or "").strip():
+        return []
+    text = " ".join(str(wm["text"]).split())[:60]
+    end = max(1.0, float(duration or 0) or 36000.0)
+    pos = wm.get("pos") or "tr"
+    if pos != "move":
+        return [{"start": 0.0, "end": end, "text": text, "align": WM_POSITIONS.get(pos, 9)}]
+    cycle = (9, 3, 1, 7)                         # top right → bottom right → … clockwise
+    out, t, k = [], 0.0, 0
+    while t < end:
+        out.append({"start": t, "end": min(end, t + WM_HOP), "text": text,
+                    "align": cycle[k % len(cycle)]})
+        t += WM_HOP
+        k += 1
+    return out
+
+
 def post_description(job: Job, *, ai_voice: bool, title: str = "") -> str:
     """Text for the post's description: what it is, who made the original, how the
     Vietnamese was made, and the right to use it — editable by the user."""

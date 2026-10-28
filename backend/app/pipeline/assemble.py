@@ -952,6 +952,7 @@ def assemble(
     progress: Callable[[float, str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
     overlays: list[dict] | None = None,  # F-1/F-2 corner notes (credit, "Lồng tiếng AI")
+    watermark: dict | None = None,       # the translator's own mark (disclosure.WM_DEFAULT)
     commentary: list | None = None,      # F-4 commentary.Voiced — the user's own notes
     res: str = "source",                 # "source" | "1080" | "720" | "480" (short side)
     preset: str | None = None,           # "light" | "balanced" | "sharp" (default sharp)
@@ -980,9 +981,14 @@ def assemble(
     # a quick preview writes its own .ass: subs.ass must keep matching output.mp4
     # (the soft-subtitle export pairs the two)
     cue_styles = _load_cue_styles(job)
+    from app.pipeline import disclosure
+
+    marks = disclosure.watermark_events(watermark, (probe_duration(job.source_video)
+                                                    if job.source_video.exists() else 0.0)
+                                        + sum(d for _a, d in ins))
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
-              extra=overlays, comments=note_subs)
+              extra=overlays, comments=note_subs, mark=marks, mark_look=watermark)
     _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
     src_size = probe_size(job.source_video) if job.source_video.exists() else None
     burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
