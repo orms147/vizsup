@@ -560,6 +560,9 @@ class RenderView(QWidget):
         self.gate_lbl.setWordWrap(True)
         srow.addWidget(self.gate_lbl, 1)
         fl.addLayout(srow)
+        # what "Dựng video" will do, in one line — the options above scroll, this does not
+        self.summary_lbl = label("", "small", wrap=True)
+        fl.addWidget(self.summary_lbl)
         self.render_btn = button("Dựng video", "MonitorPlay", variant="primary")
         self.render_btn.setStyleSheet("QPushButton{min-height:40px;}")
         self.render_btn.clicked.connect(self._on_primary)
@@ -598,6 +601,11 @@ class RenderView(QWidget):
         self.group_box.setVisible(False)
         fl.addWidget(self.group_box)
         v.addWidget(foot)
+        for sig in (self.voice.currentIndexChanged, self.speed.valueChanged,
+                    self.audio_group.buttonToggled, self.preset.currentIndexChanged,
+                    self.res.currentIndexChanged, self.frame.currentIndexChanged):
+            sig.connect(lambda *_a: self._update_summary())
+        self._update_summary()
         return panel
 
     def _slider(self, parent: QVBoxLayout, title: str, lo: int, hi: int, val: int, fmt):
@@ -901,6 +909,24 @@ class RenderView(QWidget):
         self._show_rights_note(basis)
         self._update_post_summary()
 
+    def _update_summary(self, *_a) -> None:
+        """The footer's line: "Hoài My 1.00× · Giữ nhạc nền & hiệu ứng · 540×960 · Nét · ước tính
+        ~223 MB" — the choices that decide the output, visible without scrolling the options."""
+        if not hasattr(self, "summary_lbl") or not hasattr(self, "size_lbl"):
+            return
+        mode = self._audio_mode()
+        title = next((t for k, _i, t, _d in MODES if k == mode), "")
+        bits = []
+        if mode != "original" and self.voice.currentText():
+            bits.append(f"{self.voice.currentText()} {self.speed.value() / 100:.2f}×")
+        bits.append(title)
+        size = [b for b in self.size_lbl.text().split(" · ") if b]
+        if size:
+            bits.append(size[0])                                     # 540×960
+        bits.append(self.preset.currentText().split(" · ")[0])
+        bits += size[1:]                                              # ước tính ~223 MB
+        self.summary_lbl.setText(" · ".join(b for b in bits if b))
+
     def _update_post_summary(self, *_a) -> None:
         """What the folded "Đăng tải & thương hiệu" section holds, in one line. A missing
         right to use is shown in amber — folding it away must not hide the warning."""
@@ -1144,6 +1170,7 @@ class RenderView(QWidget):
         for v in voices or ["(mặc định)"]:
             self.voice.addItem(_voice_name(v) if voices else v, v)
         self.voice.blockSignals(False)
+        self._update_summary()
 
     def select_voice(self, voice: str | None) -> None:
         i = self.voice.findData(voice) if voice else -1
@@ -1157,6 +1184,7 @@ class RenderView(QWidget):
         self.speed.blockSignals(False)
         self.speed_lbl.setText(f"{self.speed.value() / 100:.2f}×")
         self._update_fit_hint()
+        self._update_summary()
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts."""
@@ -1413,6 +1441,7 @@ class RenderView(QWidget):
             bits.append("ước tính ~" + (f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB")
                         .replace(".", ","))
         self.size_lbl.setText(" · ".join(bits))
+        self._update_summary()
 
     def _probe_source(self, job) -> None:
         """Source size + length for the quality choices (ffprobe, off the UI thread)."""

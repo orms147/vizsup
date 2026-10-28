@@ -111,6 +111,28 @@ def test_the_section_state_is_remembered(qapp, storage):
     again.close()
 
 
+def test_footer_summary_says_what_dung_video_will_do(qapp, storage):
+    v = _view(qapp)
+    v.set_voices(["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"])
+    v.select_voice("vi-VN-HoaiMyNeural")
+    line = v.summary_lbl.text()
+    assert line.startswith("Hoài My 1.00× · ")
+    mode = v._audio_mode()
+    from desktop.views.render_view import MODES
+
+    assert next(t for k, _i, t, _d in MODES if k == mode) in line
+    v.speed.setValue(120)
+    assert "Hoài My 1.20×" in v.summary_lbl.text()
+    v.mode_cards["original"].click()                             # no dub: no voice in the line
+    assert "Hoài My" not in v.summary_lbl.text() and "chỉ phụ đề" in v.summary_lbl.text()
+    v.preset.setCurrentIndex(v.preset.findData("light"))
+    assert v.preset.currentText().split(" · ")[0] in v.summary_lbl.text()
+    v._src_size, v._src_dur = (540, 960), 100.0
+    v._sync_quality()
+    assert "540×960" in v.summary_lbl.text() and "ước tính" in v.summary_lbl.text()
+    v.close()
+
+
 @pytest.mark.parametrize("width,height", [(1366, 768), (1130, 680)])
 def test_the_primary_buttons_are_always_on_screen(qapp, tmp_path, monkeypatch, width, height):
     from app.pipeline import approval
