@@ -425,3 +425,25 @@ def test_cleaned_project_fetches_its_source_again_on_open(qapp, storage, monkeyp
     win._resume("eeeeeeeeeeee")
     assert gates == [1] and len(runs) == 1
     win.library.shutdown()
+
+
+def test_row_chips_are_cut_whole_never_squeezed():
+    """2026-10-29 real window: a narrow title column squeezed the chips to "Video ç" /
+    "Bản dự"; they keep their natural width now (the box cuts at the right)."""
+    from PySide6.QtWidgets import QApplication
+
+    _app = QApplication.instance() or QApplication([])
+    from PySide6.QtWidgets import QLabel
+
+    from desktop.views.library_view import _Row
+
+    row = _Row({"id": "abc", "title": "50级新世代！", "has_source": True, "has_output": True,
+                "has_preview": True, "platform": "douyin", "duration": 242.0}, None)
+    row.resize(700, 90)
+    row.show()
+    _app.processEvents()
+    chips = [w for w in row.findChildren(QLabel) if w.text() in ("Video gốc", "Bản dựng",
+                                                                  "Xem nhanh", "Douyin")]
+    assert len(chips) == 4
+    assert all(w.width() >= w.sizeHint().width() for w in chips)
+    row.close()
