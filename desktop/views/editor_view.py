@@ -270,6 +270,7 @@ class EditorView(QWidget):
         cl.aiSuggestionsRequested.connect(self._ai_suggestions)
         cl.tidyRequested.connect(self._tidy_timing)
         cl.clauseSplitRequested.connect(self._split_clauses)
+        cl.timingPassRequested.connect(self._timing_pass)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -817,6 +818,26 @@ class EditorView(QWidget):
         self._reload()
         self.message.emit(f"Đã gộp {merged} câu quá ngắn vào câu bên cạnh · gỡ {fixed} chỗ "
                           f"chồng lấn — Hoàn tác (Ctrl+Z) để bỏ.", "ok")
+
+    def _timing_pass(self) -> None:
+        """Netflix-style timing tidy-up on every unlocked line (2-frame gaps, short gaps
+        chained, lines at least 20 frames). One undo step; policy in pipeline.timing_pass."""
+        from app.pipeline import timing_pass
+
+        if not self.cues:
+            return
+        src = self.job.source_video if self.job is not None else None
+        fps = timing_pass.probe_fps(src) if src is not None and src.exists() else None
+        times, rep = timing_pass.plan(self.cues, fps, duration=self._duration())
+        if not rep.changed:
+            self.message.emit("Thời gian các câu đã đúng chuẩn — không đổi gì.", "ok")
+            return
+        self._snapshot()
+        for k in rep.changed:
+            self.cues[k].start, self.cues[k].end = times[k]
+        self._reload()
+        extra = f" · bỏ qua {len(rep.locked)} chỗ có câu khóa" if rep.locked else ""
+        self.message.emit(f"Đã chỉnh thời gian: {rep.summary()}{extra} — Ctrl+Z để hoàn tác.", "ok")
 
     def _rate_str(self) -> str:
         """The voice speed as the TTS/render options spell it ("+30%")."""

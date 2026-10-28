@@ -129,6 +129,15 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
                 snap.snap_srt(job, job.cn_srt, log=lambda m: print(f"[run] {m}"))
             except Exception as exc:  # noqa: BLE001 - an aid, never fatal
                 print(f"[run] voice snap skipped ({exc})")
+        # 2.35) tidy the cue times: min gap, chaining, min duration (scene cuts opt-in)
+        if not getattr(args, "no_timing_pass", False):
+            from app.pipeline import timing_pass
+
+            try:
+                timing_pass.run_srt(job, job.cn_srt, scenes=getattr(args, "timing_scenes", False),
+                                    log=lambda m: print(f"[run] {m}"))
+            except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+                print(f"[run] timing pass skipped ({exc})")
 
     # 2.4) optional: per-video brief (AI skim and/or your own note) for the translator
     note = (getattr(args, "context", None) or "").strip()
@@ -353,6 +362,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-snap", action="store_true",
                    help="keep ASR/OCR cue times as-is (default: snap each cue edge to the nearest "
                         "voice start/stop within 1 s, local Silero VAD)")
+    r.add_argument("--no-timing-pass", action="store_true",
+                   help="skip the timing tidy-up (default: 2-frame gaps, chain gaps < 0.5 s, "
+                        "lines at least 20 frames long)")
+    r.add_argument("--timing-scenes", action="store_true",
+                   help="also snap cue edges to scene cuts (one extra ffmpeg pass; off by "
+                        "default — fast-cutting videos snap everywhere)")
     r.add_argument("--workdir", help="explicit working directory")
     r.set_defaults(func=cmd_run)
 
