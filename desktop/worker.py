@@ -604,6 +604,7 @@ class PipelineWorker(QObject):
                 ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
             commentary=voiced,
             watermark=o.get("watermark"),      # the translator's own mark
+            fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
         )
         review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
         self.progress.emit(1.0, "Hoàn tất")

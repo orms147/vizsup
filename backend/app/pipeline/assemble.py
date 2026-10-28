@@ -728,6 +728,8 @@ def _build_render(
     glass_mask: str = "glass_mask.ass",  # …and the mask .ass drawn by glass.write_mask
     burn_h: int = 1080,        # height of the picture the subs are burned on (blur sigma)
     glass_look: dict | None = None,  # glass.look(style): white tint + blur strength
+    fill: str = "blur",        # 9:16 bars: "blur" (the picture, blurred, behind) | "black"
+    loudness: bool = True,     # the final mix at FINAL_LUFS — episodes join without jumps
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -882,6 +884,13 @@ def _build_render(
         if log:
             log(f"♪ Nhạc nền: {len(music)} đoạn")
 
+    if loudness and (dubbed or has_audio):
+        # every episode at the same loudness (true-peak limited): joined episodes no
+        # longer jump in volume, and the platforms' own normalisation has less to do
+        src = audio_map if audio_map.startswith("[") else "[0:a]"
+        parts.append(f"{src}loudnorm=I={FINAL_LUFS}:TP=-1.5:LRA=11,aresample=48000[afin]")
+        audio_map = "[afin]"
+
     ass = _ass_name(preview)
     vsrc = src_v
     if cover_mode == "blur":
@@ -899,6 +908,15 @@ def _build_render(
     if frame == "tiktok":
         # fit inside the 9:16 canvas BEFORE burning (sharper text, same layout as the
         # source render), then pad the bars — the cover/blur band stays on the picture
+        if fill == "blur":
+            # the bars become the same picture, zoomed to fill, blurred and a little
+            # darker (cheap: blurred at quarter size, then scaled up)
+            parts.append(f"{vsrc}split[vfi][vbgs]")
+            qw, qh = max(2, cw // 4 // 2 * 2), max(2, ch // 4 // 2 * 2)
+            parts.append(f"[vbgs]scale={qw}:{qh}:force_original_aspect_ratio=increase,"
+                         f"crop={qw}:{qh},boxblur=8:2,eq=brightness=-0.08,"
+                         f"scale={cw}:{ch},setsar=1[vbgfill]")
+            vsrc = "[vfi]"
         parts.append(f"{vsrc}scale={cw}:{ch}:force_original_aspect_ratio=decrease"
                      f":force_divisible_by=2,setsar=1[vfit]")
         vsrc = "[vfit]"
@@ -916,7 +934,10 @@ def _build_render(
     parts.append(f"{vsrc}ass={ass}{_ass_fonts(wd)}[v]")
     vmap = "[v]"
     if frame == "tiktok":
-        parts.append(f"[v]pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
+        if fill == "blur":
+            parts.append("[vbgfill][v]overlay=(W-w)/2:(H-h)/2[vt]")
+        else:
+            parts.append(f"[v]pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
         vmap = "[vt]"
     if preview:                     # same graph, scaled down after the subs are burned
         parts.append(f"{vmap}scale=-2:640[vp]")
@@ -953,6 +974,7 @@ def assemble(
     cancel: Callable[[], bool] | None = None,
     overlays: list[dict] | None = None,  # F-1/F-2 corner notes (credit, "Lồng tiếng AI")
     watermark: dict | None = None,       # the translator's own mark (disclosure.WM_DEFAULT)
+    fill: str = "blur",                  # 9:16 bars: blurred picture | "black"
     commentary: list | None = None,      # F-4 commentary.Voiced — the user's own notes
     res: str = "source",                 # "source" | "1080" | "720" | "480" (short side)
     preset: str | None = None,           # "light" | "balanced" | "sharp" (default sharp)
@@ -1026,7 +1048,7 @@ def assemble(
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
                             duration=total, inserts=ins, music=placed, res=res,
                             preset=preset, glass_band=glass_band, glass_mask=mask_name,
-                            burn_h=burn[1], glass_look=glass.look(style))
+                            burn_h=burn[1], glass_look=glass.look(style), fill=fill)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]
@@ -1086,6 +1108,7 @@ def _with_gains(job: Job, segments: list[tuple[Cue, Path]], placements: list[dic
     return placements
 
 
+FINAL_LUFS = -14          # final mix loudness (YouTube / TikTok normalise to about this)
 RENDER_INFO = "render.json"
 OUTPUT_SRT = "output.srt"
 RENDERING_SUFFIX = ".rendering.mp4"   # output.rendering.mp4 → output.mp4 when complete

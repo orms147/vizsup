@@ -188,7 +188,8 @@ def test_render_is_pinned_to_the_source_length(tmp_path, monkeypatch):
                                  duration=1799.968)
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "apad[aout]" in graph and cmd[cmd.index("-t") + 1] == "1799.968"
-    assert cmd[cmd.index("-map", cmd.index("-map") + 1) + 1] == "[aout]"
+    assert "[aout]loudnorm=" in graph                     # the padded dub → final loudness
+    assert cmd[cmd.index("-map", cmd.index("-map") + 1) + 1] == "[afin]"
 
 
 def test_cli_join_reports_parts_not_ready(tmp_path, capsys):

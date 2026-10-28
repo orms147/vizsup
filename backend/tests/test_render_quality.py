@@ -82,8 +82,8 @@ def test_tiktok_canvas_scales_proportionally(job):
     assert assemble.tiktok_canvas("480") == (480, 854)
     j, segs = job
     _cmd, graph = _build(j, segs, frame="tiktok", res="720")
-    assert "[0:v]scale=720:1280:force_original_aspect_ratio=decrease" in graph
-    assert "pad=720:1280:(ow-iw)/2:(oh-ih)/2" in graph
+    assert "[vfi]scale=720:1280:force_original_aspect_ratio=decrease" in graph  # blur-fill split
+    assert "crop=180:320,boxblur=8:2,eq=brightness=-0.08,scale=720:1280" in graph  # bars
     assert "[vscl]" not in graph                                # the fit IS the scale
 
 

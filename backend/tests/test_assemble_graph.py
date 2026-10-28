@@ -210,15 +210,42 @@ def test_preview_is_the_same_graph_scaled_down_and_fast(big_job):
 def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
     """E-16: 1080x1920 — scale to fit, burn the subs on the picture, then the bars."""
     job, segments = big_job
-    cmd = _build(job, segments[:3], frame="tiktok", cover_mode="blur")
+    cmd = _build(job, segments[:3], frame="tiktok", cover_mode="blur", fill="black")
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     fit = graph.index("[vbg]scale=1080:1920:force_original_aspect_ratio=decrease")
     burn = graph.index("[vfit]ass=subs.ass")
     pad = graph.index("[v]pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
     assert fit < burn < pad and "[vt]" in cmd and cmd[-1] == "output.mp4"
-    _build(job, segments[:3], frame="tiktok", preview=True)
+    _build(job, segments[:3], frame="tiktok", preview=True, fill="black")
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert "[0:v]scale=1080:1920" in graph and "[vt]scale=-2:640[vp]" in graph
+
+
+def test_tiktok_bars_are_the_blurred_picture_by_default(big_job):
+    """2026-10-29: the 9:16 bars show the same picture zoomed, blurred and darkened
+    (CapCut-style) instead of black; the subtitles are still burned on the fitted picture."""
+    job, segments = big_job
+    _build(job, segments[:3], frame="tiktok")
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    split = graph.index("[0:v]split[vfi][vbgs]")
+    bg = graph.index("[vbgs]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,"
+                     "boxblur=8:2,eq=brightness=-0.08,scale=1080:1920,setsar=1[vbgfill]")
+    fit = graph.index("[vfi]scale=1080:1920:force_original_aspect_ratio=decrease")
+    burn = graph.index("[vfit]ass=subs.ass")
+    over = graph.index("[vbgfill][v]overlay=(W-w)/2:(H-h)/2[vt]")
+    assert split < bg < fit < burn < over and "color=black" not in graph
+
+
+def test_the_final_mix_is_loudness_normalised(big_job):
+    """Every episode ends at the same loudness, so joined episodes don't jump."""
+    job, segments = big_job
+    cmd = _build(job, segments[:3])
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[afin]" in graph
+    assert cmd[cmd.index("[afin]") - 1] == "-map"
+    _build(job, segments[:3], loudness=False)
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[afin]" not in graph
 
 
 # --- running the windows, the encoder, progress and cancel ---------------------------

@@ -193,7 +193,8 @@ def test_music_mixed_into_each_dub_mode_and_ducked_under_the_voice(job, segs, mo
     assert "[musdk][mkeyp]sidechaincompress" in g
     assert "[music]" not in g                              # one group only
     assert f"amix=inputs=2:normalize=0:duration=first:dropout_transition=0,{mu.LIMIT}[amus]" in g
-    assert cmd[cmd.index("-map", cmd.index("-map") + 1) + 1] == "[amus]"
+    assert "[amus]loudnorm=" in g                          # music mix → final loudness
+    assert cmd[cmd.index("-map", cmd.index("-map") + 1) + 1] == "[afin]"
     # the mode's own chain still sees the dub
     assert "[dubm]" in g
     if mode == "duck":

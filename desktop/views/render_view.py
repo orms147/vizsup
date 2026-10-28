@@ -395,14 +395,27 @@ class RenderView(QWidget):
         self.frame = QComboBox()
         for text, key in FRAMES:
             self.frame.addItem(text, key)
-        self.frame.setToolTip("Dọc 9:16: video được thu vừa khung 1080×1920 rồi thêm viền đen — "
-                              "đăng thẳng lên TikTok/Reels. Video Douyin vốn đã dọc thì gần như "
-                              "không có viền.")
+        self.frame.setToolTip("Dọc 9:16: video được thu vừa khung 1080×1920, hai bên là nền "
+                              "(mờ hoặc đen) — đăng thẳng lên TikTok/Reels. Video Douyin vốn đã "
+                              "dọc thì gần như không có nền.")
         i = self.frame.findData(store.load_ui_state().get("render_frame"))
         self.frame.setCurrentIndex(max(i, 0))
         self.frame.currentIndexChanged.connect(
             lambda _i: store.update_ui_state(render_frame=self.frame.currentData()))
         ll.addWidget(self.frame)
+        # 9:16 bars: the picture itself, blurred (CapCut-style) or black
+        self.fill = QComboBox()
+        self.fill.addItem("Nền hai bên: hình mờ", "blur")
+        self.fill.addItem("Nền hai bên: đen", "black")
+        self.fill.setToolTip("Phần trống trên/dưới khi đưa video ngang vào khung dọc 9:16")
+        self.fill.setCurrentIndex(max(self.fill.findData(
+            store.load_ui_state().get("render_fill") or "blur"), 0))
+        self.fill.currentIndexChanged.connect(
+            lambda _i: store.update_ui_state(render_fill=self.fill.currentData()))
+        self.frame.currentIndexChanged.connect(
+            lambda _i: self.fill.setVisible(self.frame.currentData() == "tiktok"))
+        self.fill.setVisible(self.frame.currentData() == "tiktok")
+        ll.addWidget(self.fill)
         ll.addWidget(label("Chất lượng", "h3"))
         st = store.load_ui_state()
         qrow = QHBoxLayout()
@@ -460,7 +473,7 @@ class RenderView(QWidget):
             self.rights.addItem(text, key)
         self.rights.currentIndexChanged.connect(self._on_rights)
         # long choices elide instead of widening the fixed-width panel past its scroll area
-        for combo in (self.voice, self.cover, self.frame):
+        for combo in (self.voice, self.cover, self.frame, self.fill):
             compact_combo(combo, 10)
         for combo in (self.res, self.preset):     # two per row
             compact_combo(combo, 6)
@@ -1330,6 +1343,7 @@ class RenderView(QWidget):
             "cover_mode": self.cover.currentData(),
         }
         opts["frame"] = self.frame.currentData()   # E-16
+        opts["tiktok_fill"] = self.fill.currentData() or "blur"
         opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
         opts["preset"] = self.preset.currentData()
         opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()

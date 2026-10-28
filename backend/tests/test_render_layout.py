@@ -75,3 +75,23 @@ def test_seam_is_a_splitter_and_remembers_its_width(tmp_path, monkeypatch):
     v2.show()
     QApplication.processEvents()
     assert abs(v2._split.sizes()[0] - saved["render_split"][0]) <= 2
+
+
+def test_nine_sixteen_background_choice(tmp_path, monkeypatch):
+    """2026-10-29: blurred picture (default) or black behind a landscape video in 9:16;
+    shown only for the 9:16 frame, remembered, sent with the render options."""
+    from app.config import settings
+    from desktop import store
+    from desktop.views.render_view import RenderView
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    v = RenderView()
+    v.frame.setCurrentIndex(v.frame.findData("source"))
+    assert v.fill.isHidden()
+    v.frame.setCurrentIndex(v.frame.findData("tiktok"))
+    assert not v.fill.isHidden() and v.collect_opts()["tiktok_fill"] == "blur"
+    v.fill.setCurrentIndex(v.fill.findData("black"))
+    assert v.collect_opts()["tiktok_fill"] == "black"
+    assert store.load_ui_state()["render_fill"] == "black"
+    v.shutdown()
