@@ -259,6 +259,8 @@ class EditorView(QWidget):
     def _wire(self) -> None:
         cl, ins, tl, vid = self.cue_list, self.inspector, self.timeline, self.video
         cl.rowSelected.connect(self._on_row_selected)
+        cl.contextRequested.connect(self._show_cue_menu)
+        tl.contextRequested.connect(self._show_cue_menu)
         cl.editRequested.connect(lambda: ins.focus_text(select_all=True))
         cl.splitRequested.connect(self._split)
         cl.mergeRequested.connect(self._merge)
@@ -1829,6 +1831,40 @@ class EditorView(QWidget):
         if idx == self._sel and 0 <= idx < len(self.cues):
             self.inspector.refresh_timing(self.cues[idx])
         self._mark_dirty()
+
+    # --- right-click menu (list row / timeline block) --------------------------------
+    def _cue_menu(self, row: int):
+        """The menu for line ``row``: only existing actions, each acting on the current
+        line (the row was selected by the click). Destructive ones snapshot first, so
+        Ctrl+Z brings them back."""
+        from PySide6.QtWidgets import QMenu
+
+        c = self.cues[row]
+        m = QMenu(self)
+        m.addAction("Tách tại vị trí phát	S", self._split)
+        merge = m.addAction("Gộp với câu sau	M", self._merge)
+        merge.setEnabled(row < len(self.cues) - 1)
+        m.addAction("Thêm câu sau câu này", self._add)
+        m.addSeparator()
+        m.addAction("Dịch lại (3 phương án)	Alt+R", self._retranslate)
+        m.addAction("Rút gọn cho vừa thời lượng", self._shorten)
+        m.addAction("Tự canh theo giọng nói	A", self._auto_snap_selected)
+        lock = m.addAction("Khóa timing")
+        lock.setCheckable(True)
+        lock.setChecked(c.locked)
+        lock.triggered.connect(self._on_lock)
+        m.addSeparator()
+        seen = m.addAction("Đã xem, sang câu cần xem lại tiếp	D", self._mark_reviewed)
+        seen.setEnabled(bool(self.cue_list.model.issues_at(row)) and not cuemodel.is_reviewed(c))
+        m.addSeparator()
+        m.addAction("Xóa câu này (Ctrl+Z hoàn tác)", self._delete)
+        return m
+
+    def _show_cue_menu(self, row: int, global_pos) -> None:
+        if 0 <= row < len(self.cues):
+            m = self._cue_menu(row)
+            m.setAttribute(Qt.WA_DeleteOnClose)
+            m.popup(global_pos)
 
     # --- tools ---------------------------------------------------------------
     def _cur(self) -> int:
