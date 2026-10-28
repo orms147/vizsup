@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app.models import Cue, Job
 from app.fsutil import atomic_write_text
+from app.pipeline import speak
 
 FILE = "commentary.json"
 DIR = "commentary"
@@ -116,6 +117,7 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
     d = job.work_dir / DIR
     d.mkdir(exist_ok=True)
     tts = None
+    rules = speak.load_rules(job)
     out: list[Voiced] = []
     for n in notes:
         if n.audio and (job.work_dir / n.audio).exists():
@@ -123,10 +125,11 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
         elif n.text.strip():
             tts = tts or get_tts(provider)
             voice = n.voice or pick_voice(_voices(tts), dub_voice) or dub_voice
-            key = hashlib.sha1(f"{provider}|{voice}|{rate}|{n.text}".encode()).hexdigest()[:16]
+            said = speak.spoken(n.text, rules)       # the written note stays as typed
+            key = hashlib.sha1(f"{provider}|{voice}|{rate}|{said}".encode()).hexdigest()[:16]
             path = d / f"tts_{key}.mp3"
             if not (path.exists() and path.stat().st_size > 0):
-                _synth_retry(tts, n.text, path, voice=voice, rate=rate,
+                _synth_retry(tts, said, path, voice=voice, rate=rate,
                              sleep=__import__("time").sleep)
         else:
             continue

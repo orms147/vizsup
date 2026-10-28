@@ -12,6 +12,10 @@ Resilience (N-10):
 - Retry — each cue gets 3 attempts with backoff (edge-tts throws sporadic 403s;
   one blip at cue 180/200 used to discard 179 finished segments). Implemented
   here in the pipeline layer so every provider benefits.
+- Spoken text — the voice gets ``speak.spoken(line)`` (numbers, units, abbreviations and the
+  user's ``pronounce.json`` read the Vietnamese way); the subtitle keeps the written form.
+  The SPOKEN text is what the cache key hashes, so editing a rule re-voices only the lines
+  it changes.
 - Cancel — an optional callback is checked between cues; cancelling returns the
   partial list (the worker's between-stage check then aborts the render).
 """
@@ -24,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.models import Cue, Job
+from app.pipeline import speak
 from app.pipeline.srt import parse_srt
 from app.providers.registry import get_tts
 from app.fsutil import atomic_write_text
@@ -40,8 +45,8 @@ def load_overrides(job: Job) -> list[dict]:
 
 
 def _seg_hash(provider: str, voice: str | None, rate: str | None, text: str) -> str:
-    """Cache key for one synthesized segment. EVERY knob that changes the audio
-    MUST appear here — a missing input would serve stale audio on resume
+    """Cache key for one synthesized segment; ``text`` is the SPOKEN text (``speak``).
+    EVERY knob that changes the audio MUST appear here — a missing input would serve stale audio on resume
     (locked by tests/test_tts_resume.py)."""
     return hashlib.sha1(
         f"{provider}|{voice or ''}|{rate or ''}|{text}".encode()).hexdigest()
@@ -119,11 +124,15 @@ def synthesize(
     cues = parse_srt(job.vi_srt)
     ov = load_overrides(job)
     manifest = _load_manifest(job)
+    rules = speak.load_rules(job)
+    said = {c.index: speak.spoken(c.text, rules) for c in cues}     # what the voice reads
+    if log and (n := sum(said[c.index] != c.text.strip() for c in cues if c.text.strip())):
+        log(f"✎ Chuẩn hoá cách đọc (số, đơn vị, từ viết tắt, từ điển phát âm): {n} câu")
 
     # API-10: batch-capable providers (edge-tts) synthesize the whole job on ONE
     # event loop with bounded concurrency; others keep the per-cue path below.
     if getattr(tts, "supports_batch", False):
-        return _synthesize_batch(job, tts, cues, ov, manifest, provider=provider,
+        return _synthesize_batch(job, tts, cues, ov, manifest, said, provider=provider,
                                  voice=voice, rate=rate, log=log, cancel=cancel,
                                  progress=progress)
 
@@ -133,16 +142,16 @@ def synthesize(
         if cancel and cancel():
             break  # partial list; the caller's between-stage check aborts the render
         key = str(c.index)
-        if (ov[i].get("mute") if i < len(ov) else False) or not c.text.strip():
+        if (ov[i].get("mute") if i < len(ov) else False) or not said[c.index].strip():
             manifest.pop(key, None)   # muted/empty line → no dub, and no stale cache
             continue
         seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
-        want = _seg_hash(provider, voice, rate, c.text)
+        want = _seg_hash(provider, voice, rate, said[c.index])
         if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
             kept += 1
         else:
             try:
-                _synth_retry(tts, c.text, seg, voice=voice, rate=rate, sleep=_sleep)
+                _synth_retry(tts, said[c.index], seg, voice=voice, rate=rate, sleep=_sleep)
             except Exception as exc:  # noqa: BLE001
                 if _unvoiceable(exc):
                     manifest.pop(key, None)
@@ -164,7 +173,7 @@ def synthesize(
 
 
 def _synthesize_batch(
-    job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, *,
+    job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, said: dict[int, str], *,
     provider: str, voice: str | None, rate: str | None,
     log: Callable[[str], None] | None, cancel: Callable[[], bool] | None,
     progress: Callable[[int, int], None] | None = None,
@@ -182,17 +191,17 @@ def _synthesize_batch(
     kept = 0
     for i, c in enumerate(cues):
         key = str(c.index)
-        if (ov[i].get("mute") if i < len(ov) else False) or not c.text.strip():
+        if (ov[i].get("mute") if i < len(ov) else False) or not said[c.index].strip():
             manifest.pop(key, None)          # muted/empty line → no dub, no stale cache
             continue
         seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
-        want = _seg_hash(provider, voice, rate, c.text)
+        want = _seg_hash(provider, voice, rate, said[c.index])
         seg_of[key] = seg
         want_of[key] = want
         if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
             kept += 1
         else:
-            todo.append((key, c.text, seg))
+            todo.append((key, said[c.index], seg))
 
     if progress:
         progress(kept, kept + len(todo))     # cache hits count as done right away
