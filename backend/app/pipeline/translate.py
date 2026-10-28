@@ -532,11 +532,17 @@ def load_glossary(job: Job) -> dict[str, str]:
     so the pipeline never fails because of a hand-edited glossary."""
     from app.config import settings
 
+    from app.pipeline import series
+
     merged: dict[str, str] = {}
-    # precedence low→high (dict.update): auto-suggested (ENG-1) < global < this job
-    for p in (job.work_dir / "glossary.suggested.json",
+    # precedence low→high (dict.update): auto-suggested (ENG-1) < this series' terms and
+    # characters < global < this job
+    for p in (job.work_dir / "glossary.suggested.json", None,
               Path(settings.vizsup_storage_dir) / "glossary.json",
               job.work_dir / "glossary.json"):
+        if p is None:
+            merged.update(series.glossary_for(job))
+            continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -627,6 +633,15 @@ def translate(
         context["_style"] = rules
         if log:
             log("ℹ Dịch theo “Phong cách của tôi” (rút ra từ các lần bạn sửa)")
+    # Bộ phim: the series sheet (fixed names / xưng hô) and the last lines of the previous
+    # episode ride in the prompt, so episode N picks up where N-1 stopped
+    from app.pipeline import series
+
+    ser = series.context_for(job)
+    if ser:
+        context.update(ser)
+        if log:
+            log("ℹ Dịch theo bộ phim của video này" + (" + vài câu cuối tập trước" if "_prev" in ser else ""))
     if glossary is None:
         glossary = load_glossary(job) or None
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,

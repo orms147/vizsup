@@ -41,6 +41,12 @@ def save_opts(work_dir: Path, opts: dict) -> None:
         atomic_write_text((Path(work_dir) / RENDER_OPTS), json.dumps(clean, ensure_ascii=False, indent=1),
                                                   encoding="utf-8")
     except OSError:
+        return
+    try:                                   # Bộ phim: the first real render sets the series' look
+        from app.pipeline import series
+
+        series.learn_render(Path(work_dir), clean)
+    except Exception:  # noqa: BLE001
         pass
 
 

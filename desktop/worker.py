@@ -69,6 +69,22 @@ class PipelineWorker(QObject):
             store.debug(f"timing pass failed: {type(exc).__name__}: {exc}")
             self.log.emit(f"⚠ Bỏ qua bước chỉnh thời gian chuẩn ({type(exc).__name__}: {exc})")
 
+    def _series(self, job: Job, o: dict) -> None:
+        """Link to / create the series profile (option ``series``: auto | none | slug) and
+        copy its style and render settings into a project that has none. An aid: logged,
+        never fatal."""
+        from app.pipeline import series
+
+        try:
+            prof = series.resolve(job, o.get("series") or "auto")
+            if prof is None:
+                return
+            self.log.emit(series.summary(prof))
+            series.inherit(job, prof, log_fn=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"series failed: {type(exc).__name__}: {exc}")
+            self.log.emit(f"⚠ Bỏ qua bước bộ phim ({type(exc).__name__}: {exc})")
+
     def _preflight_translators(self, o: dict) -> None:
         """Validate the translator choice up front so the user isn't told 'missing
         key' only after a long download/OCR/ASR run — and isn't silently handed
@@ -395,6 +411,8 @@ class PipelineWorker(QObject):
         if src != "existing" and o.get("timing_pass", True):
             self._check()
             self._timing_pass(job, o)
+        # 2.38) Bộ phim: link the episode to its series and take over its style / render
+        self._series(job, o)
         # 2.4) per-video brief: the AI skims the video (auto) and/or expands the
         # user's own note into a context sheet the translator reads with every
         # batch. Only when translate will actually run — a kept vi.srt needs none.

@@ -173,7 +173,7 @@ def test_option_checkboxes_and_notes_never_overlap(view):
     view.resize(1200, 1000)
     view.show()
     QApplication.processEvents()
-    names = ("auto_context", "auto_snap", "clause_split", "timing_pass", "ai_review", "ai_frames",
+    names = ("auto_context", "auto_snap", "clause_split", "timing_pass", "series_combo", "ai_review", "ai_frames",
              "extract_terms", "ocr_proofread", "split_long", "ocr_fast", "asr_note")
     rects = {}
     for n in names:
