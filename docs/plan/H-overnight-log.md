@@ -91,3 +91,8 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   剑网3 game ad ("50级新世代！… 10月29日公测", no uploader) — the app downloaded exactly that id.
   Used it anyway to test the mechanics: approved the COPY, "Thêm vào hàng dựng" added it to the
   running batch (session file shows it queued).
+- 00:54 — commit 584e66d feat(post): "Gợi ý tiêu đề + hashtag (AI)" in Mô tả đăng bài. Real
+  call on the ep-8 copy: 4.1 s, 3 sensible titles ("Tập 8: Cả nhóm vào trạm xăng tìm thức ăn…") + 8
+  tags; spend ≈ $0.0005.
+- 00:54 — E2E batch: ep 1–5 (10:44) rendered in 84 s (NVENC 7.7×), ep 6 done, ep 7 rendering,
+  ep 8 + ep 9 queued. Roadmap statuses updated.

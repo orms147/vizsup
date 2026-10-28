@@ -15,23 +15,26 @@ Chinese AI-anime **series** (many short episodes) in Vietnamese — divided by e
 | C | **9:16 blur-fill** instead of black bars | most sources are landscape; one ffmpeg graph | S | coordinator |
 | C | **E2E test of the series flow** on copies: batch render → join 1–8 → add 9 | the pending task | — | coordinator |
 
+Status 01:00: wave 1 all merged (A 18c0ce8→356db8f, B 212d703, C af2f480 + loudness/blur).
+
 ## Wave 2 — next (after wave 1 is merged)
 
-1. **"Bộ phim" series profile** — glossary, characters/xưng hô, voice, style, watermark, render
-   settings, pronunciation dictionary carried to the next episode; the previous episode's last lines
-   as translation context. (M, highest value for series.)
-2. **Per-line voice by gender** (pitch.py per line on vocals.wav, editable chip; edge-tts has one
-   male + one female vi-VN voice). (M)
-3. **Compact cue list + 9:16-aware layout** (ux E1, E5/R3). (M)
-4. **Timing post-pass** (merge gaps < 0.5 s, min gap / min duration in frames, optional scene-cut
-   snap). (S–M)
-5. **Episode chip + end card ("Xem tập tiếp")** via the existing Tag events. (S)
-6. **Whole-episode overview strip** on the timeline (flags / reviewed). (M)
-7. Library status chips + episode sort (L1). (M)
+1. ✅ **"Bộ phim" series profile** — merged 243b53d (sesion 1). Follow-up in progress: edit dialog
+   for brief / characters / pronounce, CLI `--series`.
+2. ⏳ **Per-line voice by gender** — sesion 1, branch feat/series-voices.
+3. ⏳ **Compact cue list + 9:16-aware layout** (ux E1, E5/R3) — sesion 2, branch feat/ux-wave2.
+4. ✅ **Timing post-pass** — merged 5192596 (sesion 1).
+5. ✅ **Episode chip + end card** — 7e6f6a3 (coordinator).
+6. ⏳ **Whole-episode overview strip** — sesion 2, feat/ux-wave2.
+7. ⏳ Library status chips + episode sort (L1) — sesion 2, feat/ux-wave2.
+8. ✅ **Model catalog auto-update** (owner's question 2026-10-28) — 62eaf57; live once
+   `catalog/models.json` is on main.
 
 ## Later / maybe
-Animated captions (sentence level first), platform safe-zone overlay, AI post title/hashtags,
-Vietnamese common-error fixer, CSV export/import, trim head/tail (risky: every sidecar shifts).
+Animated captions (sentence level first), platform safe-zone overlay (needs video_canvas, wait for
+the 9:16 layout work), ✅ AI post title/hashtags (584e66d), Vietnamese common-error fixer,
+CSV export/import, trim head/tail (risky: every sidecar shifts), signed installer + update download
+(the catalog already announces new versions).
 
 ## Not building
 Lip-sync, removing other creators' watermarks, anti-duplicate-detection tricks, subject-tracking
