@@ -104,6 +104,7 @@ DEFAULT_STYLE = {
     "outline": "#000000",
     "box": "#000000",
     "box_alpha": 128,
+    "text_alpha": 0,         # the letters (and their outline) — 0 opaque … 255 invisible
     "border_style": 1,
     "outline_w": 2,
     "shadow": 0,
@@ -132,9 +133,10 @@ def _style_line(name: str, s: dict, font: str, size: int, cover_hardsubs: bool) 
         border, box_alpha = 4, 0           # opaque box to hide hardsubs (wins over style)
     else:
         border, box_alpha = int(s["border_style"]), int(s["box_alpha"])
+    text_alpha = int(s.get("text_alpha") or 0)
     return (
-        f"Style: {name},{font},{size},{_ass_colour(s['primary'], 0)},&H000000FF,"
-        f"{_ass_colour(s['outline'], 0)},{_ass_colour(s['box'], box_alpha)},"
+        f"Style: {name},{font},{size},{_ass_colour(s['primary'], text_alpha)},&H000000FF,"
+        f"{_ass_colour(s['outline'], text_alpha)},{_ass_colour(s['box'], box_alpha)},"
         f"{-1 if s['bold'] else 0},{-1 if s['italic'] else 0},0,0,100,100,0,0,"
         f"{border},{s['outline_w']},{s['shadow']},{int(s['alignment'])},"
         f"{int(s['margin_l'])},{int(s['margin_r'])},{int(s['margin_v'])},1"

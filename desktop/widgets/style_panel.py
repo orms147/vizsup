@@ -1,6 +1,11 @@
-"""StylePanel — all subtitle-style controls (font, size, colours, box, bold/italic,
-letter-spacing, line mode, margins) + a cross-project preset library + an
-"Áp dụng cho" scope selector. Lives in the Screen-2 "Kiểu chữ" tab.
+"""StylePanel — the subtitle look in the Screen-2 "Kiểu chữ" tab, in three groups:
+**Chữ** (font, size, colour, opacity, bold/italic, outline), **Nền** (background kind,
+colour, opacity, the frosted glass) and **Dòng & vị trí** (line mode, letter spacing,
+margins — folded away by default), plus a cross-project preset library and the
+"Áp dụng cho" scope. Labels sit left of their control so the tab fits without scrolling.
+
+Colours open a wheel popup (desktop/widgets/color_picker.py); fonts are every installed
+font with the Vietnamese letters plus the ones added with "Thêm font…" (desktop/fonts.py).
 
 Emits ``styleChanged`` on any change (for the live preview) and ``previewRequested``
 when the user asks to burn a WYSIWYG frame. ``get_style()`` returns a dict that
@@ -10,29 +15,35 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
-    QColorDialog,
+    QCompleter,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
-    QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from app.fsutil import atomic_write_text
 from app.pipeline import glass
+from desktop.icons import icon
 from desktop.theme import V2
 from desktop.widgets.chrome import button, icon_button
 from desktop.widgets.no_wheel import NoWheelComboBox, NoWheelSlider
-from app.fsutil import atomic_write_text
 
-FONTS = ["Be Vietnam Pro", "Noto Sans", "Arial"]
-# "Kiểu nền" → (border_style, box_alpha)
+FONTS = ["Be Vietnam Pro", "Noto Sans", "Arial"]      # fallback when Qt lists nothing
+# "Kiểu nền" → (border_style, box_alpha): the alpha is where "Độ mờ nền" starts
 BOX_STYLES = {
     "Viền chữ (không nền)": (1, 255),
     "Hộp mờ": (4, 110),
@@ -45,6 +56,17 @@ PLAIN_TEXT, PLAIN_OUTLINE_W = "#ffffff", 2     # back to white + outline when le
 # below this white tint the glass is about as dark as the video: dark text stops reading,
 # so the text turns white + outline (and back to dark above it)
 GLASS_LIGHT_TEXT_BELOW = 25
+TEXT_FADE_MAX = 90           # "Độ mờ chữ" stops here: a fully clear line is no subtitle
+LABEL_W = 92
+
+
+def pct_to_alpha(pct: int) -> int:
+    """"Độ mờ" 0 % (solid) … 100 % (clear) → ASS alpha 0 … 255. Pure."""
+    return max(0, min(255, round(int(pct) * 255 / 100)))
+
+
+def alpha_to_pct(alpha: int) -> int:
+    return max(0, min(100, round(int(alpha) * 100 / 255)))
 
 
 def estimate_line_count(text: str, *, size_px: int, font: str, margin_l: int = 60,
@@ -69,44 +91,129 @@ def estimate_line_count(text: str, *, size_px: int, font: str, margin_l: int = 6
 
 
 class _ColorButton(QPushButton):
-    """A swatch button that opens a colour picker and remembers the hex."""
+    """A round swatch + hex; a click opens the colour wheel under it. The colour is
+    applied live while picking (``changed`` each time)."""
 
     changed = Signal()
 
     def __init__(self, hex_str: str) -> None:
         super().__init__()
         self.hex = hex_str
-        self.setFixedHeight(26)
+        self.setFixedHeight(30)
+        self.setMinimumWidth(96)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("Bấm để chọn màu (vòng màu, mã hex, màu gần đây)")
+        self._popup = None
         self._apply()
         self.clicked.connect(self._pick)
 
     def _apply(self) -> None:
-        h = self.hex.lstrip("#")
-        try:
-            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        except ValueError:
-            r, g, b = 255, 255, 255
-        fg = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 140 else "#ffffff"
         self.setStyleSheet(
-            f"QPushButton {{ background:{self.hex}; color:{fg}; "
-            "border:1px solid #555; border-radius:5px; }")
+            f"QPushButton{{text-align:left;padding-left:34px;background:{V2['input']};"
+            f"border:1px solid {V2['field_line']};border-radius:7px;color:{V2['text']};}}"
+            f"QPushButton:hover{{border-color:{V2['purple_bright']};}}")
         self.setText(self.hex.upper())
+        self.update()
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        super().paintEvent(e)
+        from PySide6.QtGui import QPainter, QPen
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(V2["line"]), 1))
+        p.setBrush(QColor(self.hex))
+        r = self.height() - 12
+        p.drawEllipse(9, 6, r, r)
+        p.end()
 
     def set_hex(self, hex_str: str) -> None:
         self.hex = hex_str
         self._apply()
 
     def _pick(self) -> None:
-        # parent to the window (not this button) + clear stylesheet, else the
-        # swatch background cascades and tints the whole dialog.
-        dlg = QColorDialog(QColor(self.hex), self.window())
-        dlg.setStyleSheet("")
-        if dlg.exec():
-            c = dlg.currentColor()
-            if c.isValid():
-                self.hex = c.name()
-                self._apply()
-                self.changed.emit()
+        from desktop.widgets.color_picker import ColorPopup
+
+        pop = ColorPopup(self.hex, self.window())
+        pop.colorChanged.connect(self._live)
+        self._popup = pop
+        pop.adjustSize()
+        at = self.mapToGlobal(QPoint(0, self.height() + 4))
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            at.setX(min(at.x(), screen.right() - pop.width()))
+            if at.y() + pop.height() > screen.bottom():
+                at.setY(self.mapToGlobal(QPoint(0, 0)).y() - pop.height() - 4)
+        pop.move(at)
+        pop.show()
+
+    def _live(self, hex_str: str) -> None:
+        if hex_str and hex_str.lower() != self.hex.lower():
+            self.hex = hex_str
+            self._apply()
+            self.changed.emit()
+
+
+class _Section(QWidget):
+    """A titled group whose body folds away (▸ / ▾)."""
+
+    def __init__(self, title: str, *, open_: bool = True) -> None:
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        self.head = QToolButton()
+        self.head.setText(title)
+        self.head.setCheckable(True)
+        self.head.setChecked(open_)
+        self.head.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.head.setStyleSheet(
+            f"QToolButton{{border:none;background:transparent;color:{V2['text']};"
+            f"font-weight:600;padding:2px 0;}}")
+        self.head.toggled.connect(self._toggle)
+        v.addWidget(self.head)
+        self.body = QWidget()
+        self.grid = QGridLayout(self.body)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(8)
+        self.grid.setColumnMinimumWidth(0, LABEL_W)
+        self.grid.setColumnStretch(1, 1)
+        v.addWidget(self.body)
+        self._toggle(open_)
+
+    def _toggle(self, on: bool) -> None:
+        self.body.setVisible(on)
+        self.head.setIcon(icon("ChevronDown" if on else "ChevronRight", V2["secondary"], 14))
+
+    def row(self, label: str, w: QWidget | QHBoxLayout, value: QLabel | None = None,
+            tip: str = "") -> int:
+        r = self.grid.rowCount()
+        lab = QLabel(label)
+        lab.setStyleSheet(f"color:{V2['secondary']};")
+        lab.setWordWrap(True)
+        if tip:
+            lab.setToolTip(tip)
+        self.grid.addWidget(lab, r, 0, Qt.AlignVCenter)
+        if isinstance(w, QWidget):
+            self.grid.addWidget(w, r, 1, 1, 1 if value is not None else 2)
+        else:
+            self.grid.addLayout(w, r, 1, 1, 1 if value is not None else 2)
+        if value is not None:
+            self.grid.addWidget(value, r, 2, Qt.AlignRight | Qt.AlignVCenter)
+        return r
+
+    def widgets_of(self, r: int) -> list[QWidget]:
+        out = []
+        for c in range(3):
+            item = self.grid.itemAtPosition(r, c)
+            if item is not None and item.widget() is not None:
+                out.append(item.widget())
+            elif item is not None and item.layout() is not None:
+                lay = item.layout()
+                out += [lay.itemAt(i).widget() for i in range(lay.count())
+                        if lay.itemAt(i).widget() is not None]
+        return out
 
 
 class StylePanel(QScrollArea):
@@ -119,27 +226,31 @@ class StylePanel(QScrollArea):
         super().__init__()
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
         self.setWidget(inner)
         ll = QVBoxLayout(inner)
-        ll.setContentsMargins(16, 14, 14, 14)
-        ll.setSpacing(10)
+        ll.setContentsMargins(16, 12, 14, 14)
+        ll.setSpacing(12)
+        self._loading = False
 
-        # Áp dụng cho (scope)
+        # Áp dụng cho (scope) + Mẫu kiểu (cross-project library)
+        top = _Section("Áp dụng & mẫu")
+        top.head.setVisible(False)
         self.scope = NoWheelComboBox()
         self.scope.addItems(["Toàn bộ", "Các câu đang chọn"])
         self.scope.currentIndexChanged.connect(self.scopeChanged)
-        ll.addLayout(self._row("Áp dụng cho", self.scope))
+        self.scope.currentIndexChanged.connect(self._sync_scope)
+        top.row("Áp dụng cho", self.scope)
         self.scope_hint = QLabel("→ áp cho toàn bộ phụ đề")
         self.scope_hint.setWordWrap(True)
-        self.scope_hint.setStyleSheet("color:#8b8b9a;font-size:11px;")
-        ll.addWidget(self.scope_hint)
+        self.scope_hint.setStyleSheet(f"color:{V2['muted']};font-size:11px;")
+        top.grid.addWidget(self.scope_hint, top.grid.rowCount(), 1, 1, 2)
         self.btn_reset_cue = button("Bỏ kiểu riêng (câu đang chọn)", variant="ghost", small=True)
         self.btn_reset_cue.clicked.connect(self.resetSelectedRequested)
-        ll.addWidget(self.btn_reset_cue)
-
-        # Mẫu kiểu (cross-project library)
+        top.grid.addWidget(self.btn_reset_cue, top.grid.rowCount(), 1, 1, 2, Qt.AlignLeft)
         self.preset = NoWheelComboBox()
+        self.preset.setToolTip("Mẫu kiểu dùng chung mọi dự án")
         self.btn_save_preset = icon_button("Plus", "Lưu kiểu hiện tại thành mẫu")
         self.btn_del_preset = icon_button("Trash2", "Xóa mẫu đang chọn")
         self.btn_reset = icon_button("RefreshCw", "Cài lại (về mẫu đang chọn, hoặc mặc định)")
@@ -147,104 +258,122 @@ class StylePanel(QScrollArea):
         self.btn_save_preset.clicked.connect(self._save_preset)
         self.btn_del_preset.clicked.connect(self._delete_preset)
         self.btn_reset.clicked.connect(self._reset_to_applied)
-        ll.addWidget(QLabel("Mẫu kiểu (dùng chung mọi dự án)"))
         prow = QHBoxLayout()
+        prow.setSpacing(4)
         prow.addWidget(self.preset, 1)
-        prow.addWidget(self.btn_save_preset)
-        prow.addWidget(self.btn_del_preset)
-        prow.addWidget(self.btn_reset)
-        ll.addLayout(prow)
+        for b in (self.btn_save_preset, self.btn_del_preset, self.btn_reset):
+            prow.addWidget(b)
+        top.row("Mẫu kiểu", prow, tip="Lưu / dùng lại một kiểu cho mọi dự án")
+        ll.addWidget(top)
 
-        # font + size
+        # --- Chữ ------------------------------------------------------------------
+        text = _Section("Chữ")
+        self.text_section = text
         self.font = NoWheelComboBox()
-        self.font.addItems(FONTS)
-        self.font.currentTextChanged.connect(self._changed)
-        ll.addLayout(self._row("Phông chữ", self.font))
-        self.size = self._slider(ll, "Cỡ chữ", 12, 40, 20, "px")
-
-        # colours
+        self.font.setEditable(True)
+        self.font.setInsertPolicy(NoWheelComboBox.NoInsert)
+        self.font.setMinimumContentsLength(8)
+        self.font.setSizeAdjustPolicy(NoWheelComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.font.lineEdit().setPlaceholderText("Tìm font…")
+        self._family = "Be Vietnam Pro"
+        self.font.currentIndexChanged.connect(self._on_font_index)
+        self.font.lineEdit().editingFinished.connect(self._on_font_typed)
+        self.btn_add_font = icon_button("Plus", "Thêm font từ máy (.ttf / .otf)…")
+        self.btn_add_font.clicked.connect(self._add_fonts)
+        frow = QHBoxLayout()
+        frow.setSpacing(4)
+        frow.addWidget(self.font, 1)
+        frow.addWidget(self.btn_add_font)
+        text.row("Phông chữ", frow, tip="Mọi font trên máy có đủ dấu tiếng Việt, và font bạn "
+                                        "thêm bằng nút +")
+        self._fill_fonts()
+        self.size, v = self._slider(12, 40, 20, "px")
+        text.row("Cỡ chữ", self.size, v)
         self.c_text = _ColorButton("#ffffff")
+        text.row("Màu chữ", self.c_text)
+        self.text_fade, v = self._slider(0, TEXT_FADE_MAX, 0, "%")
+        self.text_fade.setToolTip("0% = chữ đặc · càng cao chữ càng trong (thấy video qua chữ)")
+        text.row("Độ mờ chữ", self.text_fade, v, tip="0% = chữ đặc, cao hơn = chữ trong hơn")
+        self.bold = QPushButton("B")
+        self.italic = QPushButton("I")
+        for b, tip in ((self.bold, "Chữ đậm"), (self.italic, "Chữ nghiêng")):
+            b.setCheckable(True)
+            b.setFixedSize(34, 30)
+            b.setToolTip(tip)
+            b.toggled.connect(self._changed)
+        self.bold.setStyleSheet("QPushButton{font-weight:800;}")
+        self.italic.setStyleSheet("QPushButton{font-style:italic;font-family:serif;}")
+        brow = QHBoxLayout()
+        brow.setSpacing(6)
+        brow.addWidget(self.bold)
+        brow.addWidget(self.italic)
+        brow.addStretch(1)
+        text.row("Kiểu", brow)
         self.c_outline = _ColorButton("#000000")
-        self.c_box = _ColorButton("#000000")
-        for cb in (self.c_text, self.c_outline, self.c_box):
-            cb.changed.connect(self._changed)
-        ll.addLayout(self._row("Màu chữ", self.c_text))
-        ll.addLayout(self._row("Màu viền (rìa chữ)", self.c_outline))
+        text.row("Màu viền", self.c_outline, tip="Viền quanh từng chữ")
+        self.outline_w, v = self._slider(0, 6, 2, "")
+        text.row("Độ dày viền", self.outline_w, v)
+        ll.addWidget(text)
 
-        self.outline_w = self._slider(ll, "Độ dày viền (rìa chữ)", 0, 6, 2, "")
-
+        # --- Nền ------------------------------------------------------------------
+        bg = _Section("Nền")
+        self.bg_section = bg
         self.box_style = NoWheelComboBox()
         self.box_style.addItems(list(BOX_STYLES))
-        self.box_style.currentTextChanged.connect(self._changed)
-        self.box_style.currentTextChanged.connect(self._sync_box_color)
-        self._prev_box = self.box_style.currentText()
-        self._loading = False
-        self.box_style.currentTextChanged.connect(self._sync_glass_colors)
         self.box_style.setItemData(
             list(BOX_STYLES).index(GLASS_STYLE),
             "Video phía sau dòng phụ đề được làm mờ mạnh và phủ trắng trong (kiểu kính iOS), "
             "chữ Trung in sẵn không còn đọc được; chữ Việt màu tối.", Qt.ToolTipRole)
-        ll.addLayout(self._row("Kiểu nền", self.box_style))
-        # "Màu nền" only matters for the box styles → hide it for "Viền chữ"
-        self._box_color_row = QWidget()
-        _bc = QVBoxLayout(self._box_color_row)
-        _bc.setContentsMargins(0, 0, 0, 0)
-        _bc.setSpacing(3)
-        _bc.addWidget(QLabel("Màu nền (hộp)"))
-        _bc.addWidget(self.c_box)
-        ll.addWidget(self._box_color_row)
+        self._prev_box = self.box_style.currentText()
+        bg.row("Kiểu nền", self.box_style)
+        self.c_box = _ColorButton("#000000")
+        self._r_box_color = bg.row("Màu nền", self.c_box)
+        self.box_fade, v = self._slider(0, 100, alpha_to_pct(BOX_STYLES["Hộp mờ"][1]), "%")
+        self.box_fade.setToolTip("0% = nền đặc (che hẳn) · càng cao nền càng trong")
+        self._r_box_fade = bg.row("Độ mờ nền", self.box_fade, v,
+                                  tip="0% = nền đặc, cao hơn = nền trong hơn")
         # the frosted glass' own look (global only — the render blurs one band)
-        self._glass_row = QWidget()
-        _gl = QVBoxLayout(self._glass_row)
-        _gl.setContentsMargins(0, 0, 0, 0)
-        _gl.setSpacing(3)
-        self.glass_tint = self._slider(_gl, "Độ trắng của nền", *glass.TINT_RANGE,
-                                       round(glass.TINT * 100), "%")
+        self.glass_tint, v = self._slider(*glass.TINT_RANGE, round(glass.TINT * 100), "%")
         self.glass_tint.setToolTip(
             "Lớp trắng phủ trên phần video đã làm mờ. Thấp = kính trong, thấy rõ màu video "
             f"phía sau; dưới {GLASS_LIGHT_TEXT_BELOW}% chữ tự đổi sang trắng có viền.")
-        self.glass_blur = self._slider(_gl, "Độ nhòe phía sau", *glass.BLUR_RANGE,
-                                       glass.BLUR_SIGMA, "")
+        self._r_tint = bg.row("Độ trắng kính", self.glass_tint, v)
+        self.glass_blur, v = self._slider(*glass.BLUR_RANGE, glass.BLUR_SIGMA, "")
         self.glass_blur.setToolTip(
             "Độ làm mờ video sau dòng phụ đề (mặc định "
             f"{glass.BLUR_SIGMA}). Từ {glass.BLUR_SAFE} trở lên chữ Trung in sẵn không còn "
             "đọc được.")
+        self._r_blur = bg.row("Độ nhòe kính", self.glass_blur, v)
         self.glass_warn = QLabel(f"⚠ Dưới mức {glass.BLUR_SAFE}: chữ Trung có thể đọc được.")
         self.glass_warn.setWordWrap(True)
         self.glass_warn.setStyleSheet(f"color:{V2['amber']};font-size:11px;")
-        _gl.addWidget(self.glass_warn)
-        self._prev_tint = self.glass_tint.value()
-        self.glass_tint.valueChanged.connect(self._sync_tint_colors)
-        self.glass_blur.valueChanged.connect(self._sync_glass_warn)
-        ll.addWidget(self._glass_row)
+        bg.grid.addWidget(self.glass_warn, bg.grid.rowCount(), 0, 1, 3)
+        self._glass_row = QWidget()        # kept for callers: visible ⇔ glass controls shown
+        self._box_color_row = QWidget()
+        ll.addWidget(bg)
 
-        self.bold = QRadioButton("Đậm")
-        self.italic = QRadioButton("Nghiêng")
-        self.bold.setAutoExclusive(False)
-        self.italic.setAutoExclusive(False)
-        self.bold.toggled.connect(self._changed)
-        self.italic.toggled.connect(self._changed)
-        brow = QHBoxLayout()
-        brow.addWidget(self.bold)
-        brow.addWidget(self.italic)
-        brow.addStretch(1)
-        ll.addLayout(brow)
-
-        # letter spacing + line mode (fit to 1-2 lines without shrinking)
-        self.letter = self._slider(ll, "Giãn chữ", -20, 40, 0, "%")
+        # --- Dòng & vị trí --------------------------------------------------------------
+        pos = _Section("Dòng & vị trí", open_=False)
+        self.pos_section = pos
         self.line_mode = NoWheelComboBox()
         self.line_mode.addItems(["Tự động", "1 dòng", "2 dòng"])
-        self.line_mode.currentTextChanged.connect(self._changed)
-        ll.addLayout(self._row("Chế độ dòng", self.line_mode))
-
-        # margins (precise complement to dragging the box on the video)
-        ll.addWidget(QLabel("Lề (kéo phụ đề trên video, hoặc chỉnh chính xác ở đây)"))
-        self.m_left = self._slider(ll, "Lề trái", 0, 800, 60, "")
-        self.m_right = self._slider(ll, "Lề phải", 0, 800, 60, "")
-        self.m_v = self._slider(ll, "Lề dọc", 0, 900, 60, "")
+        pos.row("Chế độ dòng", self.line_mode)
+        self.letter, v = self._slider(-20, 40, 0, "%")
+        pos.row("Giãn chữ", self.letter, v)
+        hint = QLabel("Kéo phụ đề trên video để đặt chỗ; chỉnh chính xác ở đây.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{V2['muted']};font-size:11px;")
+        pos.grid.addWidget(hint, pos.grid.rowCount(), 0, 1, 3)
+        self.m_left, v = self._slider(0, 800, 60, "")
+        pos.row("Lề trái", self.m_left, v)
+        self.m_right, v = self._slider(0, 800, 60, "")
+        pos.row("Lề phải", self.m_right, v)
+        self.m_v, v = self._slider(0, 900, 60, "")
+        pos.row("Lề dọc", self.m_v, v)
         self.btn_reset_pos = button("Đặt lại vị trí", "RefreshCw", variant="ghost", small=True)
         self.btn_reset_pos.clicked.connect(self._reset_pos)
-        ll.addWidget(self.btn_reset_pos)
+        pos.grid.addWidget(self.btn_reset_pos, pos.grid.rowCount(), 1, 1, 2, Qt.AlignLeft)
+        ll.addWidget(pos)
 
         self.preview_btn = button("Xem thử kiểu", "Eye", variant="primary",
                                   tip="Dựng thử một khung hình đúng như video xuất")
@@ -252,46 +381,148 @@ class StylePanel(QScrollArea):
         ll.addWidget(self.preview_btn)
         ll.addStretch(1)
 
+        for cb in (self.c_text, self.c_outline, self.c_box):
+            cb.changed.connect(self._changed)
+        self.line_mode.currentTextChanged.connect(self._changed)
+        self.box_style.currentTextChanged.connect(self._on_box_style)
+        self.glass_tint.valueChanged.connect(self._sync_tint_colors)
+        self.glass_blur.valueChanged.connect(self._sync_glass_warn)
+        self._prev_tint = self.glass_tint.value()
+
         self._pos = None       # free drag position (nx, ny); set by the video canvas
         self._applied = None   # last preset applied (for the ↻ reset button)
         self._refresh_presets()
         self._sync_box_color()
         self._sync_glass_warn()
+        self._sync_scope()
+
+    def _sync_scope(self, *_a) -> None:
+        """The hint and "Bỏ kiểu riêng" only matter for the selected lines."""
+        sel = self.scope.currentIndex() == 1
+        self.scope_hint.setVisible(sel)
+        self.btn_reset_cue.setVisible(sel)
 
     # --- layout helpers ------------------------------------------------------
-    def _row(self, label: str, w: QWidget) -> QVBoxLayout:
-        box = QVBoxLayout()
-        box.setSpacing(3)
-        box.addWidget(QLabel(label))
-        box.addWidget(w)
-        return box
-
-    def _slider(self, parent: QVBoxLayout, label: str, lo: int, hi: int, val: int, unit: str) -> QSlider:
-        head = QHBoxLayout()
-        head.addWidget(QLabel(label))
-        head.addStretch(1)
+    def _slider(self, lo: int, hi: int, val: int, unit: str) -> tuple[QSlider, QLabel]:
         vlbl = QLabel(f"{val}{unit}")
         vlbl.setObjectName("mono")
-        head.addWidget(vlbl)
+        vlbl.setMinimumWidth(40)
+        vlbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         s = NoWheelSlider(Qt.Horizontal)
         s.setRange(lo, hi)
         s.setValue(val)
+        s.setMinimumWidth(60)
         s.valueChanged.connect(lambda v: (vlbl.setText(f"{v}{unit}"), self._changed()))
-        parent.addLayout(head)
-        parent.addWidget(s)
-        return s
+        return s, vlbl
+
+    # --- fonts ----------------------------------------------------------------
+    def _fill_fonts(self, select: str | None = None) -> None:
+        from desktop import fonts
+
+        try:
+            bundled, user, system = fonts.families()
+        except Exception:  # noqa: BLE001 - a font scan must never break the editor
+            bundled, user, system = FONTS[:1], [], FONTS[1:]
+        want = select or self._family
+        self.font.blockSignals(True)
+        self.font.clear()
+        for group in (bundled, user, system):
+            if group and self.font.count():
+                self.font.insertSeparator(self.font.count())
+            for fam in group:
+                self.font.addItem(fam)
+                self.font.setItemData(self.font.count() - 1, QFont(fam, 11), Qt.FontRole)
+                if fam in user:
+                    self.font.setItemData(self.font.count() - 1, "Font bạn đã thêm",
+                                          Qt.ToolTipRole)
+        if self.font.findText(want) < 0:
+            self.font.addItem(want)          # a preset's font that is not on this machine
+        names = [self.font.itemText(i) for i in range(self.font.count()) if self.font.itemText(i)]
+        comp = QCompleter(names, self.font)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchContains)
+        self.font.setCompleter(comp)
+        self.font.setCurrentIndex(self.font.findText(want))
+        self._family = want
+        self.font.blockSignals(False)
+
+    def _on_font_index(self, i: int) -> None:
+        fam = self.font.itemText(i)
+        if fam and fam != self._family:
+            self._family = fam
+            self._changed()
+
+    def _on_font_typed(self) -> None:
+        typed = self.font.currentText().strip()
+        i = self.font.findText(typed, Qt.MatchFixedString)
+        if i >= 0:
+            self.font.setCurrentIndex(i)
+            self._on_font_index(i)
+        else:                                # not a font: back to the one in use
+            self.font.setCurrentIndex(self.font.findText(self._family))
+
+    def _add_fonts(self) -> None:
+        from desktop import fonts
+
+        paths, _ = QFileDialog.getOpenFileNames(self, "Thêm font", "",
+                                                "Font (*.ttf *.otf *.ttc)")
+        if not paths:
+            return
+        results = fonts.add_font_files(paths)
+        good = [fam for fam, vi, err in results if not err and vi]
+        self._fill_fonts(select=good[0] if good else None)
+        if good:
+            self._changed()
+        bad = [f"• {fam}: thiếu dấu tiếng Việt — không dùng cho phụ đề được" if not err else
+               f"• {fam}: {err}" for fam, vi, err in results if err or not vi]
+        if bad:
+            QMessageBox.information(self, "Thêm font",
+                                    (f"Đã thêm {len(good)} font.\n\n" if good else "")
+                                    + "\n".join(bad))
 
     # --- change / preview ----------------------------------------------------
     def _changed(self, *_a) -> None:
         self.styleChanged.emit()
 
+    def _on_box_style(self, text: str) -> None:
+        """A background kind picked by hand starts "Độ mờ nền" at its own level (Hộp mờ
+        ~43 %, Hộp đặc 0 %); loading a saved style keeps the saved level."""
+        if not self._loading and text in BOX_STYLES and BOX_STYLES[text][0] in (3, 4):
+            self.box_fade.blockSignals(True)
+            self.box_fade.setValue(alpha_to_pct(BOX_STYLES[text][1]))
+            self.box_fade.blockSignals(False)
+            self._set_value_label(self.box_fade, "%")
+        self._sync_box_color()
+        self._sync_glass_colors(text)
+        self._changed()
+
+    def _set_value_label(self, slider: QSlider, unit: str) -> None:
+        for sec in (self.text_section, self.bg_section, self.pos_section):
+            for r in range(sec.grid.rowCount()):
+                item = sec.grid.itemAtPosition(r, 1)
+                if item is not None and item.widget() is slider:
+                    lab = sec.grid.itemAtPosition(r, 2)
+                    if lab is not None and lab.widget() is not None:
+                        lab.widget().setText(f"{slider.value()}{unit}")
+
     def _sync_box_color(self, *_a) -> None:
-        border_style, _ = BOX_STYLES[self.box_style.currentText()]
-        self._box_color_row.setVisible(border_style in (3, 4))
-        self._glass_row.setVisible(self.box_style.currentText() == GLASS_STYLE)
+        text = self.box_style.currentText()
+        boxed = BOX_STYLES[text][0] in (3, 4)
+        is_glass = text == GLASS_STYLE
+        bg = self.bg_section
+        for r in (self._r_box_color, self._r_box_fade):
+            for w in bg.widgets_of(r):
+                w.setVisible(boxed)
+        for r in (self._r_tint, self._r_blur):
+            for w in bg.widgets_of(r):
+                w.setVisible(is_glass)
+        self._box_color_row.setVisible(boxed)
+        self._glass_row.setVisible(is_glass)
+        self._sync_glass_warn()
 
     def _sync_glass_warn(self, *_a) -> None:
-        self.glass_warn.setVisible(self.glass_blur.value() < glass.BLUR_SAFE)
+        self.glass_warn.setVisible(self.box_style.currentText() == GLASS_STYLE
+                                   and self.glass_blur.value() < glass.BLUR_SAFE)
 
     def _sync_tint_colors(self, value: int) -> None:
         """Crossing the low-tint line flips the text: a nearly clear glass is as dark
@@ -354,7 +585,7 @@ class StylePanel(QScrollArea):
 
     # --- public API ----------------------------------------------------------
     def get_font(self) -> str:
-        return self.font.currentText()
+        return self._family
 
     def get_size_px(self) -> int:
         return self.size.value()
@@ -367,6 +598,8 @@ class StylePanel(QScrollArea):
 
     def get_style(self) -> dict:
         border_style, box_alpha = BOX_STYLES[self.box_style.currentText()]
+        if border_style in (3, 4):
+            box_alpha = pct_to_alpha(self.box_fade.value())
         ass_size = self.size.value() * 3  # UI px → .ass units (1080 canvas)
         fsp = round(ass_size * self.letter.value() / 100.0)
         extra = {"glass": True, "glass_tint": self.glass_tint.value(),
@@ -378,6 +611,7 @@ class StylePanel(QScrollArea):
             "outline": self.c_outline.hex,
             "box": self.c_box.hex,
             "box_alpha": box_alpha,
+            "text_alpha": pct_to_alpha(self.text_fade.value()),
             "border_style": border_style,
             "outline_w": self.outline_w.value(),
             "shadow": 0,
@@ -396,16 +630,15 @@ class StylePanel(QScrollArea):
         """Apply a saved style/preset to the controls (no signal storms)."""
         self.blockSignals(True)
         s = data.get("style", data) or {}
-        if data.get("font"):
-            i = self.font.findText(data["font"])
-            if i >= 0:
-                self.font.setCurrentIndex(i)
+        if data.get("font") and data["font"] != self._family:
+            self._fill_fonts(select=str(data["font"]))
         if data.get("size"):
             self.size.setValue(int(data["size"]))
         self.c_text.set_hex(s.get("primary", self.c_text.hex))
         self.c_outline.set_hex(s.get("outline", self.c_outline.hex))
         self.c_box.set_hex(s.get("box", self.c_box.hex))
         self.outline_w.setValue(int(s.get("outline_w", self.outline_w.value())))
+        self.text_fade.setValue(min(TEXT_FADE_MAX, alpha_to_pct(int(s.get("text_alpha") or 0))))
         self.bold.setChecked(bool(s.get("bold", False)))
         self.italic.setChecked(bool(s.get("italic", False)))
         self.m_left.setValue(int(s.get("margin_l", 60)))
@@ -424,16 +657,17 @@ class StylePanel(QScrollArea):
             self._prev_tint = self.glass_tint.value()
             if s.get("glass"):
                 self.box_style.setCurrentText(GLASS_STYLE)
+            elif bs[0] in (3, 4):          # a box: "đặc" when opaque, else "mờ" + its level
+                self.box_style.setCurrentText("Hộp đặc (che chữ Trung)" if bs[1] == 0
+                                              else "Hộp mờ")
+                self.box_fade.setValue(alpha_to_pct(bs[1]))
             else:
-                for label, val in BOX_STYLES.items():
-                    if val == bs and label != GLASS_STYLE:
-                        k = self.box_style.findText(label)
-                        if k >= 0:
-                            self.box_style.setCurrentIndex(k)
-                        break
+                self.box_style.setCurrentText("Viền chữ (không nền)")
         finally:
             self._loading = False
         self._pos = tuple(s["pos"]) if s.get("pos") else None
+        self._prev_box = self.box_style.currentText()
+        self._sync_box_color()
         self.blockSignals(False)
         self._changed()
 

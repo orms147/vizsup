@@ -174,6 +174,9 @@ class VideoCanvas(QWidget):
         rect = self._box_rect()
         flags = int(Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap)
         o = int(self._style.get("outline_w", 2))
+        opacity = 1.0 - max(0, min(255, int(self._style.get("text_alpha") or 0))) / 255.0
+        p.save()
+        p.setOpacity(opacity)        # "Độ mờ chữ": letters + outline fade together
         if o > 0:   # approximate the character outline so "Màu viền / Độ dày viền" show
             p.setPen(QColor(self._style.get("outline", "#000000")))
             for dxo, dyo in ((-o, 0), (o, 0), (0, -o), (0, o),
@@ -181,6 +184,7 @@ class VideoCanvas(QWidget):
                 p.drawText(rect.translated(dxo, dyo), flags, self._caption)
         p.setPen(QColor(self._style.get("primary", "#ffffff")))
         p.drawText(rect, flags, self._caption)
+        p.restore()
 
     def glass_rect(self, fm: QFontMetrics) -> QRectF:
         """The frosted pill around the wrapped caption (widget px) — same padding as

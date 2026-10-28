@@ -90,8 +90,11 @@ class CueInspector(QFrame):
         self.tabbar = QTabBar()
         self.tabbar.setExpanding(False)
         self.tabbar.setDrawBase(False)
-        for t in ("Câu này", "Kiểu chữ", "Ngữ cảnh"):
-            self.tabbar.addTab(t)
+        # short names so five tabs fit the column (the full name is the tooltip)
+        for t, tip in (("Câu", "Câu đang chọn: chữ, thời gian, gợi ý"),
+                       ("Kiểu chữ", "Phông, màu, độ mờ, nền và vị trí phụ đề"),
+                       ("Ngữ cảnh", "Tóm tắt video và ghi chú cho bộ dịch")):
+            self.tabbar.setTabToolTip(self.tabbar.addTab(t), tip)
         tb = QFrame()
         tb.setObjectName("panelHead")
         th = QHBoxLayout(tb)
@@ -132,10 +135,13 @@ class CueInspector(QFrame):
     def set_tab(self, i: int) -> None:
         self.tabbar.setCurrentIndex(i)
 
-    def add_page(self, title: str, widget: QWidget) -> int:
+    def add_page(self, title: str, widget: QWidget, tip: str = "") -> int:
         """One more tab (F-4 "Bình luận"); returns its index."""
         self._pages.addWidget(self._scroll(widget))
-        return self.tabbar.addTab(title)
+        i = self.tabbar.addTab(title)
+        if tip:
+            self.tabbar.setTabToolTip(i, tip)
+        return i
 
     # --- cue tab --------------------------------------------------------------
     def _cue_page(self) -> QWidget:

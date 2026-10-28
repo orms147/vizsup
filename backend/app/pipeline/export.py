@@ -33,8 +33,20 @@ def safe_name(title: str | None, fallback: str, *, limit: int = 80) -> str:
 def _fonts(job: Job) -> list[Path]:
     """The subtitle fonts copied next to the job by the render (assemble._ass_fonts);
     the mono UI font is not a subtitle font."""
+    from app import fontfiles
+    from app.config import settings
+    from app.pipeline.assemble import _BUNDLED_FONTS
+
     d = job.work_dir / "fonts"
-    return sorted(f for f in d.glob("*.ttf") if "mono" not in f.name.lower()) if d.is_dir() else []
+    if not d.is_dir():
+        return []
+    # only fonts we may hand on: the bundled OFL ones and those the user added — never
+    # a Windows font (Arial, Segoe UI …) copied in for the burn (its licence forbids it)
+    mine = {p.name.lower() for p in _BUNDLED_FONTS.glob("*.ttf")} if _BUNDLED_FONTS.is_dir() \
+        else set()
+    mine |= {n.lower() for n in fontfiles.user_index(settings.vizsup_storage_dir)}
+    return sorted(f for f in d.iterdir() if f.suffix.lower() in fontfiles.FONT_EXT
+                  and "mono" not in f.name.lower() and f.name.lower() in mine)
 
 
 def softsub_cmd(job: Job, dest: Path) -> list[str]:

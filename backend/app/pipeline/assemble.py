@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -160,18 +159,18 @@ def _has_audio_stream(src: Path) -> bool:
 _BUNDLED_FONTS = Path(__file__).resolve().parents[3] / "desktop" / "assets" / "fonts"
 
 
-def _ass_fonts(wd: Path) -> str:
-    """``:fontsdir=fonts`` for the ass filter (cwd = job dir), or '' if none bundled."""
-    fonts = sorted(_BUNDLED_FONTS.glob("*.ttf")) if _BUNDLED_FONTS.is_dir() else []
-    if not fonts:
+def _ass_fonts(wd: Path, family: str | None = None) -> str:
+    """``:fontsdir=fonts`` for the ass filter (cwd = job dir), or '' if no font file.
+    The folder gets the bundled fonts, the user's added fonts and — for a Windows font
+    like Arial or Segoe UI — that ``family``'s files (app/fontfiles.py)."""
+    from app import fontfiles
+
+    files = fontfiles.files_for(family, settings.vizsup_storage_dir, _BUNDLED_FONTS)
+    if not files:
         return ""
-    dst = wd / "fonts"
     try:
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in fonts:
-            target = dst / f.name
-            if not target.exists() or target.stat().st_size != f.stat().st_size:
-                shutil.copyfile(f, target)
+        if not fontfiles.copy_into(wd / "fonts", files):
+            return ""
     except OSError:
         return ""
     return ":fontsdir=fonts"
@@ -200,7 +199,7 @@ def style_preview_frame(
                 at = c.start + min(0.4, max(0.0, (c.end - c.start) / 2))
                 break
     out = wd / "_preview.png"
-    burn = f"ass=_preview.ass{_ass_fonts(wd)}"
+    burn = f"ass=_preview.ass{_ass_fonts(wd, font)}"
     video = ["-vf", burn]
     from app.pipeline import glass
 
@@ -984,6 +983,7 @@ def assemble(
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=overlays, comments=note_subs)
+    _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
     src_size = probe_size(job.source_video) if job.source_video.exists() else None
     burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
     glass_band = None

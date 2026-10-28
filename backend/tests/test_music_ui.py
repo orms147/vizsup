@@ -43,7 +43,8 @@ def view(qapp, tmp_path, monkeypatch):
 
 def test_tab_sits_next_to_commentary(view):
     bar = view.inspector.tabbar
-    assert bar.tabText(view.music_tab) == "Nhạc nền"
+    assert bar.tabText(view.music_tab) == "Nhạc"                # short: five tabs must fit
+    assert "Nhạc nền" in bar.tabToolTip(view.music_tab)
     assert view.music_tab == view.commentary_tab + 1
 
 

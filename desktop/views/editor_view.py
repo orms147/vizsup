@@ -149,9 +149,11 @@ class EditorView(QWidget):
         self.style_panel = StylePanel()
         self.inspector = CueInspector(self.style_panel)
         self.commentary = CommentaryPanel()                 # F-4: the user's own notes
-        self.commentary_tab = self.inspector.add_page("Bình luận", self.commentary)
+        self.commentary_tab = self.inspector.add_page(
+            "Bình luận", self.commentary, "Lời bình của bạn: giọng khác hoặc tự thu")
         self.music = MusicPanel()                           # the user's background music
-        self.music_tab = self.inspector.add_page("Nhạc nền", self.music)
+        self.music_tab = self.inspector.add_page(
+            "Nhạc", self.music, "Nhạc nền của bạn cho cả video hoặc từng đoạn")
         self.gain, self.mute_cb = self.inspector.gain, self.inspector.mute_cb
         self.timeline_panel = TimelinePanel()
         self.timeline = self.timeline_panel.timeline
