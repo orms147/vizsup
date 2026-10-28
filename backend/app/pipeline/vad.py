@@ -166,6 +166,12 @@ def speech_probs(src: Path, model: Path) -> list[float]:
 
 
 def _source(job: Job) -> Path | None:
+    """The speech stem when the music was separated (a scream under loud music is voice
+    there, 2026-10-28), else the job's audio / video."""
+    stem = job.work_dir / "vocals.wav"
+    if stem.exists() and job.source_video.exists() \
+            and stem.stat().st_mtime >= job.source_video.stat().st_mtime:
+        return stem
     for p in (job.source_audio, job.source_video):
         if p.exists():
             return p

@@ -25,7 +25,9 @@ def _extract_audio(job: Job) -> None:
 
 
 def transcribe(job: Job, *, provider: str | None = None, language: str = "zh",
-               log=None) -> Job:
+               log=None, vocals: bool = True) -> Job:
+    """ASR into cn.srt. ``vocals``: time the lines on the speech stem (Demucs, when a GPU
+    makes it cheap) — music no longer throws the word timings off."""
     if provider is None:
         from app.config import settings
 
@@ -40,14 +42,30 @@ def transcribe(job: Job, *, provider: str | None = None, language: str = "zh",
         _extract_audio(job)
     from app.heavy import heavy_task
 
+    kw = {}
+    if vocals and _takes(asr, "timing_media"):
+        from app.pipeline import separate
+
+        stem = separate.speech_stem(job, log=log)   # before the ASR lock: Demucs takes it
+        if stem is not None:
+            kw["timing_media"] = stem
     with heavy_task(f"ASR ({provider})"):
         try:
-            cues = asr.transcribe(job.source_audio, language=language, log=log)
+            cues = asr.transcribe(job.source_audio, language=language, log=log, **kw)
         finally:
             asr.unload()   # free VRAM before the next heavy stage (8 GB rule)
     write_srt(cues, job.cn_srt)
     _persist_timing(job, asr, cues)
     return job
+
+
+def _takes(obj, name: str) -> bool:
+    import inspect
+
+    try:
+        return name in inspect.signature(obj.transcribe).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _persist_timing(job: Job, asr, cues) -> None:
@@ -149,13 +167,21 @@ def retime(job: Job, *, log=None, language: str = "zh") -> int:
         for c in old:                                   # by current start; the last chunk
             k = next((i for i, (_lo, hi) in enumerate(spans) if c.start < hi), len(spans) - 1)
             groups[k][1].append(c.text)                 # takes anything past the end
+    from app.pipeline import separate
+
+    stem = separate.speech_stem(job, log=say)          # timings on the speech, not the music
     if words is None:
-        say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
-        cache, aid = _cloud.cache_for(src)
-        with _cloud.chunk_files(src, spans) as paths:
-            words = _cloud.cloud_words(list(zip(paths, spans)), language,
-                                       cache_dir=cache, audio_id=aid, media=src, log=say)
-    voice = vad.spans_for(src, job.work_dir, log=say)
+        if stem is not None:
+            from app.providers.asr.audio_llm import timed_on
+
+            words = timed_on(stem, spans, language, say)
+        else:
+            say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
+            cache, aid = _cloud.cache_for(src)
+            with _cloud.chunk_files(src, spans) as paths:
+                words = _cloud.cloud_words(list(zip(paths, spans)), language,
+                                           cache_dir=cache, audio_id=aid, media=src, log=say)
+    voice = vad.spans_for(stem or src, job.work_dir, log=say)
     groups = [(sp, sents) for sp, sents in groups if sents]
     new = _cloud.reindex(_cloud.time_groups(src, groups, language, words=words, voice=voice))
     if [c.text for c in new] != [c.text for c in old]:

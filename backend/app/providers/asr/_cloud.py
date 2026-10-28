@@ -415,20 +415,96 @@ def _field(obj, name: str):
     return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
-def _words_from_segments(resp, offset: float) -> list[Word]:
+def _words_from_segments(resp, offset: float, max_len: float | None = None) -> list[Word]:
     """Word-like timings from the response's SEGMENTS (each character spread over its
     segment) — for an answer whose word list came back empty. Far closer than spreading
-    whole sentences over a 4-minute chunk. Pure."""
+    whole sentences over a 4-minute chunk. ``max_len`` skips segments longer than that
+    (a 13 s "segment" spread evenly is a guess, not a timing). Pure."""
     out: list[Word] = []
     for seg in _field(resp, "segments") or []:
         text = "".join(str(_field(seg, "text") or "").split())
         s, e = _field(seg, "start"), _field(seg, "end")
         if not text or s is None or e is None or float(e) <= float(s):
             continue
+        if max_len is not None and float(e) - float(s) > max_len:
+            continue
         step = (float(e) - float(s)) / len(text)
         for k, ch in enumerate(text):
             out.append((ch, offset + float(s) + k * step, offset + float(s) + (k + 1) * step))
     return out
+
+
+COLLAPSE_MIN = 3        # words sharing one start time: Whisper's fake anchors
+
+
+def collapsed_holes(words: list[Word]) -> list[tuple[float, float]]:
+    """Spans whose words Whisper stamped all with ONE time (seen 2026-10-28: "居然起雾了
+    我操喂怎么突然冒出个人完了" all at 43.10 s over loud music): from the last good word
+    before such a cluster to the first good word after it. Pure."""
+    from collections import Counter
+
+    starts = Counter(round(w[1], 2) for w in words)
+    bad = {t for t, n in starts.items() if n >= COLLAPSE_MIN}
+    if not bad:
+        return []
+    good = sorted((w[1], w[2]) for w in words if round(w[1], 2) not in bad)
+    holes = []
+    for t in sorted(bad):
+        before = [e for s_, e in good if e <= t]
+        after = [s_ for s_, _e in good if s_ > t]
+        lo = max(before) if before else None
+        hi = min(after) if after else None
+        holes.append((lo, hi, t))
+    out = []
+    for lo, hi, t in holes:
+        out.append((lo if lo is not None else max(0.0, t - 30.0),
+                    hi if hi is not None else t + 1.0))
+    return out
+
+
+SEG_MAX = 8.0          # a segment longer than this is not a usable timing
+HOLE_MAX = 90.0        # a collapsed stretch longer than this is not asked again
+
+
+def _hole_words(resp, offset: float, span: tuple[float, float]) -> list[Word]:
+    """The usable timings a (re-asked) response gives inside ``span``: its words when
+    they are not collapsed themselves, else its short segments. Pure."""
+    lo, hi = span
+    words = [w for w in _words_of(resp, offset) if lo - 0.05 <= w[1] < hi]
+    if words and not collapsed_holes(words):
+        return words
+    return [w for w in _words_from_segments(resp, offset, SEG_MAX) if lo - 0.05 <= w[1] < hi]
+
+
+def repair_collapsed(words: list[Word], resp, offset: float, reask=None
+                     ) -> tuple[list[Word], int]:
+    """Replace the words of a collapsed cluster (every word at one time) with real
+    timings for that stretch: ``reask(span)`` sends just that stretch again (a short
+    clip got proper times where the 4-min chunk did not: 起雾了 28.8–30.6 s, 我操喂…
+    33.0–34.8 s, while every word sat at 43.1 s), else the chunk answer's own short
+    segments. Returns (words, how many collapsed words were replaced)."""
+    holes = collapsed_holes(words)
+    if not holes:
+        return words, 0
+    from collections import Counter
+
+    fills: list[Word] = []
+    for lo, hi in holes:
+        got: list[Word] = []
+        if reask is not None and hi - lo <= HOLE_MAX:
+            try:
+                r = reask((lo, hi))
+                got = _hole_words(r, lo, (lo, hi)) if r is not None else []
+            except Exception:  # noqa: BLE001 - a repair must never fail the chunk
+                got = []
+        if not got:
+            got = _hole_words(resp, offset, (lo, hi))
+        fills += got
+    if not fills:
+        return words, 0
+    starts = Counter(round(w[1], 2) for w in words)
+    kept = [w for w in words if starts[round(w[1], 2)] < COLLAPSE_MIN]
+    return sorted(kept + fills, key=lambda w: w[1]), len(words) - len(kept)
 
 
 def _words_of(resp, offset: float) -> list[Word]:
@@ -457,6 +533,25 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
         path, (lo, _hi) = item
 
         def fetch() -> list[Word]:
+            def reask(span: tuple[float, float]):
+                """Send just ``span`` again (cut from the source) for its timings."""
+                if media is None:
+                    return None
+                import tempfile
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    clip = _cut(media, (max(0.0, span[0]), span[1]), Path(tmp) / "hole.mp3")
+
+                    def send_clip():
+                        with clip.open("rb") as fh:
+                            return client().audio.transcriptions.create(
+                                file=fh, model=model, language=language,
+                                response_format="verbose_json",
+                                timestamp_granularities=["word", "segment"])
+                    r = with_retry(send_clip)
+                record_stt(model, r, span[1] - span[0])
+                return r
+
             def one_piece(p: Path, sp: tuple[float, float]) -> list[Word]:
                 def send():
                     with p.open("rb") as fh:
@@ -479,6 +574,10 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
                         log(f"⚠ Mốc từng chữ {sp[0]:.0f}–{sp[1]:.0f}s trả về rỗng — "
                             + ("hỏi lại được" if _words_of(resp, sp[0]) else
                                "dùng mốc theo đoạn" if words else "vẫn rỗng, sẽ hỏi lại lần sau"))
+                words, fixed = repair_collapsed(words, resp, sp[0], reask=reask)
+                if fixed and log:
+                    log(f"⚠ {fixed} chữ bị dồn về một mốc ({sp[0]:.0f}–{sp[1]:.0f}s) — dùng mốc "
+                        f"theo đoạn cho chỗ đó")
                 return words
 
             pieces = split_on_drop(media, (lo, _hi), path, one_piece, log=log)

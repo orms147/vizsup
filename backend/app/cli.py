@@ -115,7 +115,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
                                  fps=args.ocr_fps)
         else:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
-            asr.transcribe(job, provider=args.asr)
+            asr.transcribe(job, provider=args.asr, vocals=not getattr(args, "no_vocal_timing", False))
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
             if not getattr(args, "no_clause_split", False):
                 from app.pipeline import clauses
@@ -344,6 +344,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "is on screen (better xưng hô)")
     r.add_argument("--no-qa", action="store_true",
                    help="skip the AI review pass that flags suspect lines (qa_report.json)")
+    r.add_argument("--no-vocal-timing", action="store_true",
+                   help="time the lines on the original sound (default: on the speech "
+                        "separated from the music by Demucs, when a GPU is available)")
     r.add_argument("--no-clause-split", action="store_true",
                    help="keep one subtitle per ASR line (default: one per spoken clause, timed "
                         "from the word track, so a punchline isn't shown before it is said)")

@@ -70,3 +70,22 @@ def test_missing_stem_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(separate.subprocess, "run", lambda *a, **k: None)   # produces nothing
     with pytest.raises(RuntimeError, match="no_vocals"):
         separate.separate_background(job)
+
+
+def test_speech_stem_only_with_demucs_and_a_gpu(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    monkeypatch.setattr(separate, "available", lambda: True)
+    monkeypatch.setattr(separate, "gpu_available", lambda: False)
+    assert separate.speech_stem(job) is None                      # CPU: too slow by default
+    monkeypatch.setattr(separate, "gpu_available", lambda: True)
+    monkeypatch.setattr(separate, "_split", lambda j, m: (j.work_dir / separate.VOCALS)
+                        .write_bytes(b"v"))
+    assert separate.speech_stem(job) == job.work_dir / separate.VOCALS
+
+    def boom(j, m):
+        raise RuntimeError("cuda oom")
+    (job.work_dir / separate.VOCALS).unlink()
+    monkeypatch.setattr(separate, "_split", boom)
+    logs = []
+    assert separate.speech_stem(job, log=logs.append) is None     # falls back, never raises
+    assert "Không tách được giọng" in logs[-1]

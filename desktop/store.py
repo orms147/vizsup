@@ -304,7 +304,8 @@ _PROJECT_FILES = ("job.json", "metadata.json", "source.mp4", "cn.srt", "vi.srt",
 # "Chỉ xóa file nặng": media the app rebuilds by itself (render caches, extracted audio,
 # the quick proof). Subtitles, settings, the user's own recordings and output.mp4 stay.
 HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3",
-               "output.rendering.mp4", "preview.rendering.mp4")   # a render cut off mid-encode
+               "output.rendering.mp4", "preview.rendering.mp4",   # a render cut off mid-encode
+               "vocals.wav", "source.downloading.mp4")
 HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm")   # _norm: a stopped join
 
 

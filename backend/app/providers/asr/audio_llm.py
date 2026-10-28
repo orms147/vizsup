@@ -26,6 +26,15 @@ DEFAULT_MODEL = "qwen/qwen3.8-omni-flash"
 CHUNK_SEC = 240.0       # shorter than cloud_stt: long audio invites an LLM to skip/summarize
 MAX_TOKENS = 4096       # ~240 s of speech is ~1.1k hanzi
 
+def timed_on(stem: Path, spans, language: str, say) -> list:
+    """The word track taken on the speech stem, chunk by chunk like the transcript."""
+    say(f"Lấy mốc thời gian từng từ trên giọng đã tách ({_cloud.timing_model()})…")
+    cache, aid = _cloud.cache_for(stem)
+    with _cloud.chunk_files(stem, spans) as paths:
+        return _cloud.cloud_words(list(zip(paths, spans)), language, cache_dir=cache,
+                                  audio_id=aid, media=stem, log=say)
+
+
 def _voice(media: Path, say) -> list[tuple[float, float]] | None:
     """Local VAD spans for timing sentences Whisper heard no words for (music);
     None when unavailable — alignment then falls back to natural speaking length."""
@@ -125,7 +134,10 @@ class AudioLLM(ASRProvider):
         _cloud.check_transcript(text, seconds, model=self.model)
         return text
 
-    def transcribe(self, media: Path, *, language: str = "zh", log=None) -> list[Cue]:
+    def transcribe(self, media: Path, *, language: str = "zh", log=None,
+                   timing_media: Path | None = None) -> list[Cue]:
+        """``timing_media``: the speech stem (separate.speech_stem) — word timings and
+        voice detection are taken on it when given (the transcript stays on ``media``)."""
         say = log or (lambda _m: None)
         spans = _cloud.plan_chunks(media, CHUNK_SEC)
         n = len(spans)
@@ -160,12 +172,14 @@ class AudioLLM(ASRProvider):
             if _cloud.local_words_available():
                 words = None
                 say("Lấy mốc thời gian từng từ (faster-whisper trên máy)…")
-            else:
+            elif timing_media is None:
                 say(f"Lấy mốc thời gian từng từ ({_cloud.timing_model()})…")
                 words = _cloud.cloud_words(items, language, cache_dir=cache, audio_id=aid,
                                            media=media, log=say)
+        if timing_media is not None and not _cloud.local_words_available():
+            words = timed_on(timing_media, spans, language, say)
         groups = [(span, _cloud.split_sentences(t)) for span, t in zip(spans, texts)]
-        voice = _voice(media, say)
+        voice = _voice(timing_media or media, say)
         cues = _cloud.reindex(_cloud.time_groups(media, groups, language, words=words,
                                                  voice=voice))
         # kept for the ASR stage to persist (asr_words.json): re-timing must never

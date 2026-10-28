@@ -358,7 +358,7 @@ class PipelineWorker(QObject):
                 store.debug(f"asr: {msg.strip()}")
                 self.log.emit(msg)
 
-            asr.transcribe(job, provider=asr_name, log=asr_log)
+            asr.transcribe(job, provider=asr_name, log=asr_log, vocals=o.get("vocal_timing", True))
             translate.clear_ocr_provenance(job)   # non-OCR source → drop stale report
             self.log.emit("✓ Nhận dạng xong")
             if "has_hardsubs" not in job.metadata:

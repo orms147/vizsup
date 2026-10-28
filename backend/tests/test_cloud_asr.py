@@ -617,3 +617,26 @@ def test_still_empty_falls_back_to_segment_times_or_is_not_cached(cfg, tmp_path,
     assert _cloud.cloud_words([(chunk, (0.0, 5.0))], "zh", cache_dir=other,
                               audio_id="c") == []
     assert len(fc3.calls) == 1 and len(list(other.glob("words_*.json"))) == 1
+
+
+# --- Whisper stamping a whole stretch with ONE time over loud music (2026-10-28) -------
+
+def test_collapsed_words_are_replaced_by_a_reasked_stretch():
+    words = [("夏", 28.4, 28.6), ("季", 28.6, 28.8)] + \
+        [(c, 43.1, 43.1) for c in "我超威怎么"] + [("撞", 44.5, 44.9)]
+    assert _cloud.collapsed_holes(words) == [(28.8, 44.5)]
+
+    clip = {"text": "x", "words": [{"word": "我", "start": 3.8, "end": 4.0},
+                                   {"word": "超", "start": 4.0, "end": 4.2}], "segments": []}
+    asked = []
+    fixed, n = _cloud.repair_collapsed(words, {"segments": []}, 0.0,
+                                       reask=lambda sp: asked.append(sp) or clip)
+    assert asked == [(28.8, 44.5)] and n == 5
+    assert [w for w in fixed if w[0] in "我超"] == [("我", 32.6, 32.8), ("超", 32.8, 33.0)]
+    assert ("撞", 44.5, 44.9) in fixed and not _cloud.collapsed_holes(fixed)
+
+
+def test_a_long_segment_is_no_timing():
+    resp = {"segments": [{"start": 0.0, "end": 13.0, "text": "很长的一段"},
+                         {"start": 20.0, "end": 21.0, "text": "短"}]}
+    assert _cloud._words_from_segments(resp, 0.0, max_len=8.0) == [("短", 20.0, 21.0)]
