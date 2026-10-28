@@ -799,7 +799,14 @@ class LibraryView(QWidget):
         self._update_selection()
 
     def selected(self) -> list[dict]:
-        return [it for it in self._items if it["id"] in self._checked]
+        """The ticked rows that are SHOWING: a chip or the search can hide a ticked row, and
+        Xóa / Chỉ xóa file nặng / Ghép / Dựng hàng loạt must not act on what the user can't see."""
+        return [it for it in self._items if it["id"] in self._checked
+                and not self._rows[it["id"]].isHidden()]
+
+    def hidden_checked(self) -> int:
+        return sum(1 for it in self._items if it["id"] in self._checked
+                   and self._rows[it["id"]].isHidden())
 
     def _update_selection(self) -> None:
         sel = self.selected()
@@ -807,8 +814,10 @@ class LibraryView(QWidget):
         size = sum((self._details.get(it["id"]) or {}).get("size") or 0 for it in sel)
         heavy = sum((self._details.get(it["id"]) or {}).get("heavy") or 0 for it in sel)
         known = all(it["id"] in self._details for it in sel)
+        hid = self.hidden_checked()
+        tail = f" · {hid} đã tick đang bị bộ lọc ẩn (không bị xóa)" if hid else ""
         self.sel_label.setText(
-            "" if not n else f"Đã chọn {n} · {fmt_size(size) if known else '…'}")
+            ("" if not n else f"Đã chọn {n} · {fmt_size(size) if known else '…'}") + tail)
         self.delete_btn.setEnabled(n > 0)
         self.compile_btn.setEnabled(n > 0)
         self.compile_btn.setText(f"Ghép {n} video thành 1" if n > 1 else "Ghép thành 1 video")
