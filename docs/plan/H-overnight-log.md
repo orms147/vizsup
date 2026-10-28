@@ -81,3 +81,13 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 00:45 — next: sesion 1 → series dialog + CLI --series + per-line voice by gender;
   sesion 2 → compact cue list + 9:16 layout, overview strip, library chips/sort; me → model catalog
   auto-update, E2E.
+- 00:51 — commit 62eaf57 feat(update): model catalog auto-update (catalog/models.json on the
+  main branch, checked daily + Settings → "Cập nhật model mới"; only valid catalogs whose every model
+  is live on OpenRouter; user picks always win; "Có vizsup X mới" notice). Live check: 456 OpenRouter
+  models, every model the app uses is live. NOTE for owner: takes effect once catalog/models.json is
+  on main (I never push main).
+- 00:51 — E2E: ep 9 reached the gate (43 CN lines, 13 "Timing đoán"; Whisper's word times
+  collapsed → repaired). ⚠ The ep-9 link (modal_id 7699919754521283890) is NOT 《末日校车》: it is a
+  剑网3 game ad ("50级新世代！… 10月29日公测", no uploader) — the app downloaded exactly that id.
+  Used it anyway to test the mechanics: approved the COPY, "Thêm vào hàng dựng" added it to the
+  running batch (session file shows it queued).
