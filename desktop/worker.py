@@ -69,6 +69,15 @@ class PipelineWorker(QObject):
             store.debug(f"timing pass failed: {type(exc).__name__}: {exc}")
             self.log.emit(f"⚠ Bỏ qua bước chỉnh thời gian chuẩn ({type(exc).__name__}: {exc})")
 
+    def _guess_voices(self, job: Job) -> None:
+        from app.pipeline import voices
+
+        try:
+            voices.guess_job(job, log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"voice guess failed: {type(exc).__name__}: {exc}")
+            self.log.emit(f"⚠ Bỏ qua bước đoán giọng nam/nữ ({type(exc).__name__}: {exc})")
+
     def _series(self, job: Job, o: dict) -> None:
         """Link to / create the series profile (option ``series``: auto | none | slug) and
         copy its style and render settings into a project that has none. An aid: logged,
@@ -477,6 +486,11 @@ class PipelineWorker(QObject):
                 qa.review(job, o.get("refine") or o["translator"],
                           context={"_brief": brief.load_brief(job) or ""},
                           log=self.log.emit)
+            # 3.6) which lines are a man's / a woman's (pitch) — used when "Giọng theo
+            # nhân vật" is on; only runs right after translating, so it never revokes an
+            # approval. An aid: logged, never fatal.
+            if o.get("voice_guess", True):
+                self._guess_voices(job)
         store.debug("translate ok → emit gate_reached")
 
         self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
@@ -587,6 +601,7 @@ class PipelineWorker(QObject):
             self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
             segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
                                       rate=o.get("rate"), log=self.log.emit,
+                                      voice_by_gender=bool(o.get("voice_by_gender")),
                                       cancel=lambda: self._cancel,  # per-cue cancel (N-10)
                                       progress=lambda d, n: self.progress.emit(
                                           0.2 + 0.3 * d / max(1, n),

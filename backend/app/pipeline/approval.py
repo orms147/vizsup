@@ -39,7 +39,7 @@ def _overrides_bytes(job: Job) -> bytes:
         return b""
     clean = [{k: v for k, v in r.items() if k not in _EDITOR_ONLY} if isinstance(r, dict) else r
              for r in rows]
-    if not any(isinstance(r, dict) and (r.get("gain_db") or r.get("mute")) for r in clean):
+    if not any(isinstance(r, dict) and (r.get("gain_db") or r.get("mute") or r.get("voice")) for r in clean):
         return b""          # all-default rows == no overrides file
     return json.dumps(clean, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
