@@ -38,6 +38,7 @@ class Timeline(QWidget):
     dragStarted = Signal()     # a drag gesture BEGAN — one undo snapshot per drag
     dragFinished = Signal(int)
     zoomChanged = Signal(float)
+    contextRequested = Signal(int, object)   # right-click on a block: (index, global QPoint)
 
     def __init__(self) -> None:
         super().__init__()
@@ -291,6 +292,15 @@ class Timeline(QWidget):
         return None
 
     def mousePressEvent(self, ev) -> None:
+        if ev.button() != Qt.LeftButton:     # right/middle never drag or scrub; right = menu
+            if ev.button() == Qt.RightButton:
+                hit = self._hit(ev.position().x(), ev.position().y())
+                if hit:
+                    self._sel = hit[0]
+                    self.blockSelected.emit(hit[0])
+                    self.update()
+                    self.contextRequested.emit(hit[0], ev.globalPosition().toPoint())
+            return
         x, y = ev.position().x(), ev.position().y()
         hit = self._hit(x, y)
         if hit:

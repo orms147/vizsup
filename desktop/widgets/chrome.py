@@ -226,9 +226,13 @@ class StepRail(QWidget):
                 h.addWidget(icon_label("ChevronRight", V2["dim"], 14))
         self.set_active(0)
 
-    def set_active(self, idx: int) -> None:
+    def set_active(self, idx: int, *, dimmed: bool = False) -> None:
+        """``dimmed``: a page outside the flow (Thư viện / Cài đặt) is open — keep the ticks
+        of the finished steps, but light none of them."""
         for i, b in enumerate(self._btns):
             state = "done" if i < idx else "active" if i == idx else "todo"
+            if dimmed and state == "active":
+                state = "todo"
             b.setObjectName({"done": "stepDone", "active": "stepActive", "todo": "step"}[state])
             b.setIcon(_step_badge(i + 1, state))
             b.style().unpolish(b)
@@ -284,6 +288,7 @@ class AppNav(QFrame):
         self.library_btn.clicked.connect(self.libraryClicked)
         h.addWidget(self.library_btn)
         self.settings_btn = button("Cài đặt", "Settings2", variant="ghost")
+        self.settings_btn.setCheckable(True)
         self.settings_btn.clicked.connect(self.settingsClicked)
         h.addWidget(self.settings_btn)
         self.primary = button("", "ShieldCheck", variant="primary")

@@ -42,6 +42,11 @@ from app.models import Job  # noqa: E402
 from app.providers.registry import get_tts, list_providers  # noqa: E402
 
 INPUT, EDITOR, RENDER, SETTINGS, LIBRARY = 0, 1, 2, 3, 4
+# what the status bar says when a page has nothing running; the editor's line used to stay
+# on every other page (Dựng video, Cài đặt, Thư viện, Bắt đầu)
+EDITOR_IDLE = "Sửa phụ đề — duyệt khi xong"
+PAGE_IDLE = {INPUT: "Sẵn sàng", EDITOR: EDITOR_IDLE, RENDER: "Chọn âm thanh rồi dựng video",
+             SETTINGS: "Cài đặt", LIBRARY: "Thư viện — mọi dự án trên máy"}
 
 
 class MainWindow(QMainWindow):
@@ -154,6 +159,7 @@ class MainWindow(QMainWindow):
         self._on_page(INPUT)
         self._tray = self._make_tray()
         QTimer.singleShot(1500, self._offer_recovery)
+        self._app_shortcuts()
         self._toast = Toast(self)
         app = QApplication.instance()
         if app is not None:
@@ -211,15 +217,49 @@ class MainWindow(QMainWindow):
         self.nav.keysClicked.connect(self._show_shortcuts)
         self.status = StatusBar()                   # .setText("● …") still works
 
+    def _app_shortcuts(self) -> None:
+        """Whole-app keys (also listed in the Phím tắt dialog): Ctrl+L library, Ctrl+, settings,
+        Ctrl+1/2/3 the three steps, Esc leaves Thư viện / Cài đặt."""
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        def sc(seq: str, fn) -> None:
+            QShortcut(QKeySequence(seq), self, activated=fn)
+
+        sc("Ctrl+L", self._open_library)
+        sc("Ctrl+,", self._open_settings)
+        sc("Ctrl+1", lambda: self._goto_step(INPUT))
+        sc("Ctrl+2", lambda: self._goto_step(EDITOR))
+        sc("Ctrl+3", lambda: self._goto_step(RENDER))
+        # Esc only while Thư viện / Cài đặt is showing (_on_page): a window-wide Esc would
+        # collide with the editor's own (find bar, full screen)
+        self._esc_back = QShortcut(QKeySequence("Esc"), self, activated=self._leave_overlay_page)
+        self._esc_back.setEnabled(False)
+
+    def _leave_overlay_page(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx == LIBRARY:
+            self.library.closed.emit()
+        elif idx == SETTINGS:
+            self.settings_view.request_close()      # asks first when there are unsaved changes
+
     def _show_shortcuts(self) -> None:
         from desktop.widgets.shortcuts import ShortcutsDialog
 
         ShortcutsDialog(self).exec()
 
     def _on_page(self, idx: int) -> None:
-        if idx not in (SETTINGS, LIBRARY):
+        if idx in (SETTINGS, LIBRARY):
+            self.steps.set_active(getattr(self, "_rail_idx", INPUT), dimmed=True)
+        else:
+            self._rail_idx = idx
             self.steps.set_active(idx)
         self.nav.library_btn.setChecked(idx == LIBRARY)
+        self.nav.settings_btn.setChecked(idx == SETTINGS)
+        if getattr(self, "_esc_back", None) is not None:
+            self._esc_back.setEnabled(idx in (SETTINGS, LIBRARY))
+        shown = self.status.text.text()
+        if shown in PAGE_IDLE.values() and shown != PAGE_IDLE[idx]:
+            self.status.set_status(PAGE_IDLE[idx])     # never over a message or a progress line
         self.nav.set_primary("Duyệt và dựng" if idx == EDITOR else None)
         self.nav.set_saved("saved" if idx == EDITOR else None)
         self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
@@ -362,6 +402,7 @@ class MainWindow(QMainWindow):
     def _open_library(self) -> None:
         idx = self.stack.currentIndex()
         if idx == LIBRARY:
+            self.nav.library_btn.setChecked(True)      # the click toggled it off
             return
         self._before_library = self._before_settings if idx == SETTINGS else idx
         self.library.refresh()
@@ -432,6 +473,9 @@ class MainWindow(QMainWindow):
                                     duration=fmt_time(dur, 0),
                                     pending=self.editor.pending_count())
                 if not dlg.exec():
+                    if dlg.review_requested:
+                        self.stack.setCurrentIndex(EDITOR)
+                        self.editor.show_pending()
                     return
                 approval.approve(self.job, cues=len(self.editor.cues))
                 self.editor.refresh_approval()
@@ -1197,6 +1241,7 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self, group: str = "keys") -> None:
         if self.stack.currentIndex() == SETTINGS:
+            self.nav.settings_btn.setChecked(True)
             return
         self._before_settings = self.stack.currentIndex()
         self.settings_view.load_values()

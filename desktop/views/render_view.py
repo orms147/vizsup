@@ -124,13 +124,8 @@ class ModeCard(QPushButton):
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setObjectName("modeCard")
-        self.setMinimumHeight(60)           # grows with its text: no fixed min-height here
-        self.setStyleSheet(
-            f"QPushButton#modeCard{{text-align:left;background:{V2['panel']};"
-            f"border:1px solid {V2['line']};border-radius:7px;padding:0;}}"
-            f"QPushButton#modeCard:hover{{border-color:#525161;}}"
-            f"QPushButton#modeCard:checked{{background:{V2['purple_soft']};"
-            f"border-color:{V2['purple_line']};}}")
+        self._min_h = 0
+        self._apply_css()
         h = QHBoxLayout(self)
         h.setContentsMargins(12, 8, 10, 8)
         h.setSpacing(10)
@@ -153,8 +148,34 @@ class ModeCard(QPushButton):
         self._paint_state(False)
         glow(self, corner=7)
 
+    def _apply_css(self) -> None:
+        # the app stylesheet gives every QPushButton min-height 36 (it beats setMinimumHeight),
+        # and a button's own size hint ignores the labels inside it: the card was 36 px
+        # tall while its two lines need ~45 → title and description drew on top of each
+        # other. So the card carries its own min-height, recomputed from its text.
+        self.setStyleSheet(
+            f"QPushButton#modeCard{{text-align:left;background:{V2['panel']};"
+            f"border:1px solid {V2['line']};border-radius:7px;padding:0;"
+            f"min-height:{self._min_h}px;}}"
+            f"QPushButton#modeCard:hover{{border-color:#525161;}}"
+            f"QPushButton#modeCard:checked{{background:{V2['purple_soft']};"
+            f"border-color:{V2['purple_line']};}}")
+
+    def _fit_height(self) -> None:
+        lay = self.layout()
+        need = lay.totalHeightForWidth(self.width()) if lay is not None and self.width() else 0
+        need = max(need, lay.totalMinimumSize().height() if lay is not None else 0)
+        if need and need != self._min_h:
+            self._min_h = need
+            self._apply_css()
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._fit_height()
+
     def set_desc(self, text: str) -> None:
         self._desc.setText(text)
+        self._fit_height()
 
     def desc(self) -> str:
         return self._desc.text()

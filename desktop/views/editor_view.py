@@ -259,6 +259,8 @@ class EditorView(QWidget):
     def _wire(self) -> None:
         cl, ins, tl, vid = self.cue_list, self.inspector, self.timeline, self.video
         cl.rowSelected.connect(self._on_row_selected)
+        cl.contextRequested.connect(self._show_cue_menu)
+        tl.contextRequested.connect(self._show_cue_menu)
         cl.editRequested.connect(lambda: ins.focus_text(select_all=True))
         cl.splitRequested.connect(self._split)
         cl.mergeRequested.connect(self._merge)
@@ -279,6 +281,7 @@ class EditorView(QWidget):
         ins.editStarted.connect(self._snapshot)        # one undo step per editing session
         ins.viEdited.connect(self._on_vi_edited)
         ins.commitNext.connect(self._commit_next)
+        ins.leaveRequested.connect(lambda: self.cue_list.view.setFocus())
         ins.editFocused.connect(vid.pause)
         ins.nudgeRequested.connect(self._nudge)
         ins.setEdgeRequested.connect(self._set_edge)
@@ -355,6 +358,8 @@ class EditorView(QWidget):
         QShortcut(QKeySequence.Redo, self, activated=self._redo_action)          # Ctrl+Y
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._redo_action)
         QShortcut(QKeySequence.Find, self, activated=lambda: self._toggle_find(True))
+        QShortcut(QKeySequence("Ctrl+H"), self,
+                  activated=lambda: self._toggle_find(True, replace=True))
         esc = QShortcut(QKeySequence(Qt.Key_Escape), self.find_bar,
                         activated=lambda: self._toggle_find(False))
         esc.setContext(Qt.WidgetWithChildrenShortcut)   # don't swallow Esc app-wide
@@ -374,6 +379,10 @@ class EditorView(QWidget):
         sc("Left", lambda: self.seek_by(-SEEK_STEP))
         sc("Right", lambda: self.seek_by(+SEEK_STEP))
         sc("F", self.toggle_fullscreen)
+        sc("D", self._mark_reviewed)            # "Đã xem" + jump to the next pending line
+        sc("Ctrl+D", self._mark_reviewed)       # the same from inside the text box
+        sc("Ctrl+Up", lambda: self.step_cue(-1, keep_typing=True))
+        sc("Ctrl+Down", lambda: self.step_cue(+1, keep_typing=True))
         sc("F8", lambda: self._goto_pending(+1))
         sc("Shift+F8", lambda: self._goto_pending(-1))
         sc("Ctrl+Return", self.approveRequested.emit)
@@ -388,9 +397,10 @@ class EditorView(QWidget):
                 sc(f"{pre}+Right", lambda w=which, d=step: self._nudge(w, d))
 
     # --- keyboard navigation / full screen --------------------------------------------
-    def step_cue(self, step: int) -> None:
+    def step_cue(self, step: int, *, keep_typing: bool = False) -> None:
         """↑ / ↓: the previous / next line (from the one at the playhead when none is
-        selected); the video jumps to it."""
+        selected); the video jumps to it. ``keep_typing`` (Ctrl+↑/↓ from the text box)
+        leaves the cursor in the box of the new line."""
         if not self.cues:
             return
         cur = self._sel
@@ -406,8 +416,11 @@ class EditorView(QWidget):
             else:
                 idx = max((i for i, c in enumerate(self.cues) if c.end <= t), default=0)
         idx = max(0, min(len(self.cues) - 1, idx))
+        typing = keep_typing and self._editing()
         self.cue_list.selectRow(idx)
         self._select(idx, seek=True)
+        if typing:
+            self.inspector.focus_text()
 
     def seek_by(self, seconds: float) -> None:
         """← / →: jump back / ahead (10 s, like YouTube), clamped to the video."""
@@ -476,6 +489,8 @@ class EditorView(QWidget):
         v = QVBoxLayout(bar)
         v.setContentsMargins(10, 8, 10, 8)
         v.setSpacing(6)
+        # one row for plain searching (the common case at 768 px high: it leaves the list
+        # its room); "Thay…" / Ctrl+H adds the replace row under it
         r1 = QHBoxLayout()
         r1.setSpacing(6)
         self.find_in = QLineEdit()
@@ -483,19 +498,31 @@ class EditorView(QWidget):
         self.find_in.returnPressed.connect(self._find_next)
         self.find_in.textChanged.connect(self._update_find_count)
         self.find_lbl = label("", "small")
+        nxt = button("Tiếp", small=True, tip="Tới câu khớp tiếp theo (Enter)")
+        nxt.clicked.connect(self._find_next)
+        self.find_case = QCheckBox("Aa")
+        self.find_case.setToolTip("Phân biệt hoa / thường")
+        self.find_case.toggled.connect(self._update_find_count)
+        self.repl_toggle = button("Thay…", small=True, checkable=True,
+                                  tip="Hiện ô thay thế (Ctrl+H)")
+        self.repl_toggle.toggled.connect(self._show_replace)
         close = icon_button("X", "Đóng (Esc)")
         close.clicked.connect(lambda: self._toggle_find(False))
         r1.addWidget(self.find_in, 1)
         r1.addWidget(self.find_lbl)
+        r1.addWidget(nxt)
+        r1.addWidget(self.find_case)
+        r1.addWidget(self.repl_toggle)
         r1.addWidget(close)
-        r2 = QHBoxLayout()
+        self.repl_row = QWidget()
+        r2 = QHBoxLayout(self.repl_row)
+        r2.setContentsMargins(0, 0, 0, 0)
         r2.setSpacing(6)
         self.repl_in = QLineEdit()
         self.repl_in.setPlaceholderText("Thay bằng…")
         self.repl_in.returnPressed.connect(self._replace_one)
         r2.addWidget(self.repl_in, 1)
         for text, slot, tip in (
-            ("Tiếp", self._find_next, "Tới câu khớp tiếp theo (Enter)"),
             ("Thay", self._replace_one, "Thay ở câu đang chọn, rồi tới câu khớp sau"),
             ("Thay tất cả", self._replace_all,
              "Thay trong TOÀN BỘ phụ đề — hoàn tác được bằng Ctrl+Z"),
@@ -503,22 +530,26 @@ class EditorView(QWidget):
             b = button(text, small=True, tip=tip)
             b.clicked.connect(slot)
             r2.addWidget(b)
-        self.find_case = QCheckBox("Aa")
-        self.find_case.setToolTip("Phân biệt hoa / thường")
-        self.find_case.toggled.connect(self._update_find_count)
-        r2.addWidget(self.find_case)
+        self.repl_row.hide()
         v.addLayout(r1)
-        v.addLayout(r2)
+        v.addWidget(self.repl_row)
         self.find_bar = bar
         return bar
 
-    def _toggle_find(self, on: bool | None = None) -> None:
+    def _toggle_find(self, on: bool | None = None, *, replace: bool = False) -> None:
         show = self.find_bar.isHidden() if on is None else on
         self.find_bar.setVisible(show)
         if show:
+            if replace:
+                self.repl_toggle.setChecked(True)
             self.find_in.setFocus()
             self.find_in.selectAll()
             self._update_find_count()
+
+    def _show_replace(self, on: bool) -> None:
+        self.repl_row.setVisible(on)
+        if on:
+            self.repl_in.setFocus()
 
     def _case(self) -> bool:
         return self.find_case.isChecked()
@@ -1168,6 +1199,15 @@ class EditorView(QWidget):
 
     def pending_count(self) -> int:
         return len(self.cue_list.pending_rows())
+
+    def show_pending(self) -> None:
+        """"Xem N câu" in the approve dialog: only the lines still to look at, the first
+        one selected, the keyboard on the list (D / F8 / ↑↓ carry on from there)."""
+        self.cue_list.set_review_only(True)
+        rows = self.cue_list.pending_rows()
+        if rows:
+            self.cue_list.selectRow(rows[0])
+        self.cue_list.view.setFocus()
 
     # --- dub preview / shorten -------------------------------------------------
     def _toast(self, msg: str) -> None:
@@ -1821,6 +1861,40 @@ class EditorView(QWidget):
         if idx == self._sel and 0 <= idx < len(self.cues):
             self.inspector.refresh_timing(self.cues[idx])
         self._mark_dirty()
+
+    # --- right-click menu (list row / timeline block) --------------------------------
+    def _cue_menu(self, row: int):
+        """The menu for line ``row``: only existing actions, each acting on the current
+        line (the row was selected by the click). Destructive ones snapshot first, so
+        Ctrl+Z brings them back."""
+        from PySide6.QtWidgets import QMenu
+
+        c = self.cues[row]
+        m = QMenu(self)
+        m.addAction("Tách tại vị trí phát	S", self._split)
+        merge = m.addAction("Gộp với câu sau	M", self._merge)
+        merge.setEnabled(row < len(self.cues) - 1)
+        m.addAction("Thêm câu sau câu này", self._add)
+        m.addSeparator()
+        m.addAction("Dịch lại (3 phương án)	Alt+R", self._retranslate)
+        m.addAction("Rút gọn cho vừa thời lượng", self._shorten)
+        m.addAction("Tự canh theo giọng nói	A", self._auto_snap_selected)
+        lock = m.addAction("Khóa timing")
+        lock.setCheckable(True)
+        lock.setChecked(c.locked)
+        lock.triggered.connect(self._on_lock)
+        m.addSeparator()
+        seen = m.addAction("Đã xem, sang câu cần xem lại tiếp	D", self._mark_reviewed)
+        seen.setEnabled(bool(self.cue_list.model.issues_at(row)) and not cuemodel.is_reviewed(c))
+        m.addSeparator()
+        m.addAction("Xóa câu này (Ctrl+Z hoàn tác)", self._delete)
+        return m
+
+    def _show_cue_menu(self, row: int, global_pos) -> None:
+        if 0 <= row < len(self.cues):
+            m = self._cue_menu(row)
+            m.setAttribute(Qt.WA_DeleteOnClose)
+            m.popup(global_pos)
 
     # --- tools ---------------------------------------------------------------
     def _cur(self) -> int:

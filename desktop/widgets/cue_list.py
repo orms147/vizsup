@@ -7,7 +7,15 @@ Rows are never edited inline: the inspector on the right owns editing. The
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QItemSelectionModel,
+    QModelIndex,
+    QRect,
+    QSize,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -220,6 +228,7 @@ class CueList(QFrame):
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
+    contextRequested = Signal(int, object)   # right-click on a row: (row, global QPoint)
 
     def __init__(self) -> None:
         super().__init__()
@@ -303,6 +312,8 @@ class CueList(QFrame):
             lambda cur, _prev: self.rowSelected.emit(cur.row()) if cur.isValid() else None)
         self.view.selectionModel().currentRowChanged.connect(lambda *_: self._update_pos())
         self.view.editRequested.connect(self.editRequested)
+        self.view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._on_context)
         self._stack.addWidget(self.view)
         empty = QWidget()
         ev = QVBoxLayout(empty)
@@ -328,7 +339,7 @@ class CueList(QFrame):
         fh.addWidget(self.pos_lbl)
         fh.addStretch(1)
         self.reviewed_btn = button("Đã xem", "Check", variant="ghost",
-                                   tip="Đánh dấu đã kiểm tra rồi tới câu còn chờ")
+                                   tip="Đánh dấu đã kiểm tra rồi tới câu còn chờ (D hoặc Ctrl+D)")
         self.reviewed_btn.clicked.connect(self.reviewedRequested)
         fh.addWidget(self.reviewed_btn)
         nxt = button("Xem lại", "ChevronRight", variant="ghost", tip="Tới câu cần xem lại (F8)")
@@ -336,6 +347,19 @@ class CueList(QFrame):
         fh.addWidget(nxt)
         fh.addWidget(label("F8", "small"))
         v.addWidget(foot)
+
+    def _on_context(self, pos) -> None:
+        """Right-click: the row under the pointer becomes the current one (unless it is
+        already part of the selection), then the editor shows its menu."""
+        ix = self.view.indexAt(pos)
+        if not ix.isValid():
+            return
+        sm = self.view.selectionModel()
+        if not sm.isSelected(ix):
+            self.view.setCurrentIndex(ix)
+        elif self.view.currentIndex() != ix:       # keep a multi-selection (style scope)
+            sm.setCurrentIndex(ix, QItemSelectionModel.NoUpdate)
+        self.contextRequested.emit(ix.row(), self.view.viewport().mapToGlobal(pos))
 
     def _build_more_menu(self) -> None:
         from PySide6.QtWidgets import QMenu

@@ -42,6 +42,7 @@ class VzDialog(QDialog):
 class ApproveDialog(VzDialog):
     def __init__(self, parent, *, cues: int, voice: str, duration: str, pending: int) -> None:
         super().__init__("Duyệt phụ đề để lồng tiếng", parent, width=480)
+        self.review_requested = False      # "Xem N câu": go back and show the pending lines
         self.body.addWidget(label(
             "Nội dung bạn đang thấy sẽ được dùng để tạo giọng tiếng Việt. Sau bước này, "
             "bạn chọn âm thanh và dựng video.", "secondary", wrap=True))
@@ -70,6 +71,10 @@ class ApproveDialog(VzDialog):
             self.body.addWidget(warn)
         self.body.addWidget(label(
             "Chỉnh sửa nội dung sau khi duyệt sẽ yêu cầu duyệt lại.", "small", wrap=True))
+        if pending:
+            self.review_btn = self.add_button(f"Xem {pending} câu")
+            self.review_btn.setToolTip("Quay lại và chỉ hiện các câu còn cần xem lại")
+            self.review_btn.clicked.connect(lambda: setattr(self, "review_requested", True))
         self.add_button("Quay lại sửa")
         self.add_button("Duyệt phụ đề", icon_name="ShieldCheck", primary=True, accept=True)
 
