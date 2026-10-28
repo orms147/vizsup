@@ -66,3 +66,18 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   + input option "Chỉnh thời gian chuẩn". 1139 tests pass. → 5192596.
 - 00:35 — sesion 1 → next: "Bộ phim" series profile (branch feat/series).
 - NOTE: times above 00:20–01:40 were estimates (wrong); real clock from here on.
+- 00:40 — E2E: demo app (old code, batch crawling on the edge-tts bug) killed hard =
+  crash test. Relaunched on the new code: "Làm tiếp việc còn dở?" appeared, accepted → the batch
+  resumed at 1/4 · 40 % (TTS cache kept). Episode 9 started in the main slot at the same time.
+- 00:40 — CLAUDE.md updated for tonight's features (da52cb7).
+- 00:45 — commit 7e6f6a3 feat(render): "Thẻ tập" — "Tập {n}" chip (first 5 s) + "Còn tiếp ·
+  Tập {next}" end card (last 4 s), resolved from each title, fits a batch (roadmap wave 2 #5).
+- 00:45 — merged feat/ux-quickwins (sesion 2, 8 commits: D = Đã xem + next, Ctrl+↑/↓ in the
+  text box, one-row find bar, right-click menus, "Xem N câu" in approve dialog, render cards height
+  fix, status line / step rail, library keys, new shortcut sheet) → 212d703.
+- 00:45 — merged feat/series (sesion 1: "Bộ phim" profile in storage/_series/, glossary +
+  characters + brief + pronounce inherited, learn on approval, previous episode's last 8 lines as
+  context, input "Bộ phim" combo) → 243b53d. Full suite 1214 passed, ruff clean.
+- 00:45 — next: sesion 1 → series dialog + CLI --series + per-line voice by gender;
+  sesion 2 → compact cue list + 9:16 layout, overview strip, library chips/sort; me → model catalog
+  auto-update, E2E.
