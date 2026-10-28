@@ -166,3 +166,4 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   editor filter chip "Cần xem lại" clipped; editor timeline shows only its header (no lanes) — the last
   one predates tonight. Offscreen tests at 100 % scale missed all of these → asked for tests at
   QT_SCALE_FACTOR=1.5.
+- 03:03 — auto-continue check: full suite on 644e7ad still running (machine shared with 2 sessions' suites); sesion 1 on U3 (bg-exit), sesion 2 on the DPI layout fixes (local commit 0c44f04, not pushed yet). Nothing to merge.
