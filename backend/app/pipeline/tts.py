@@ -26,6 +26,7 @@ from pathlib import Path
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt
 from app.providers.registry import get_tts
+from app.fsutil import atomic_write_text
 
 _RETRY_DELAYS = (1.0, 4.0)   # 3 attempts: try, wait 1s, try, wait 4s, final try
 
@@ -55,7 +56,7 @@ def _load_manifest(job: Job) -> dict:
 
 
 def _save_manifest(job: Job, manifest: dict) -> None:
-    (job.tts_dir / "manifest.json").write_text(
+    atomic_write_text((job.tts_dir / "manifest.json"),
         json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
 

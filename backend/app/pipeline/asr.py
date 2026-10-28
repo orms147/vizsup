@@ -11,6 +11,7 @@ import subprocess
 from app.models import Job
 from app.pipeline.srt import write_srt
 from app.providers.registry import get_asr
+from app.fsutil import atomic_write_text
 
 
 def _extract_audio(job: Job) -> None:
@@ -60,13 +61,13 @@ def _persist_timing(job: Job, asr, cues) -> None:
     groups = getattr(asr, "last_groups", None)
     try:
         if words is not None or groups is not None:
-            (job.work_dir / "asr_words.json").write_text(json.dumps(
+            atomic_write_text((job.work_dir / "asr_words.json"), json.dumps(
                 {"words": words or [], "groups": [[list(sp), sents] for sp, sents in groups or []]},
                 ensure_ascii=False), encoding="utf-8")
         report = [{"index": c.index, "guess": True} for c in cues if getattr(c, "guess", False)]
         path = job.work_dir / "timing_report.json"
         if report:
-            path.write_text(json.dumps(report), encoding="utf-8")
+            atomic_write_text(path, json.dumps(report), encoding="utf-8")
         elif path.exists():
             path.unlink()
     except OSError:

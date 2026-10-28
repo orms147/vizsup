@@ -45,6 +45,7 @@ from desktop.ui_thread import BgRunner
 from desktop.widgets.chrome import ProjectBar, badge, button, compact_combo, icon_label, label
 from desktop.widgets.pointer import glow
 from desktop.widgets.video_panel import VideoPanel
+from app.fsutil import atomic_write_text
 
 try:
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -1301,9 +1302,10 @@ class RenderView(QWidget):
             self.stage_rows["assemble"].set_state("active", "Ghép giọng, phụ đề và video")
 
     def set_progress(self, frac: float, msg: str) -> None:
-        pct = int(frac * 100)
-        self.bar.setValue(pct)
-        self.p_badge.setText(f"{pct}%")
+        if frac >= 0:                      # < 0: only a message (e.g. waiting for the network)
+            pct = int(frac * 100)
+            self.bar.setValue(pct)
+            self.p_badge.setText(f"{pct}%")
         self.p_detail.setText(msg)
 
     def append_log(self, line: str) -> None:
@@ -1547,7 +1549,7 @@ def _update_project_file(job, **fields) -> None:
     d = _read_project_file(job)
     d.update(fields)
     try:
-        (Path(job.work_dir) / VOICE_FILE).write_text(json.dumps(d), encoding="utf-8")
+        atomic_write_text((Path(job.work_dir) / VOICE_FILE), json.dumps(d), encoding="utf-8")
     except OSError:
         pass
 

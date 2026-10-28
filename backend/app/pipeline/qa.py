@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.models import Job
 from app.providers.registry import get_translator
+from app.fsutil import atomic_write_text
 
 BATCH = 40
 # Lines are cut from running speech, so a sentence often spans two or three of them.
@@ -160,7 +161,7 @@ def review(job: Job, provider_name: str, *, context: dict | None = None, log=Non
 
         with ThreadPoolExecutor(3) as ex:
             findings = [f for part in ex.map(one, range(0, len(pairs), BATCH)) for f in part]
-        (job.work_dir / _REPORT).write_text(json.dumps(findings, ensure_ascii=False, indent=1),
+        atomic_write_text((job.work_dir / _REPORT), json.dumps(findings, ensure_ascii=False, indent=1),
                                             encoding="utf-8")
         say(f"✓ AI soát bản dịch: {len(findings)} câu nên xem lại" if findings
             else "✓ AI soát bản dịch: không thấy câu nào sai rõ")

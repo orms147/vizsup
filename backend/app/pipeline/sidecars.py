@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 _OVERRIDES = "overrides.json"
 _STYLES = "style_overrides.json"
@@ -39,7 +40,7 @@ def save_overrides(job: Job, rows: list[dict]) -> None:
     p = job.work_dir / _OVERRIDES
     if any(r.get("gain_db") or r.get("mute") or r.get("lock") or r.get("reviewed")
            for r in rows):
-        p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(p, json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     elif p.exists():
         p.unlink()
 
@@ -66,6 +67,6 @@ def save_style_overrides(job: Job, styles: dict[str, dict]) -> None:
     """Persist style overrides; an empty dict removes the file."""
     p = job.work_dir / _STYLES
     if styles:
-        p.write_text(json.dumps(styles, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(p, json.dumps(styles, ensure_ascii=False), encoding="utf-8")
     elif p.exists():
         p.unlink()

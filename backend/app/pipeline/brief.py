@@ -24,6 +24,7 @@ import json
 from collections.abc import Callable
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 BRIEF_FILE = "context_brief.json"
 SAMPLE_CHARS = 6000          # transcript budget sent to the brief model
@@ -146,7 +147,7 @@ def load_brief(job: Job) -> str | None:
 
 
 def _save(job: Job, *, brief: str, note: str | None, key: str, source: str) -> None:
-    (job.work_dir / BRIEF_FILE).write_text(json.dumps(
+    atomic_write_text((job.work_dir / BRIEF_FILE), json.dumps(
         {"brief": brief, "note": (note or "").strip(), "inputs": key, "source": source},
         ensure_ascii=False, indent=1), encoding="utf-8")
 

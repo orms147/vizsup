@@ -154,6 +154,7 @@ def test_mainwindow_run_routes_every_connection_through_the_relay(qapp, monkeypa
     class Host:
         job = None
         _on_finished = staticmethod(lambda: None)
+        _persist = staticmethod(lambda: None)        # crash-recovery bookkeeping
 
     h = Host()
     main_mod.MainWindow._run(h, "run_to_gate", {},

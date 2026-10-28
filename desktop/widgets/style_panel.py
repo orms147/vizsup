@@ -29,6 +29,7 @@ from app.pipeline import glass
 from desktop.theme import V2
 from desktop.widgets.chrome import button, icon_button
 from desktop.widgets.no_wheel import NoWheelComboBox, NoWheelSlider
+from app.fsutil import atomic_write_text
 
 FONTS = ["Be Vietnam Pro", "Noto Sans", "Arial"]
 # "Kiểu nền" → (border_style, box_alpha)
@@ -493,7 +494,7 @@ class StylePanel(QScrollArea):
         self._applied = presets[name]
         p = self._presets_file()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(p, json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")
         self._refresh_presets(select=name)
 
     def _delete_preset(self) -> None:
@@ -501,6 +502,6 @@ class StylePanel(QScrollArea):
         presets = self._load_presets()
         if name in presets:
             del presets[name]
-            self._presets_file().write_text(json.dumps(presets, ensure_ascii=False, indent=2),
+            atomic_write_text(self._presets_file(), json.dumps(presets, ensure_ascii=False, indent=2),
                                             encoding="utf-8")
             self._refresh_presets()

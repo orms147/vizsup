@@ -51,6 +51,7 @@ from pathlib import Path
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
+from app.fsutil import atomic_write_text
 
 SPLIT_MIN = 45 * 60.0     # only videos longer than this are split
 PART_TARGET = 30 * 60.0   # planned part length
@@ -359,12 +360,12 @@ def split_job(job: Job, storage: Path, *, title: str, target: float = PART_TARGE
         meta = {"title": f"{title} · Phần {k + 1}/{n}", "duration": dur,
                 "platform": job.metadata.get("platform"),
                 "group": {"id": gid, "index": k + 1, "total": n, "start": info["start"]}}
-        (pdir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+        atomic_write_text((pdir / "metadata.json"), json.dumps(meta, ensure_ascii=False, indent=2),
                                             encoding="utf-8")
         parts.append(info)
     group = {"id": gid, "title": title, "url": job.url, "duration": round(duration, 3),
              "target": target, "parts": parts, "created": int(time.time())}
-    (job.work_dir / GROUP_FILE).write_text(json.dumps(group, ensure_ascii=False, indent=2),
+    atomic_write_text((job.work_dir / GROUP_FILE), json.dumps(group, ensure_ascii=False, indent=2),
                                            encoding="utf-8")
     shutil.rmtree(tmp, ignore_errors=True)       # ffmpeg left its render.log there
     tick(1.0, f"Đã chia {n} phần")
@@ -423,7 +424,7 @@ def _prepare_softsub(group_dir: Path, jobs: list[Job], offsets: list[float], *, 
         texts = [(j.subs_ass.read_text(encoding="utf-8"), off)
                  for j, off in zip(jobs, offsets, strict=True) if j.subs_ass.exists()]
         if len(texts) == len(jobs):
-            (group_dir / "subs.ass").write_text(merge_ass(texts), encoding="utf-8")
+            atomic_write_text((group_dir / "subs.ass"), merge_ass(texts), encoding="utf-8")
         for name in (assemble.RENDER_INFO, "hardsub_region.json"):
             src = jobs[0].work_dir / name
             if src.exists():
@@ -568,7 +569,7 @@ def join(group_dir: Path, storage: Path, *,
     write_srt(merged, group_dir / "vi.srt")
 
     lst = group_dir / "join.txt"
-    lst.write_text("".join("file '" + o.resolve().as_posix().replace("'", "'\\''") + "'\n"
+    atomic_write_text(lst, "".join("file '" + o.resolve().as_posix().replace("'", "'\\''") + "'\n"
                            for o in outs), encoding="utf-8")
     total = sum(durations)
     if same_params(outs):
@@ -589,7 +590,7 @@ def join(group_dir: Path, storage: Path, *,
             f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}];" for i in range(len(outs)))
         graph += "".join(f"[v{i}][a{i}]" for i in range(len(outs))) + \
             f"concat=n={len(outs)}:v=1:a=1[v][a]"
-        (group_dir / "join_graph.txt").write_text(graph, encoding="utf-8")
+        atomic_write_text((group_dir / "join_graph.txt"), graph, encoding="utf-8")
         cmd += ["-filter_complex_script", "join_graph.txt", "-map", "[v]", "-map", "[a]",
                 *assemble._video_args(assemble._video_encoder(), False),
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", TMP_OUT]
@@ -674,9 +675,9 @@ def share_terms(job: Job, storage: Path) -> int:
     if not merged:
         return 0
     text = json.dumps(dict(sorted(merged.items())), ensure_ascii=False, indent=1)
-    own.write_text(text, encoding="utf-8")
+    atomic_write_text(own, text, encoding="utf-8")
     if shared.parent.is_dir():
-        shared.write_text(text, encoding="utf-8")
+        atomic_write_text(shared, text, encoding="utf-8")
     return len(merged)
 
 

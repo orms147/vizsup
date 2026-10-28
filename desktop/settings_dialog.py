@@ -38,6 +38,7 @@ from app.config import settings  # noqa: E402
 from app.doctor import run_checks  # noqa: E402
 from app.providers.registry import find_provider  # noqa: E402
 from app.tools import cookie_age_days, update_edge_tts, update_ytdlp  # noqa: E402
+from app.fsutil import atomic_write_text
 
 # (env var, display name, settings attr, provider name)
 KEYS = [
@@ -131,7 +132,7 @@ def _write_env(updates: dict[str, str]) -> None:
     for k, v in updates.items():
         if k not in seen:
             lines.append(f"{k}={v}")
-    _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(_ENV_PATH, "\n".join(lines) + "\n", encoding="utf-8")
 
 
 class _NetWorker(QObject):

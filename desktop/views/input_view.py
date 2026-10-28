@@ -870,9 +870,10 @@ class InputView(QWidget):
         return f"{int(now - t0):02d} s" if t0 else ""
 
     def set_progress(self, frac: float, msg: str) -> None:
-        pct = int(frac * 100)
-        self.bar.setValue(pct)
-        self.p_badge.setText(f"{pct}%")
+        if frac >= 0:                      # < 0: only a message (e.g. waiting for the network)
+            pct = int(frac * 100)
+            self.bar.setValue(pct)
+            self.p_badge.setText(f"{pct}%")
         low = msg.lower()
         if self._stage == "subtitle" and ("ngữ cảnh" in low or "thuật ngữ" in low):
             self.set_stage("context")

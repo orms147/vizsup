@@ -43,7 +43,7 @@ from desktop.widgets.player_dialog import PlayerDialog, open_external
 from desktop.widgets.recent_projects import duration_label, short_title
 
 THUMB_W, THUMB_H = 40, 56
-W_CHECK, W_DUR, W_STATUS, W_DATE, W_SIZE, W_ACT = 20, 76, 128, 104, 88, 210
+W_CHECK, W_DUR, W_STATUS, W_DATE, W_SIZE, W_ACT = 20, 76, 128, 104, 88, 236
 
 STATUS = {"rendered": ("Đã dựng", "ok"), "approved": ("Đã duyệt", "ok"),
           "compiled": ("Đã ghép", "ok"),
@@ -925,7 +925,8 @@ class LibraryView(QWidget):
         self.compose_btn.setEnabled(False)
 
     def set_compile_progress(self, frac: float, msg: str) -> None:
-        self.cb_bar.setValue(int(max(0.0, min(1.0, frac)) * 1000))
+        if frac >= 0:                      # < 0: only a message
+            self.cb_bar.setValue(int(min(1.0, frac) * 1000))
         if msg:
             self.cb_msg.setText(msg)
 

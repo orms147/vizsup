@@ -44,6 +44,7 @@ from pathlib import Path
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
 from app.pipeline.srt import parse_srt, write_srt
+from app.fsutil import atomic_write_text
 
 COMP_FILE = "compilation.json"
 CHAPTERS_TXT = "chapters.txt"
@@ -549,10 +550,10 @@ def compile_videos(out_dir: Path, sources: list[Source], *, title: str,
     merged = merge_cues([(parse_srt(c.srt) if c.srt and c.srt.exists() else [], off, d)
                          for (off, c), d in zip(placed, durations, strict=True)])
     lst = out_dir / "join.txt"
-    lst.write_text("".join("file '" + f.resolve().as_posix().replace("'", "'\\''") + "'\n"
+    atomic_write_text(lst, "".join("file '" + f.resolve().as_posix().replace("'", "'\\''") + "'\n"
                            f"duration {d:.6f}\n" for f, d in zip(files, durations, strict=True)),
                    encoding="utf-8")
-    (out_dir / "chapters.ffmeta").write_text(ffmetadata(title, chapters, total), encoding="utf-8")
+    atomic_write_text((out_dir / "chapters.ffmeta"), ffmetadata(title, chapters, total), encoding="utf-8")
     cmd = [ffmpeg_bin(), "-y", "-f", "concat", "-safe", "0", "-i", "join.txt",
            "-i", "chapters.ffmeta", "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "1",
            "-map_chapters", "1", "-c", "copy", "-movflags", "+faststart", TMP_OUT]
@@ -568,7 +569,7 @@ def compile_videos(out_dir: Path, sources: list[Source], *, title: str,
         raise
     tmp.replace(out_dir / "output.mp4")
     write_srt(merged, out_dir / "vi.srt")
-    (out_dir / CHAPTERS_TXT).write_text(chapters_text(chapters), encoding="utf-8")
+    atomic_write_text((out_dir / CHAPTERS_TXT), chapters_text(chapters), encoding="utf-8")
     episodes = [e for s in sources for e in s.episodes]
     data = {"id": out_dir.name, "title": title, "created": int(time.time()),
             "duration": round(total, 3), "encode": encode, "reencoded": reencoded,
@@ -576,7 +577,7 @@ def compile_videos(out_dir: Path, sources: list[Source], *, title: str,
                         for s, st in zip(sources, starts, strict=True)],
             "chapters": [{"t": t, "name": n} for t, n in chapters],
             "episodes": episodes}
-    (out_dir / COMP_FILE).write_text(json.dumps(data, ensure_ascii=False, indent=1),
+    atomic_write_text((out_dir / COMP_FILE), json.dumps(data, ensure_ascii=False, indent=1),
                                      encoding="utf-8")
     for name in ("join.txt", "chapters.ffmeta"):
         (out_dir / name).unlink(missing_ok=True)

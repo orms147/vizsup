@@ -37,6 +37,7 @@ from desktop.widgets.cue_list import CueList
 from desktop.widgets.style_panel import StylePanel
 from desktop.widgets.timeline import TimelinePanel
 from desktop.widgets.video_panel import VideoPanel
+from app.fsutil import atomic_write_text
 
 try:
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -1624,7 +1625,7 @@ class EditorView(QWidget):
     def _save_style(self) -> None:
         import json
         data = {"font": self.get_font(), "size": self.get_size_px(), "style": self.get_style()}
-        (self.job.work_dir / "style.json").write_text(
+        atomic_write_text((self.job.work_dir / "style.json"),
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def save_now(self) -> None:

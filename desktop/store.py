@@ -13,6 +13,7 @@ from pathlib import Path
 from desktop import paths  # noqa: F401
 from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
+from app.fsutil import atomic_write_text
 
 
 def _storage() -> Path:
@@ -41,7 +42,7 @@ def save_ui_state(opts: dict) -> None:
     data = {k: opts.get(k) for k in _UI_KEYS if opts.get(k) is not None}
     old = load_ui_state()
     data.update({k: old[k] for k in _OTHER_UI_KEYS if k in old})   # other screens' choices
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # Preferences of other screens (render page): merged in, never cleared by the start screen.
@@ -56,7 +57,7 @@ def update_ui_state(**kv) -> None:
     data.update({k: v for k, v in kv.items() if k in _OTHER_UI_KEYS})
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         pass
 
@@ -71,7 +72,7 @@ def save_job(job: Job, opts: dict, stage: str = "await_edit") -> None:
         "title": job.metadata.get("title") or job.id,
         "platform": job.metadata.get("platform"),
     }
-    (job.work_dir / "job.json").write_text(
+    atomic_write_text((job.work_dir / "job.json"),
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -302,7 +303,8 @@ _JOB_ID = re.compile(r"[0-9a-f]{12}")
 _PROJECT_FILES = ("job.json", "metadata.json", "source.mp4", "cn.srt", "vi.srt", "output.mp4")
 # "Chỉ xóa file nặng": media the app rebuilds by itself (render caches, extracted audio,
 # the quick proof). Subtitles, settings, the user's own recordings and output.mp4 stay.
-HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3")
+HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3",
+               "output.rendering.mp4", "preview.rendering.mp4")   # a render cut off mid-encode
 HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm")   # _norm: a stopped join
 
 

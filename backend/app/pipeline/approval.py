@@ -23,6 +23,7 @@ import json
 import time
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 _FILE = "approved.json"
 _EDITOR_ONLY = ("lock", "reviewed")
@@ -57,7 +58,7 @@ def revision(job: Job) -> str:
 
 def approve(job: Job, *, cues: int | None = None) -> str:
     rev = revision(job)
-    (job.work_dir / _FILE).write_text(json.dumps(
+    atomic_write_text((job.work_dir / _FILE), json.dumps(
         {"revision": rev, "approved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "cues": cues},
         ensure_ascii=False, indent=1), encoding="utf-8")
     return rev

@@ -38,6 +38,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from app import fsutil
 from app.config import settings
 from app.ffmpegutil import ffmpeg_bin, ffprobe_bin
 from app.models import Cue, Job
@@ -1020,17 +1021,28 @@ def assemble(
                             duration=total, inserts=ins, music=placed, res=res,
                             preset=preset, glass_band=glass_band, glass_mask=mask_name,
                             burn_h=burn[1], glass_look=glass.look(style))
+        # encode into a temp name and swap it in when complete: an app killed or a
+        # power cut mid-encode must not leave a broken output.mp4 that looks rendered
+        final = job.work_dir / cmd[-1]
+        part = final.with_name(f"{final.stem}{RENDERING_SUFFIX}")
+        cmd[-1] = part.name
         try:
             _run_ffmpeg(cmd, job.work_dir, total=out_total, cancel=cancel,
                         progress=lambda f: say(0.2 + 0.8 * f, f"Đang dựng MP4 · {int(f * 100)}%"))
+            if part.exists():                  # (always, unless ffmpeg is faked in a test)
+                fsutil.replace(part, final)
             break
         except RuntimeError:
+            part.unlink(missing_ok=True)
             if encoder == "libx264":
                 raise
             _NVENC = False                 # don't try the GPU again this session
             encoder = "libx264"
             if log:
                 log("⚠ Mã hóa bằng GPU (NVENC) lỗi — dựng lại bằng CPU.")
+        except BaseException:
+            part.unlink(missing_ok=True)   # Hủy / crash in Python: no half file left
+            raise
     if preview:
         return job.work_dir / "preview.mp4"
     # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
@@ -1070,6 +1082,7 @@ def _with_gains(job: Job, segments: list[tuple[Cue, Path]], placements: list[dic
 
 RENDER_INFO = "render.json"
 OUTPUT_SRT = "output.srt"
+RENDERING_SUFFIX = ".rendering.mp4"   # output.rendering.mp4 → output.mp4 when complete
 
 
 def load_render_info(job: Job) -> dict:

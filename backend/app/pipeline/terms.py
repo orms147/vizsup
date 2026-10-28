@@ -14,6 +14,7 @@ import re
 
 from app.models import Job
 from app.providers.registry import get_translator
+from app.fsutil import atomic_write_text
 
 _TERM_BATCH = 200   # CN lines per extraction request (terms need broad context)
 # strip a leading bullet and a list-numbering prefix ("1. " / "2) ") ONLY — a bare
@@ -80,7 +81,7 @@ def suggest_glossary(job: Job, provider_name: str, *, context=None, log=None) ->
     terms = extract_terms(parse_srt(job.cn_srt), provider_name, context=context)
     path = job.work_dir / "glossary.suggested.json"
     if terms:
-        path.write_text(json.dumps(dict(sorted(terms.items())), ensure_ascii=False, indent=1),
+        atomic_write_text(path, json.dumps(dict(sorted(terms.items())), ensure_ascii=False, indent=1),
                         encoding="utf-8")
         if log:
             log(f"✓ Gợi ý {len(terms)} thuật ngữ (tự nạp khi dịch; bản của bạn luôn thắng)")
@@ -110,7 +111,7 @@ def write_glossary_report(job: Job, cn_cues, vi_cues, glossary: dict[str, str] |
     violations = check_glossary(cn_cues, vi_cues, glossary) if glossary else []
     path = job.work_dir / "glossary_report.json"
     if violations:
-        path.write_text(json.dumps(violations, ensure_ascii=False, indent=1), encoding="utf-8")
+        atomic_write_text(path, json.dumps(violations, ensure_ascii=False, indent=1), encoding="utf-8")
     else:
         path.unlink(missing_ok=True)
     return len(violations)

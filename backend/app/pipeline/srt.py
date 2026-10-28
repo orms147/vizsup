@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from app.models import Cue
+from app.fsutil import atomic_write_text
 
 _SRT_TIME = re.compile(
     r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})"
@@ -78,7 +79,7 @@ def write_srt(cues: list[Cue], path: Path) -> Path:
     out = []
     for i, c in enumerate(cues, 1):
         out.append(f"{i}\n{_fmt_srt_time(c.start)} --> {_fmt_srt_time(c.end)}\n{c.text}\n")
-    Path(path).write_text("\n".join(out), encoding="utf-8")
+    atomic_write_text(Path(path), "\n".join(out), encoding="utf-8")
     return Path(path)
 
 
@@ -226,5 +227,5 @@ def write_ass(
         text = "{\\an%d}" % int(e.get("align", 7)) + str(e["text"]).replace("\n", "\\N")
         lines.append(f"Dialogue: 1,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Tag,,"
                      f"0,0,0,,{text}")
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(Path(path), "\n".join(lines) + "\n", encoding="utf-8")
     return Path(path)

@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 RENDER_OPTS = "render_opts.json"
 _TRANSIENT = ("burn_cues", "preview")     # per run, never part of a template
@@ -37,7 +38,7 @@ def save_opts(work_dir: Path, opts: dict) -> None:
         return
     clean = {k: v for k, v in opts.items() if k not in _TRANSIENT and not k.startswith("_")}
     try:
-        (Path(work_dir) / RENDER_OPTS).write_text(json.dumps(clean, ensure_ascii=False, indent=1),
+        atomic_write_text((Path(work_dir) / RENDER_OPTS), json.dumps(clean, ensure_ascii=False, indent=1),
                                                   encoding="utf-8")
     except OSError:
         pass

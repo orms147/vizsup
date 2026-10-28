@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 FILE = "music.json"
 DIR = "music"
@@ -136,7 +137,7 @@ def save(job: Job, clips: list[Clip]) -> None:
         path.unlink(missing_ok=True)          # no clips == no file
         return
     rows = [asdict(clean(c)) for c in sorted(clips, key=lambda c: c.start)]
-    path.write_text(json.dumps({"clips": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+    atomic_write_text(path, json.dumps({"clips": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def import_file(job: Job, src: Path) -> str:

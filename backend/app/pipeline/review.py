@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 from app.models import Job
 from app.pipeline import fit_estimate
+from app.fsutil import atomic_write_text
 
 MIN_SECONDS = 0.6   # 2026-10-27: a 3-word clause timed to the speech (clauses.py) runs ~0.6 s
 LABELS = {
@@ -91,7 +92,7 @@ def stamp_fit_report(job: Job, *, rate: str | None) -> None:
     try:
         rows = json.loads(p.read_text(encoding="utf-8"))
         rows["rate"] = rate or "+0%"
-        p.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(p, json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, ValueError, TypeError):
         pass
 

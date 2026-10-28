@@ -14,6 +14,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from app.fsutil import atomic_write_text
 
 _FILE = "usage.json"
 _lock = threading.Lock()
@@ -104,7 +105,7 @@ def _add(job_dir: Path, *, model: str | None = None, pin: int = 0, pout: int = 0
             data.setdefault("seconds", {})[phase] = round(
                 data.get("seconds", {}).get(phase, 0.0) + sec, 1)
         try:
-            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            atomic_write_text(path, json.dumps(data, indent=1), encoding="utf-8")
         except OSError:
             pass
 

@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 TM_FILE, EDITS_FILE, RULES_FILE, META_FILE = "tm.json", "edits.jsonl", "style_rules.txt", \
     "style_meta.json"
@@ -75,7 +76,7 @@ def remember(pairs: list[tuple[str, str]]) -> int:
             tm = dict(sorted(tm.items(), key=lambda kv: kv[1].get("t", 0))[-TM_MAX:])
         try:
             _storage().mkdir(parents=True, exist_ok=True)
-            (_storage() / TM_FILE).write_text(json.dumps(tm, ensure_ascii=False), encoding="utf-8")
+            atomic_write_text((_storage() / TM_FILE), json.dumps(tm, ensure_ascii=False), encoding="utf-8")
         except OSError:
             return 0
     return n
@@ -133,7 +134,7 @@ def record_edits(job: Job, approved: list[tuple[str, str]]) -> int:
                         f.write(json.dumps(row, ensure_ascii=False) + "\n")
             meta = _meta()
             meta["since"] = meta.get("since", 0) + 1
-            (_storage() / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+            atomic_write_text((_storage() / META_FILE), json.dumps(meta), encoding="utf-8")
             return meta["since"]
         except OSError:
             return 0
@@ -155,7 +156,7 @@ def style_rules() -> str:
 
 def save_style_rules(text: str) -> None:
     _storage().mkdir(parents=True, exist_ok=True)
-    (_storage() / RULES_FILE).write_text((text or "").strip() + "\n", encoding="utf-8")
+    atomic_write_text((_storage() / RULES_FILE), (text or "").strip() + "\n", encoding="utf-8")
 
 
 def update_style(provider: str = "openrouter", *, log=None) -> str | None:
@@ -194,7 +195,7 @@ def update_style(provider: str = "openrouter", *, log=None) -> str | None:
         meta["since"] = 0
         meta["updated"] = int(time.time())
         try:
-            (_storage() / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+            atomic_write_text((_storage() / META_FILE), json.dumps(meta), encoding="utf-8")
         except OSError:
             pass
     say("✓ Đã cập nhật “Phong cách của tôi” từ các lần bạn sửa")

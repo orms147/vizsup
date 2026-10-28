@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QScrollArea,
     QStackedWidget,
     QSystemTrayIcon,
@@ -142,10 +143,17 @@ class MainWindow(QMainWindow):
         self._batch_cancelled = False
         self._batch_last: tuple[float, str] = (0.0, "")
         self._main_method: str | None = None  # what the main slot runs (run_render, …)
+        # desktop/session.py: the runs in flight, on disk, so a crash / power cut can resume
+        self._gate_job: Job | None = None     # processed to the edit gate now (not queued)
+        self._queue_opts: dict | None = None  # opts of the queued job running now
+        self._render_item: dict | None = None  # a render on the render page (not batch)
+        self._batch_item: dict | None = None
+        self._closing = False
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
         self._tray = self._make_tray()
+        QTimer.singleShot(1500, self._offer_recovery)
         self._toast = Toast(self)
         app = QApplication.instance()
         if app is not None:
@@ -235,6 +243,7 @@ class MainWindow(QMainWindow):
     def _run_gate(self, job: Job, opts: dict, first_line: str) -> None:
         """New run or E-11 resume: the worker skips every step whose file exists."""
         self.opts, self.job = opts, job
+        self._gate_job = job
         store.save_job(job, opts, "running")
         store.debug(f"=== run_gate job={job.id} ===")
         self.stack.setCurrentIndex(INPUT)
@@ -250,6 +259,7 @@ class MainWindow(QMainWindow):
         })
 
     def _on_gate_failed(self, msg: str) -> None:
+        self._gate_job = None
         self.input.show_error(msg)
         if not msg.strip().startswith("Đã hủy"):
             self._notify("Chưa xong video", msg[:160], "err")
@@ -270,6 +280,7 @@ class MainWindow(QMainWindow):
     def _on_render_done(self, path: str) -> None:
         from pathlib import Path
 
+        self._render_item = None
         self.render.show_done(path)
         if self.job is not None:
             self.render.set_group(_group_status(self.job))
@@ -279,11 +290,13 @@ class MainWindow(QMainWindow):
                      Path(path).name)
 
     def _on_render_failed(self, msg: str) -> None:
+        self._render_item = None
         self.render.show_error(msg)
         if not msg.strip().startswith("Đã hủy"):
             self._notify("Chưa dựng được video", msg[:160], "err")
 
     def _on_gate(self) -> None:
+        self._gate_job = None
         store.debug("on_gate: editor.load begin")
         try:
             if self._queue_job is None:          # the queue's progress card is not ours
@@ -554,9 +567,9 @@ class MainWindow(QMainWindow):
             # TTS just spoke, even if vi.srt were somehow rewritten mid-render
             "burn_cues": parse_srt(self.job.vi_srt),
         }
-        from app.pipeline import batch
-
-        batch.save_opts(self.job.work_dir, merged)   # "Dựng hàng loạt" can copy them
+        if not merged.get("preview"):
+            self._render_item = {"id": self.job.id, "title": self.job.metadata.get("title") or "",
+                                 "opts": {k: v for k, v in merged.items() if k != "burn_cues"}}
         self._set_render_locked(True)
         self._run("run_render", merged, {
             "stage_started": self._on_render_stage,
@@ -589,6 +602,7 @@ class MainWindow(QMainWindow):
         else:
             self._queue.extend(items)
         self._queue_total += len(items)
+        self._persist()
         self.status.set_status(f"Hàng đợi: {len(self._queue)} video chờ xử lý", "busy")
         if not self._busy():
             self._run_next_queued()
@@ -624,6 +638,7 @@ class MainWindow(QMainWindow):
             jid = uuid.uuid4().hex[:12]
             job = Job(id=jid, work_dir=settings.vizsup_storage_dir / jid, url=opts.get("url"))
         self._queue_job = job
+        self._queue_opts = {**opts, "_job_id": job.id}
         store.save_job(job, opts, "running")
         k = self._queue_total - len(self._queue)
         self.input.set_busy(True)
@@ -818,6 +833,7 @@ class MainWindow(QMainWindow):
             self._batch_cancelled = False
         self._batch.extend(fresh)
         self._batch_total += len(fresh)
+        self._persist()
         self.render.set_batch_active(True)
         if starting:
             self.library.batch_started(self._batch_total)
@@ -843,6 +859,7 @@ class MainWindow(QMainWindow):
         from app.pipeline.srt import parse_srt
 
         item = self._batch.pop(0)
+        self._batch_item = item
         loaded = store.load_job(item["id"])
         if loaded is None or not loaded[0].vi_srt.exists():
             self._batch_failed.append(f"{item['title']}: không còn trên máy")
@@ -863,6 +880,8 @@ class MainWindow(QMainWindow):
         self._batch_worker = self._rworker
 
     def _batch_progress(self, frac: float, msg: str) -> None:
+        if frac < 0:                       # only a message (waiting for the network)
+            frac = self._batch_last[0]
         self._batch_last = (frac, msg)
         total = max(1, self._batch_total)
         k = len(self._batch_ok) + len(self._batch_failed) + (1 if self._batch_job else 0)
@@ -892,6 +911,7 @@ class MainWindow(QMainWindow):
         self._batch_after(item)
 
     def _batch_after(self, item: dict) -> None:
+        self._batch_item = None
         if self.job is not None and self.job.id == item["id"]:
             self.editor.setEnabled(True)
         self._batch_job, self._batch_worker = None, None
@@ -930,12 +950,101 @@ class MainWindow(QMainWindow):
         if self._batch_job is None:
             self._batch_finish()
 
+    # --- crash / power-cut recovery (desktop/session.py) ----------------------------------
+    def _session_state(self) -> dict:
+        queue = list(self._queue)
+        if self._queue_opts is not None:
+            queue.insert(0, self._queue_opts)
+        batch = list(self._batch)
+        if self._batch_item is not None:
+            batch.insert(0, self._batch_item)
+        gate = None
+        if self._gate_job is not None:
+            gate = {"job_id": self._gate_job.id, "opts": self.opts}
+        return {"gate": gate, "queue": queue, "render": self._render_item, "batch": batch}
+
+    def _persist(self) -> None:
+        if self._closing:
+            return
+        from desktop import session
+
+        session.save(self._session_state())
+
+    def _confirm_close(self) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "Đang xử lý video",
+                          "vizsup đang dịch / dựng video. Đóng bây giờ thì việc đang chạy dừng "
+                          "lại — phần đã làm được giữ, lần sau mở app sẽ hỏi để làm tiếp.",
+                          parent=self)
+        close = box.addButton("Đóng", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Ở lại", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is close
+
+    def _offer_recovery(self) -> None:
+        """The previous run ended (crash, forced close, power cut) with work unfinished:
+        offer to continue it. Only for a visible window — never pops up in tests."""
+        from desktop import session
+
+        state = session.load()
+        if not state or not self.isVisible():
+            return
+
+        def title_of(jid) -> str:
+            loaded = store.load_job(str(jid)) if jid else None
+            return (loaded[0].metadata.get("title") if loaded else None) or str(jid)
+
+        lines = session.describe(state, title_of)
+        if self._ask_recovery(lines):
+            self.resume_session(state)
+        else:
+            session.clear()
+
+    def _ask_recovery(self, lines: list[str]) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "Làm tiếp việc còn dở?",
+                          "Lần trước vizsup đóng khi còn việc chưa xong:\n\n"
+                          + "\n".join(f"• {ln}" for ln in lines)
+                          + "\n\nLàm tiếp từ chỗ đã dừng? (phần đã xong không làm lại)",
+                          parent=self)
+        go = box.addButton("Làm tiếp", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Bỏ qua", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is go
+
+    def resume_session(self, state: dict) -> None:
+        """Re-start what the previous run left: the gate run, the gate queue, the render
+        and the batch (renders only for projects still approved)."""
+        from app.pipeline import batch
+
+        base = settings.vizsup_storage_dir
+        gate = state.get("gate") or {}
+        if gate.get("job_id"):
+            loaded = store.load_job(str(gate["job_id"]))
+            if loaded is not None and not loaded[0].vi_srt.exists():
+                self._run_gate(loaded[0], gate.get("opts") or loaded[1] or {},
+                               f"▶ Làm tiếp video đang dịch dở (job {loaded[0].id})")
+        queue = []
+        for o in state.get("queue") or []:
+            jid = o.get("_job_id")
+            loaded = store.load_job(str(jid)) if jid else None
+            if jid and (loaded is None or loaded[0].vi_srt.exists()):
+                continue                      # gone, or reached the gate after all
+            queue.append(dict(o))
+        if queue:
+            self._start_queue(queue)
+        renders = ([state["render"]] if state.get("render") else []) + list(state.get("batch") or [])
+        ok = [r for r in renders if r.get("id") and batch.render_state(base / str(r["id"]))]
+        if ok:
+            self._batch_add([{"id": r["id"], "opts": r.get("opts") or {},
+                              "title": r.get("title") or r["id"]} for r in ok])
+        self._persist()
+
     def _delete_group(self, gid: str) -> None:
         """A split video from the recent list: every part + the parent folder, through
         the library's flow (guard → confirm → Recycle Bin)."""
         self._delete_job(gid)
 
     def _on_queued_gate(self, job: Job, opts: dict) -> None:
+        self._queue_opts = None
         self._queue_ok += 1
         self.input.set_done()
         store.save_job(job, opts, "await_edit")
@@ -944,6 +1053,7 @@ class MainWindow(QMainWindow):
         self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
 
     def _on_queued_failed(self, job: Job, opts: dict, msg: str) -> None:
+        self._queue_opts = None
         if msg.strip().startswith("Đã hủy"):
             self._queue_cancelled = True
         else:
@@ -984,6 +1094,7 @@ class MainWindow(QMainWindow):
             worker.finished.connect(self._on_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        self._persist()
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
@@ -1006,6 +1117,7 @@ class MainWindow(QMainWindow):
 
     def _on_render_finished(self) -> None:
         self._set_render_locked(False)
+        self._persist()
 
     def _on_finished(self) -> None:
         # gate failed/cancelled → re-enable Start but KEEP the log/error visible
@@ -1015,6 +1127,7 @@ class MainWindow(QMainWindow):
         # the second slot unlocks itself (_on_render_finished)
         if not self._render_busy():
             self._set_render_locked(False)
+        self._persist()
         if self._queue_job is not None or self._queue:   # E-9: on to the next queued video
             QTimer.singleShot(400, self._run_next_queued)
 
@@ -1030,9 +1143,15 @@ class MainWindow(QMainWindow):
                 self._queue.clear()
             self._worker.cancel()
             self.input.set_cancelling()
+            self._persist()
 
     def closeEvent(self, e) -> None:
         store.debug(f"closeEvent (window closed) busy={self._busy()}")
+        if self._any_busy() and self.isVisible() and not self._confirm_close():
+            e.ignore()
+            return
+        self._persist()
+        self._closing = True              # the cancels below must not erase the plan
         # flush a pending debounced edit BEFORE teardown — but never while a render
         # worker might be reading vi.srt mid-run
         try:

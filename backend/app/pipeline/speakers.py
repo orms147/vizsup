@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from app.models import Job
+from app.fsutil import atomic_write_text
 
 EXCERPT_SEC = 60.0
 N_FRAMES = 6
@@ -79,7 +80,7 @@ def _load(job: Job) -> dict:
 
 def _save(job: Job, data: dict) -> None:
     try:
-        (job.work_dir / _CACHE).write_text(json.dumps({**data, "key": _key(job)},
+        atomic_write_text((job.work_dir / _CACHE), json.dumps({**data, "key": _key(job)},
                                                       ensure_ascii=False, indent=1),
                                            encoding="utf-8")
     except OSError:

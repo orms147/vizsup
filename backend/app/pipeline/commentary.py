@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from app.models import Cue, Job
+from app.fsutil import atomic_write_text
 
 FILE = "commentary.json"
 DIR = "commentary"
@@ -80,7 +81,7 @@ def save(job: Job, notes: list[Note]) -> None:
     if not notes:
         path.unlink(missing_ok=True)       # no notes == no file (approval hash unchanged)
         return
-    path.write_text(json.dumps({"notes": [asdict(n) for n in sorted(notes, key=lambda n: n.at)]},
+    atomic_write_text(path, json.dumps({"notes": [asdict(n) for n in sorted(notes, key=lambda n: n.at)]},
                                ensure_ascii=False, indent=1), encoding="utf-8")
 
 

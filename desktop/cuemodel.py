@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from desktop import paths  # noqa: F401
 from app.models import Cue  # noqa: E402
 from app.pipeline.srt import parse_srt, write_srt  # noqa: E402
+from app.fsutil import atomic_write_text
 
 MAX_WPS = 5.0  # words/sec above which a line is "too long to dub"
 
@@ -129,7 +130,7 @@ def save_vi(job, cues: list[EditorCue]) -> None:
     zh_list = [c.zh for c in cues]
     p = _zh_ref_path(job)
     if zh_list != _default_zh(job, len(cues)):
-        p.write_text(json.dumps(zh_list, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(p, json.dumps(zh_list, ensure_ascii=False), encoding="utf-8")
     elif p.exists():
         p.unlink()
 
