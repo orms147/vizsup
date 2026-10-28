@@ -355,6 +355,8 @@ class EditorView(QWidget):
         QShortcut(QKeySequence.Redo, self, activated=self._redo_action)          # Ctrl+Y
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._redo_action)
         QShortcut(QKeySequence.Find, self, activated=lambda: self._toggle_find(True))
+        QShortcut(QKeySequence("Ctrl+H"), self,
+                  activated=lambda: self._toggle_find(True, replace=True))
         esc = QShortcut(QKeySequence(Qt.Key_Escape), self.find_bar,
                         activated=lambda: self._toggle_find(False))
         esc.setContext(Qt.WidgetWithChildrenShortcut)   # don't swallow Esc app-wide
@@ -484,6 +486,8 @@ class EditorView(QWidget):
         v = QVBoxLayout(bar)
         v.setContentsMargins(10, 8, 10, 8)
         v.setSpacing(6)
+        # one row for plain searching (the common case at 768 px high: it leaves the list
+        # its room); "Thay…" / Ctrl+H adds the replace row under it
         r1 = QHBoxLayout()
         r1.setSpacing(6)
         self.find_in = QLineEdit()
@@ -491,19 +495,31 @@ class EditorView(QWidget):
         self.find_in.returnPressed.connect(self._find_next)
         self.find_in.textChanged.connect(self._update_find_count)
         self.find_lbl = label("", "small")
+        nxt = button("Tiếp", small=True, tip="Tới câu khớp tiếp theo (Enter)")
+        nxt.clicked.connect(self._find_next)
+        self.find_case = QCheckBox("Aa")
+        self.find_case.setToolTip("Phân biệt hoa / thường")
+        self.find_case.toggled.connect(self._update_find_count)
+        self.repl_toggle = button("Thay…", small=True, checkable=True,
+                                  tip="Hiện ô thay thế (Ctrl+H)")
+        self.repl_toggle.toggled.connect(self._show_replace)
         close = icon_button("X", "Đóng (Esc)")
         close.clicked.connect(lambda: self._toggle_find(False))
         r1.addWidget(self.find_in, 1)
         r1.addWidget(self.find_lbl)
+        r1.addWidget(nxt)
+        r1.addWidget(self.find_case)
+        r1.addWidget(self.repl_toggle)
         r1.addWidget(close)
-        r2 = QHBoxLayout()
+        self.repl_row = QWidget()
+        r2 = QHBoxLayout(self.repl_row)
+        r2.setContentsMargins(0, 0, 0, 0)
         r2.setSpacing(6)
         self.repl_in = QLineEdit()
         self.repl_in.setPlaceholderText("Thay bằng…")
         self.repl_in.returnPressed.connect(self._replace_one)
         r2.addWidget(self.repl_in, 1)
         for text, slot, tip in (
-            ("Tiếp", self._find_next, "Tới câu khớp tiếp theo (Enter)"),
             ("Thay", self._replace_one, "Thay ở câu đang chọn, rồi tới câu khớp sau"),
             ("Thay tất cả", self._replace_all,
              "Thay trong TOÀN BỘ phụ đề — hoàn tác được bằng Ctrl+Z"),
@@ -511,22 +527,26 @@ class EditorView(QWidget):
             b = button(text, small=True, tip=tip)
             b.clicked.connect(slot)
             r2.addWidget(b)
-        self.find_case = QCheckBox("Aa")
-        self.find_case.setToolTip("Phân biệt hoa / thường")
-        self.find_case.toggled.connect(self._update_find_count)
-        r2.addWidget(self.find_case)
+        self.repl_row.hide()
         v.addLayout(r1)
-        v.addLayout(r2)
+        v.addWidget(self.repl_row)
         self.find_bar = bar
         return bar
 
-    def _toggle_find(self, on: bool | None = None) -> None:
+    def _toggle_find(self, on: bool | None = None, *, replace: bool = False) -> None:
         show = self.find_bar.isHidden() if on is None else on
         self.find_bar.setVisible(show)
         if show:
+            if replace:
+                self.repl_toggle.setChecked(True)
             self.find_in.setFocus()
             self.find_in.selectAll()
             self._update_find_count()
+
+    def _show_replace(self, on: bool) -> None:
+        self.repl_row.setVisible(on)
+        if on:
+            self.repl_in.setFocus()
 
     def _case(self) -> bool:
         return self.find_case.isChecked()
