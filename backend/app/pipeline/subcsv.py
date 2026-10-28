@@ -17,6 +17,10 @@ from pathlib import Path
 COLUMNS = ("index", "start", "end", "zh", "vi")
 BOM = "﻿"
 MAX_LISTED = 5          # mismatches named in an error message
+# what Excel / Google Sheets write into a cell whose "formula" failed (a Vietnamese line that
+# starts with "-" / "=" / "+" can be taken for one): importing it would replace the subtitle
+_SHEET_ERROR = re.compile(r"^\s*#(NAME\?|VALUE!|REF!|DIV/0!|N/A|NUM!|NULL!|ERROR!?|SPILL!|CALC!)\s*$",
+                          re.I)
 
 
 class CsvError(ValueError):
@@ -111,7 +115,7 @@ def read_rows(text: str) -> list[dict]:
         cell = lambda c: r[pos[c]] if pos[c] < len(r) else ""   # noqa: E731
         try:
             idx = int(float(cell("index").strip().replace(",", ".")))
-        except ValueError:
+        except (ValueError, OverflowError):        # "abc", "", "nan", "inf", "1e999"
             raise CsvError(f"Dòng {n} của file: cột index “{cell('index')}” không phải số.") from None
         out.append({"index": idx, "start": cell("start"), "end": cell("end"),
                     "zh": _nl(cell("zh")), "vi": _nl(cell("vi"))})
@@ -142,6 +146,13 @@ def match(cues: Sequence, rows: list[dict]) -> list[dict]:
         shown = ", ".join(map(str, bad[:MAX_LISTED])) + ("…" if len(bad) > MAX_LISTED else "")
         raise CsvError(f"Cột zh khác dự án ở {len(bad)} câu (câu {shown}) — file này không phải "
                        "của video này, hoặc cột zh đã bị sửa. Chỉ sửa cột vi.")
+    broken = [i for i, r in enumerate(ordered, 1) if _SHEET_ERROR.match(r["vi"] or "")]
+    if broken:
+        shown = ", ".join(map(str, broken[:MAX_LISTED])) + ("…" if len(broken) > MAX_LISTED else "")
+        raise CsvError(f"Cột vi có ô lỗi công thức của Excel / Google Sheets (#NAME?, #VALUE!…) ở "
+                       f"{len(broken)} câu (câu {shown}) — thường do câu bắt đầu bằng “-”, “=”, “+”. "
+                       "Sửa lại các ô đó (gõ dấu ' trước chữ) rồi nhập lại; chưa đổi gì trong "
+                       "dự án.")
     return ordered
 
 
