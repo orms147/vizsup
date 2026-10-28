@@ -54,6 +54,7 @@ class Timeline(QWidget):
         self._pps = 40.0
         self._sel = -1
         self._drag = None   # (idx, mode, startX, s0, e0)
+        self._scrub = False  # held down outside a cue: the playhead follows the mouse
         self.setMinimumHeight(TOTAL_H)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.NoFocus)
@@ -304,9 +305,21 @@ class Timeline(QWidget):
                 self.dragStarted.emit()   # before any mutation — snapshot the pre-drag state
             self.update()
         else:
-            self.seeked.emit(max(0.0, x / self._pps))
+            self._scrub = True
+            self._scrub_to(x)
+
+    def _scrub_to(self, x: float) -> None:
+        t = max(0.0, x / self._pps)
+        if self._video_dur > 0:
+            t = min(t, self._video_dur)
+        self.seeked.emit(t)
 
     def mouseMoveEvent(self, ev) -> None:
+        if self._scrub:
+            if ev.buttons() & Qt.LeftButton:
+                self._scrub_to(ev.position().x())
+                return
+            self._scrub = False
         if not self._drag:
             hit = self._hit(ev.position().x(), ev.position().y())
             shape = (Qt.SizeHorCursor if hit and hit[1] in ("l", "r") and
@@ -334,6 +347,7 @@ class Timeline(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, _ev) -> None:
+        self._scrub = False
         if self._drag:
             idx = self._drag[0]
             self._drag = None

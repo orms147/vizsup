@@ -95,6 +95,46 @@ class _Task(QObject):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+SEEK_STEP = 10.0       # ← / → jump, seconds (YouTube's)
+
+
+class _FullscreenHost(QWidget):
+    """The top-level window the video panel moves into for full screen. It has its own
+    keys: the editor's shortcuts belong to the main window."""
+
+    def __init__(self, editor: "EditorView") -> None:
+        super().__init__(None, Qt.Window)
+        self._editor = editor
+        self.setWindowTitle("vizsup — video")
+        self.setStyleSheet("background:#000;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def keyPressEvent(self, ev) -> None:  # noqa: N802
+        ed, k = self._editor, ev.key()
+        if k in (Qt.Key_Escape, Qt.Key_F):
+            ed.toggle_fullscreen()
+        elif k == Qt.Key_Space:
+            ed.video.toggle()
+        elif k == Qt.Key_Left:
+            ed.seek_by(-SEEK_STEP)
+        elif k == Qt.Key_Right:
+            ed.seek_by(+SEEK_STEP)
+        elif k == Qt.Key_Up:
+            ed.step_cue(-1)
+        elif k == Qt.Key_Down:
+            ed.step_cue(+1)
+        else:
+            super().keyPressEvent(ev)
+
+    def closeEvent(self, ev) -> None:  # noqa: N802
+        if self._editor.is_fullscreen():           # closed from the taskbar / Alt+F4
+            ev.ignore()
+            self._editor.toggle_fullscreen()
+            return
+        super().closeEvent(ev)
+
 class EditorView(QWidget):
     dirtyChanged = Signal(bool)        # True = pending, False = saved to disk
     saveFailed = Signal(str)           # autosave could not write — retried
@@ -285,7 +325,7 @@ class EditorView(QWidget):
         vid.positionChanged.connect(self._on_position)
         vid.durationChanged.connect(self._on_duration)
         vid.dimsChanged.connect(self._on_dims)
-        vid.expandRequested.connect(self._toggle_layout)
+        vid.expandRequested.connect(self.toggle_fullscreen)
         vid.marginsChanged.connect(self.style_panel.set_drag_margins)  # drag box → margins
         vid.dragCommitted.connect(self._reburn_preview)                # release → exact frame
 
@@ -296,6 +336,8 @@ class EditorView(QWidget):
 
         # undo/redo: anything that mutates self.cues WITHOUT a _snapshot() first is
         # a hole in undo; add the call rather than special-casing it here.
+        self._fs: QWidget | None = None       # the full-screen window, when shown
+        self._fs_index, self._fs_sizes = 0, []
         self._undo_stack: list[list[EditorCue]] = []
         self._redo_stack: list[list[EditorCue]] = []
 
@@ -324,6 +366,13 @@ class EditorView(QWidget):
         sc("Alt+R", self._retranslate)
         sc("A", self._auto_snap_selected)
         sc("Shift+A", self._auto_snap_all)
+        # ↑/↓ = previous / next line, ←/→ = 10 s back / ahead like a video player (held
+        # down they repeat). Text fields keep their own arrows (ShortcutOverride).
+        sc("Up", lambda: self.step_cue(-1))
+        sc("Down", lambda: self.step_cue(+1))
+        sc("Left", lambda: self.seek_by(-SEEK_STEP))
+        sc("Right", lambda: self.seek_by(+SEEK_STEP))
+        sc("F", self.toggle_fullscreen)
         sc("F8", lambda: self._goto_pending(+1))
         sc("Shift+F8", lambda: self._goto_pending(-1))
         sc("Ctrl+Return", self.approveRequested.emit)
@@ -336,6 +385,62 @@ class EditorView(QWidget):
                 step = 200 if big else 50
                 sc(f"{pre}+Left", lambda w=which, d=-step: self._nudge(w, d))
                 sc(f"{pre}+Right", lambda w=which, d=step: self._nudge(w, d))
+
+    # --- keyboard navigation / full screen --------------------------------------------
+    def step_cue(self, step: int) -> None:
+        """↑ / ↓: the previous / next line (from the one at the playhead when none is
+        selected); the video jumps to it."""
+        if not self.cues:
+            return
+        cur = self._sel
+        if 0 <= cur < len(self.cues):
+            idx = cur + step
+        else:
+            t = self.video.current_time()
+            inside = next((i for i, c in enumerate(self.cues) if c.start <= t < c.end), None)
+            if inside is not None:
+                idx = inside + step
+            elif step > 0:          # in a gap: the next line ahead / the one just passed
+                idx = next((i for i, c in enumerate(self.cues) if c.start > t), len(self.cues) - 1)
+            else:
+                idx = max((i for i, c in enumerate(self.cues) if c.end <= t), default=0)
+        idx = max(0, min(len(self.cues) - 1, idx))
+        self.cue_list.selectRow(idx)
+        self._select(idx, seek=True)
+
+    def seek_by(self, seconds: float) -> None:
+        """← / →: jump back / ahead (10 s, like YouTube), clamped to the video."""
+        t = self.video.current_time() + seconds
+        dur = self.video.duration()
+        t = max(0.0, min(t, dur) if dur > 0 else t)
+        self.video.seek_seconds(t)
+        self.timeline.set_time(t)
+        self.timeline_panel.ensure_visible(t)
+
+    def is_fullscreen(self) -> bool:
+        return self._fs is not None
+
+    def toggle_fullscreen(self) -> None:
+        """The video alone on the whole screen; F / Esc / ⤢ bring it back. Space, ←/→,
+        ↑/↓ keep working there."""
+        if self._fs is None:
+            self._fs_index = self.top.indexOf(self.video)
+            self._fs_sizes = self.top.sizes()
+            host = _FullscreenHost(self)
+            host.layout().addWidget(self.video)          # reparents it out of the splitter
+            self.video.set_fullscreen_icon(True)
+            self._fs = host
+            host.showFullScreen()
+            host.activateWindow()
+            host.setFocus()
+            return
+        host, self._fs = self._fs, None
+        self.top.insertWidget(self._fs_index, self.video)
+        self.top.setSizes(self._fs_sizes)
+        self.video.set_fullscreen_icon(False)
+        host.hide()
+        host.deleteLater()
+        self.video.show()
 
     # --- layout ---------------------------------------------------------------
     def _toggle_layout(self) -> None:

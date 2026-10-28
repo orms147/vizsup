@@ -69,7 +69,7 @@ class VideoPanel(QFrame):
         self.title = label(title, "h3")
         self._orient = badge("")
         self._orient.setVisible(False)
-        self._expand = icon_button("Maximize2", "Ưu tiên video (bố cục tập trung)")
+        self._expand = icon_button("Maximize2", "Toàn màn hình (F) — Esc để thoát")
         self._expand.clicked.connect(self.expandRequested)
         hh.addWidget(self.title)
         hh.addStretch(1)
@@ -210,6 +210,14 @@ class VideoPanel(QFrame):
 
     def set_burned_overlay(self, path: str) -> None:
         self._canvas.set_burned_overlay(QImage(str(path)))
+
+    def set_fullscreen_icon(self, on: bool) -> None:
+        from desktop.icons import icon as _icon
+
+        self._expand.setIcon(_icon("Minimize2" if on else "Maximize2", V2["secondary"], 16,
+                                   active=V2["purple_bright"]))
+        self._expand.setToolTip("Thoát toàn màn hình (Esc)" if on else
+                                "Toàn màn hình (F) — Esc để thoát")
 
     def current_time(self) -> float:
         return (self._player.position() / 1000.0) if self._player else 0.0

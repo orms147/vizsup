@@ -10,6 +10,8 @@ SHORTCUTS = [
     ("Space", "Phát / dừng video"),
     ("Ctrl+Space", "Lặp câu đang chọn"),
     ("↑ / ↓", "Câu trước / sau"),
+    ("← / →", "Tua lùi / tới 10 giây (giữ để tua liên tục)"),
+    ("F / Esc", "Video toàn màn hình / thoát"),
     ("Tab / Shift+Tab", "Câu sau / trước trong danh sách"),
     ("Enter", "Sửa; lưu và sang câu sau"),
     ("Shift+Enter", "Xuống dòng phụ đề"),
