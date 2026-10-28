@@ -46,8 +46,16 @@ THUMB_W, THUMB_H = 40, 56
 W_CHECK, W_DUR, W_STATUS, W_DATE, W_SIZE, W_ACT = 20, 76, 128, 104, 88, 236
 
 STATUS = {"rendered": ("Đã dựng", "ok"), "approved": ("Đã duyệt", "ok"),
-          "compiled": ("Đã ghép", "ok"),
+          "compiled": ("Đã ghép", "ok"), "stale": ("Cần dựng lại", "warn"),
           "review": ("Chờ duyệt", "purple"), "unfinished": ("Dở dang", "warn")}
+
+# the status chips over the list: key → (label, tooltip)
+CHIPS = (("all", "Tất cả", "Mọi dự án"),
+         ("unapproved", "Chưa duyệt", "Có phụ đề nhưng bạn chưa duyệt (hoặc đã sửa sau khi duyệt)"),
+         ("approved", "Đã duyệt", "Đã duyệt, chưa dựng video"),
+         ("rendered", "Đã dựng", "Video đã dựng xong (kể cả video ghép)"),
+         ("stale", "Cần dựng lại", "Duyệt lại sau lần dựng cuối — video chưa khớp phụ đề"),
+         ("unfinished", "Dở dang", "Chưa chạy xong tới bước phụ đề"))
 
 
 # --- small pure helpers -------------------------------------------------------------
@@ -87,7 +95,27 @@ def item_status(item: dict, details: dict | None) -> str:
     st = item.get("status") or "unfinished"
     if st == "review" and details and details.get("approved"):
         return "approved"
+    if st == "rendered" and details and details.get("stale"):
+        return "stale"
     return st
+
+
+def item_category(item: dict, details: dict | None) -> str:
+    """Which status chip an item belongs to: unapproved | approved | rendered | stale |
+    unfinished. Pure."""
+    st = item_status(item, details)
+    return {"review": "unapproved", "compiled": "rendered"}.get(st, st)
+
+
+def episode_sort_key(item: dict) -> tuple:
+    """By series (《name》), then episode number; unnumbered ones after the numbered of their
+    series, newest first. Pure."""
+    from app.pipeline import compilation
+
+    title = item.get("title") or ""
+    number = compilation.episode_number(title)
+    return (compilation.series_key(title) or fold(title), number is None, number or 0,
+            -(item.get("mtime") or 0.0))
 
 
 # --- widgets ------------------------------------------------------------------------
@@ -397,6 +425,7 @@ class LibraryView(QWidget):
         self._checked: set[str] = set()
         self._guard: Callable[[dict], str | None] = lambda _it: None
         self._sort = "new"
+        self._chip = "all"                    # the status chip filtering the list
         self._cur: str | None = None          # the keyboard cursor row (↑/↓, Enter, Space, Delete)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -455,7 +484,8 @@ class LibraryView(QWidget):
         sh.setSpacing(2)
         self._sort_group = QButtonGroup(self)
         self.sort_btns: dict[str, QPushButton] = {}
-        for key, text in (("new", "Mới nhất"), ("size", "Nặng nhất"), ("name", "Tên A–Z")):
+        for key, text in (("new", "Mới nhất"), ("ep", "Theo tập"), ("size", "Nặng nhất"),
+                          ("name", "Tên A–Z")):
             b = QPushButton(text)
             b.setObjectName("seg")
             b.setCheckable(True)
@@ -470,6 +500,7 @@ class LibraryView(QWidget):
         self.total = label("", "secondary")
         tools.addWidget(self.total)
         pv.addLayout(tools)
+        pv.addLayout(self._build_chips())
         pv.addWidget(self._build_compile_bar())
 
         panel = QFrame()
@@ -553,6 +584,64 @@ class LibraryView(QWidget):
                            "· Ctrl+F tìm · Esc quay lại", "small"))
         self._update_selection()
 
+    # --- status chips -----------------------------------------------------------------
+    def _build_chips(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self._chip_group = QButtonGroup(self)
+        self.chip_btns: dict[str, QPushButton] = {}
+        for key, text, tip in CHIPS:
+            b = QPushButton(text)
+            b.setObjectName("chip")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.setStyleSheet(
+                f"QPushButton#chip{{background:transparent;border:1px solid {V2['line']};"
+                f"border-radius:13px;padding:3px 12px;color:{V2['secondary']};min-height:0;}}"
+                f"QPushButton#chip:hover{{border-color:{V2['purple_line']};}}"
+                f"QPushButton#chip:checked{{background:{V2['purple_soft']};"
+                f"border-color:{V2['purple_line']};color:{V2['purple_bright']};}}"
+                f"QPushButton#chip:disabled{{color:{V2['dim']};border-color:{V2['line_soft']};}}")
+            b.clicked.connect(lambda _=False, k=key: self.set_chip(k))
+            self._chip_group.addButton(b)
+            self.chip_btns[key] = b
+            row.addWidget(b)
+        self.chip_btns["all"].setChecked(True)
+        row.addStretch(1)
+        self._update_chips()
+        return row
+
+    def chip(self) -> str:
+        return self._chip
+
+    def set_chip(self, key: str) -> None:
+        if key not in self.chip_btns:
+            return
+        self._chip = key
+        self.chip_btns[key].setChecked(True)
+        self._apply_filter()
+
+    def _category(self, it: dict) -> str:
+        return item_category(it, self._details.get(it["id"]))
+
+    def chip_counts(self) -> dict[str, int]:
+        counts = {key: 0 for key, _t, _tip in CHIPS}
+        for it in self._items:
+            counts["all"] += 1
+            counts[self._category(it)] = counts.get(self._category(it), 0) + 1
+        return counts
+
+    def _update_chips(self) -> None:
+        counts = self.chip_counts()
+        for key, text, _tip in CHIPS:
+            b = self.chip_btns[key]
+            n = counts.get(key, 0)
+            b.setText(f"{text} {n}" if key != "all" or n else text)
+            b.setEnabled(key == "all" or n > 0 or key == self._chip)
+            if key == "unfinished":
+                b.setVisible(n > 0 or key == self._chip)
+
     # --- data -------------------------------------------------------------------------
     def set_guard(self, fn: Callable[[dict], str | None]) -> None:
         """``fn(item)`` → why the item can't be deleted now ("đang mở" …) or None."""
@@ -594,6 +683,7 @@ class LibraryView(QWidget):
         self._relayout()
         self._update_total()
         self._update_selection()
+        self._update_chips()
         if self._cur in self._rows:
             self._rows[self._cur].set_cursor_row(True)
         items = list(self._items)
@@ -613,6 +703,9 @@ class LibraryView(QWidget):
         if self._sort == "size":
             self._relayout()
         self._update_total()
+        self._update_chips()
+        if self._chip != "all":
+            self._apply_filter()          # a project can move between chips once its details land
         self._update_selection()
 
     def _apply_thumbs(self, gen: int, result: dict) -> None:
@@ -642,6 +735,8 @@ class LibraryView(QWidget):
                        reverse=True)
         elif self._sort == "name":
             items.sort(key=lambda it: fold(short_title(it.get("title") or it["id"])))
+        elif self._sort == "ep":
+            items.sort(key=episode_sort_key)
         return items
 
     def order(self) -> list[str]:
@@ -666,12 +761,17 @@ class LibraryView(QWidget):
         q = fold(self.search.text().strip())
         shown = 0
         for it in self._items:
-            ok = self._matches(it, q)
+            ok = self._matches(it, q) and (self._chip == "all"
+                                           or self._category(it) == self._chip)
             self._rows[it["id"]].setVisible(ok)
             shown += ok
         self.empty.setVisible(shown == 0)
-        self.empty.setText("Chưa có dự án nào — dán link ở màn hình Bắt đầu." if not self._items
-                           else f"Không có dự án nào khớp “{self.search.text().strip()}”.")
+        if not self._items:
+            self.empty.setText("Chưa có dự án nào — dán link ở màn hình Bắt đầu.")
+        elif q:
+            self.empty.setText(f"Không có dự án nào khớp “{self.search.text().strip()}”.")
+        else:
+            self.empty.setText("Không có dự án nào ở trạng thái này.")
         self._update_selection()
 
     def visible_ids(self) -> list[str]:
