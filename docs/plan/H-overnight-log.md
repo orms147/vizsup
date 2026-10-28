@@ -46,3 +46,15 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 00:55 — sesion 1 vizup → build task: TTS spoken-text normaliser + pronunciation
   dictionary on worktree C:\Work\AI\vizsup-wt\tts-normalize, branch feat/tts-normalize
   (coordinator reviews + merges).
+- 01:05 — sesion 2 vizup: UX audit done → docs/plan/research/ux-audit.md (+ shots). Then
+  build task: UX quick wins (audit items 1,5,6,7,9,11,13,14,15) on worktree
+  C:\Work\AI\vizsup-wt\ux-quickwins, branch feat/ux-quickwins.
+- 01:06 — commit c657b60 (batch dialog polish + research docs).
+- 01:30 — commit 345bda5 feat(render): final-mix loudness (-14 LUFS, true peak -1.5) +
+  blurred 9:16 bars (render page "Nền hai bên": hình mờ / đen). Real render checked.
+- 01:35 — merged feat/tts-normalize (sesion 1 vizup, 18c0ce8): backend/app/pipeline/speak.py
+  — the dub reads numbers/units/dates/money/abbreviations the Vietnamese way;
+  pronounce.json (global + per project). Subtitles unchanged. 1108 tests pass. NOTE: lines
+  with digits / % / units will re-voice once on the next render (cache key = spoken text).
+- 01:40 — sesion 1 vizup → next: timing post-pass (gaps / min gap / min duration, optional
+  scene-cut snap), branch feat/timing-pass.
