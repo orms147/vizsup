@@ -588,9 +588,19 @@ class InputView(QWidget):
             "“Tự nhận” lấy tên trong 《…》 của tiêu đề video.")
         self.series_note = label("", "small", wrap=True)
         self.series_combo.currentIndexChanged.connect(self._update_series_note)
+        self.series_edit = icon_button("Settings2", "Sửa bộ phim: tóm tắt, nhân vật, thuật ngữ, "
+                                                    "cách đọc (chưa chọn → tạo bộ phim mới)")
+        self.series_edit.clicked.connect(self._edit_series)
+        srow = QWidget()
+        srow.setObjectName("bare")
+        sh = QHBoxLayout(srow)
+        sh.setContentsMargins(0, 0, 0, 0)
+        sh.setSpacing(6)
+        sh.addWidget(self.series_combo, 1)
+        sh.addWidget(self.series_edit)
         sf = QWidget()
         sf.setObjectName("bare")
-        sf.setLayout(_field("Bộ phim", self.series_combo))
+        sf.setLayout(_field("Bộ phim", srow))
         sf.layout().setContentsMargins(0, 0, 0, 0)
         sf.layout().addWidget(self.series_note)
         self._series_field = sf
@@ -854,6 +864,25 @@ class InputView(QWidget):
         self.series_combo.setCurrentIndex(i if i >= 0 else 0)
         self.series_combo.blockSignals(False)
         self._update_series_note()
+
+    def _edit_series(self) -> None:
+        """⚙ next to the combo: edit the picked series, or create one first (a name is
+        asked) when the pick is "tự nhận" / "không dùng"."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.pipeline import series
+        from desktop.series_dialog import SeriesDialog
+
+        key = self.series_combo.currentData()
+        prof = self._series_profiles.get(key)
+        if prof is None:
+            name, ok = QInputDialog.getText(self, "Bộ phim mới", "Tên bộ phim (vd. 末日校车):")
+            if not ok or not name.strip():
+                return
+            prof = series.create(name.strip())
+        if SeriesDialog(prof, self).exec():
+            self.refresh_series()
+            self.series_combo.setCurrentIndex(max(0, self.series_combo.findData(prof.slug)))
 
     def _update_series_note(self, *_a) -> None:
         from app.pipeline import series
