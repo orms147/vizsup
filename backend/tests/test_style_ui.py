@@ -210,3 +210,23 @@ def test_export_never_attaches_a_windows_font(tmp_path, storage):
     for n in ("BeVietnamPro-Regular.ttf", "arial.ttf", "JetBrainsMono.ttf"):
         (j.work_dir / "fonts" / n).write_bytes(b"f")
     assert [p.name for p in export._fonts(j)] == ["BeVietnamPro-Regular.ttf"]
+
+
+def test_opening_a_style_shows_no_extra_window(qapp):
+    """2026-10-28: a parentless flag widget turned visible popped up an empty "vizsup"
+    window next to the app every time a project was opened."""
+    from PySide6.QtWidgets import QApplication
+
+    from desktop.widgets.style_panel import StylePanel
+
+    sp = StylePanel()
+    sp.show()
+    before = {w for w in QApplication.topLevelWidgets() if w.isVisible()}
+    sp.box_style.setCurrentText("Hộp mờ")
+    sp.set_from({"style": {"glass": True}})
+    sp.box_style.setCurrentText("Hộp đặc (che chữ Trung)")
+    qapp.processEvents()
+    after = {w for w in QApplication.topLevelWidgets() if w.isVisible()}
+    assert after - before == set()
+    assert sp._glass_row.window() is sp.window()
+    sp.close()

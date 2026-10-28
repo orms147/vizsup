@@ -348,8 +348,12 @@ class StylePanel(QScrollArea):
         self.glass_warn.setWordWrap(True)
         self.glass_warn.setStyleSheet(f"color:{V2['amber']};font-size:11px;")
         bg.grid.addWidget(self.glass_warn, bg.grid.rowCount(), 0, 1, 3)
-        self._glass_row = QWidget()        # kept for callers: visible ⇔ glass controls shown
-        self._box_color_row = QWidget()
+        # state flags kept for callers (visible ⇔ those controls shown): zero-size CHILDREN
+        # — a parentless QWidget shown by setVisible(True) became an empty extra window
+        self._glass_row = QWidget(inner)
+        self._box_color_row = QWidget(inner)
+        for flag in (self._glass_row, self._box_color_row):
+            flag.setFixedSize(0, 0)
         ll.addWidget(bg)
 
         # --- Dòng & vị trí --------------------------------------------------------------
