@@ -394,6 +394,7 @@ class SettingsView(QWidget):
             v.addWidget(self._edge_card())
         if group == "ai":
             v.addWidget(self._model_card())
+            v.addWidget(self._catalog_card())
             self.promo_state = label("", "small")
             self.promo_state.setWordWrap(True)
         for spec in OPTIONS:
@@ -414,12 +415,12 @@ class SettingsView(QWidget):
         cl.setContentsMargins(14, 12, 14, 12)
         cl.setSpacing(6)
         from app.providers import presets
-        from app.providers.roles import ROLES
+        from app.providers.roles import ROLES, default_for
 
         # the package: one choice sets every text role (app/providers/presets.py)
         cl.addWidget(label("Gói mô hình", "h3"))
         self.preset_combo = QComboBox()
-        for p in presets.PRESETS.values():
+        for p in (presets.effective(k) for k in presets.PRESETS):
             self.preset_combo.addItem(f"{p.label} — ≈ ${p.usd_per_min:.4f}/phút", p.key)
         self.preset_combo.addItem("Tùy chỉnh — bạn tự chọn model cho từng việc", presets.CUSTOM)
         self.preset_combo.setToolTip("Chi phí đo thật 27/10/2026 tới bước sửa phụ đề (nhận dạng "
@@ -448,7 +449,7 @@ class SettingsView(QWidget):
             combo.setEditable(True)
             combo.setMinimumWidth(280)
             combo.addItems([""] + presets.known_models())   # any OpenRouter id can be typed
-            combo.lineEdit().setPlaceholderText(f"mặc định · {r.default}")
+            combo.lineEdit().setPlaceholderText(f"mặc định · {default_for(r.key)}")
             combo.setToolTip(r.hint + "\nĐể trống = theo gói mô hình đã chọn. Gõ được mọi id "
                              "OpenRouter (vd. openai/gpt-6-luna).")
             combo.editTextChanged.connect(self._mark_dirty)
@@ -469,12 +470,12 @@ class SettingsView(QWidget):
         """Select ``key`` in the package list without side effects; refresh hint and the
         role rows' placeholders (what a blank row will use)."""
         from app.providers import presets
-        from app.providers.roles import ROLES
+        from app.providers.roles import default_for
 
         self.preset_combo.blockSignals(True)
         self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(key)))
         self.preset_combo.blockSignals(False)
-        base = presets.PRESETS[self._base_preset]
+        base = presets.effective(self._base_preset)
         if key == presets.CUSTOM:
             self.preset_hint.setText(f"Tùy chỉnh: các ô để trống vẫn theo gói “{base.label}”. "
                                      f"Chọn lại một gói ở trên để bỏ các lựa chọn riêng.")
@@ -483,11 +484,11 @@ class SettingsView(QWidget):
         models = presets.models(self._base_preset)
         for k, combo in self.role_combos.items():
             src = "theo gói" if k in models else "mặc định"     # vision / ocr: not packaged
-            combo.lineEdit().setPlaceholderText(f"{src} · {models.get(k) or ROLES[k].default}")
+            combo.lineEdit().setPlaceholderText(f"{src} · {models.get(k) or default_for(k)}")
 
     def _preset_chosen(self, _i: int) -> None:
         from app.providers import presets
-        from app.providers.roles import ROLES
+        from app.providers.roles import default_for
 
         key = self.preset_combo.currentData()
         if key == presets.CUSTOM:
@@ -497,7 +498,7 @@ class SettingsView(QWidget):
                 combo = self.role_combos[k]
                 if not combo.currentText().strip():
                     combo.blockSignals(True)
-                    combo.setEditText(models.get(k) or ROLES[k].default)
+                    combo.setEditText(models.get(k) or default_for(k))
                     combo.blockSignals(False)
         else:
             # a package replaces every hand-picked text-role model
@@ -515,6 +516,58 @@ class SettingsView(QWidget):
 
         if role in presets.TEXT_ROLES and self.role_combos[role].currentText().strip():
             self._show_package(presets.CUSTOM)
+
+    # --- model catalog updates (app/catalog.py) ---------------------------------------
+    def _catalog_card(self) -> QFrame:
+        from app import catalog
+
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(6)
+        head = QHBoxLayout()
+        head.addWidget(label("Cập nhật model mới", "h3"), 1)
+        self.catalog_btn = button("Kiểm tra ngay", "RefreshCw", variant="ghost", small=True)
+        self.catalog_btn.clicked.connect(self._check_catalog)
+        self._buttons.append(self.catalog_btn)
+        head.addWidget(self.catalog_btn)
+        cl.addLayout(head)
+        cl.addWidget(label("Mỗi ngày vizsup xem danh sách model khuyên dùng trên trang vizsup "
+                           "(GitHub) — model mới, rẻ hơn được dùng ngay, không cần cài lại. Chỉ "
+                           "nhận model OpenRouter còn hoạt động; model bạn tự chọn ở trên giữ "
+                           "nguyên. Không gửi dữ liệu nào của bạn.", "small", wrap=True))
+        self.catalog_status = label(catalog.summary(), "small", wrap=True)
+        cl.addWidget(self.catalog_status)
+        return card
+
+    def _check_catalog(self) -> None:
+        from app import catalog
+
+        self.catalog_status.setStyleSheet(f"color:{V2['muted']};")
+        self.catalog_status.setText("Đang kiểm tra…")
+        self._bg(catalog.refresh, self._catalog_done)
+
+    def _catalog_done(self, res) -> None:
+        from app import catalog
+        from app.providers import presets
+
+        self._set_busy(False)
+        if isinstance(res, Exception) or not res.get("ok"):
+            why = res if isinstance(res, Exception) else "; ".join(res["problems"][:3])
+            self.catalog_status.setText(f"✗ {why} — vẫn dùng danh sách cũ.")
+            self.catalog_status.setStyleSheet(f"color:{V2['red']};")
+            return
+        bits = [catalog.summary()]
+        bits.append(f"Đổi {len(res['changes'])} model." if res["changes"] else "Không có gì mới.")
+        self.catalog_status.setText(" ".join(bits))
+        self.catalog_status.setToolTip("\n".join(res["changes"]))
+        self.catalog_status.setStyleSheet(f"color:{V2['green']};")
+        for i in range(self.preset_combo.count()):          # package names / prices
+            key = self.preset_combo.itemData(i)
+            if key in presets.PRESETS:
+                p = presets.effective(key)
+                self.preset_combo.setItemText(i, f"{p.label} — ≈ ${p.usd_per_min:.4f}/phút")
+        self._show_package(self.preset_combo.currentData())
 
     # --- Tải video: yt-dlp upkeep and cookie age -------------------------------------
     def _ytdlp_card(self) -> QFrame:

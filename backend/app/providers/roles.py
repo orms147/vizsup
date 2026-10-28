@@ -62,12 +62,19 @@ def explicit(role: str) -> str:
     return (getattr(settings, r.attr, "") or "").strip()
 
 
+def default_for(role: str) -> str:
+    """The role default: the downloaded model catalog's (app/catalog.py), else the table."""
+    from app import catalog
+
+    return catalog.role_default(role) or ROLES[role].default
+
+
 def package_default(role: str) -> str:
     """What this role uses when the user did not pick a model for it: the chosen
     package's model, else the role default."""
     from app.providers import presets
 
-    return presets.active().overrides.get(role) or ROLES[role].default
+    return presets.active().overrides.get(role) or default_for(role)
 
 
 def model_for(role: str) -> str:

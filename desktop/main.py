@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from desktop import paths  # noqa: F401
 from desktop import store
 from desktop.cuemodel import fmt_time
-from desktop.ui_thread import connect_on_ui
+from desktop.ui_thread import BgRunner, connect_on_ui
 from desktop.settings_dialog import SettingsView
 from desktop.theme import load_fonts, qss
 from desktop.views.editor_view import EditorView
@@ -159,6 +159,8 @@ class MainWindow(QMainWindow):
         self._on_page(INPUT)
         self._tray = self._make_tray()
         QTimer.singleShot(1500, self._offer_recovery)
+        self._bg = BgRunner(self)
+        QTimer.singleShot(8000, self._check_catalog)   # newer models, once a day
         self._app_shortcuts()
         self._toast = Toast(self)
         app = QApplication.instance()
@@ -183,6 +185,27 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def _check_catalog(self) -> None:
+        """Once a day, quietly: the recommended model list (app/catalog.py). Says
+        something only when a model changed or a newer vizsup exists."""
+        from app import catalog
+
+        if self._closing or not catalog.due():
+            return
+        self._bg.run(catalog.refresh, self._catalog_checked)
+
+    def _catalog_checked(self, res) -> None:
+        if not isinstance(res, dict) or not res.get("ok") or self._closing:
+            return
+        bits = []
+        if res["changes"]:
+            bits.append(f"Đã cập nhật {len(res['changes'])} model khuyên dùng (Cài đặt → AI và "
+                        f"mô hình).")
+        if res["update"]:
+            bits.append(f"Có vizsup {res['latest']} mới: {res['url']}")
+        if bits:
+            self._notify("Cập nhật", " ".join(bits))
 
     def _notify(self, title: str, msg: str, kind: str = "ok") -> None:
         """A Windows notification when the user is looking elsewhere, an in-app toast
@@ -1221,6 +1244,7 @@ class MainWindow(QMainWindow):
             self.library.shutdown()  # library sizes / thumbnails
             self.render.shutdown()  # voice sample synthesis
             self.settings_view.shutdown()  # connection tests / model list
+            self._bg.shutdown()            # the daily model-catalog check
         except Exception:  # noqa: BLE001
             pass
         e.accept()

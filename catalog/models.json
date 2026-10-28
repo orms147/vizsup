@@ -1,0 +1,16 @@
+{
+ "schema": 1,
+ "updated": "2026-10-29",
+ "note": "Read by every installed vizsup once a day (app/catalog.py) from the main branch. Only known roles / packages; every id must exist on https://openrouter.ai/api/v1/models or the whole file is ignored. Re-measure (backend/scripts/cost_bench.py) before changing a model.",
+ "app": {"latest": "0.1.0", "url": "https://github.com/orms147/vizsup/releases"},
+ "role_defaults": {
+  "draft": "deepseek/deepseek-v4.1-flash",
+  "refine": "openai/gpt-6-luna",
+  "proofread": "deepseek/deepseek-v4.1-flash",
+  "brief": "deepseek/deepseek-v4.1-flash-1017",
+  "terms": "deepseek/deepseek-v4.1-flash",
+  "shorten": "openai/gpt-6-luna",
+  "qa": "qwen/qwen3.8-flash"
+ },
+ "presets": {}
+}

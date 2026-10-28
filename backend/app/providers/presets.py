@@ -71,17 +71,33 @@ PRESETS: dict[str, Preset] = {p.key: p for p in (
 )}
 
 
+def effective(key: str) -> Preset:
+    """Package ``key`` with the downloaded model catalog's changes (app/catalog.py)."""
+    from dataclasses import replace
+
+    from app import catalog
+
+    p = PRESETS[key]
+    patch = catalog.preset_patch(key)
+    if not patch:
+        return p
+    return replace(p, overrides={**p.overrides, **(patch.get("overrides") or {})},
+                   **{f: patch[f] for f in ("label", "hint", "usd_per_min", "usd_per_video")
+                      if f in patch})
+
+
 def active() -> Preset:
     """The package in settings (``MODEL_PRESET``); blank or unknown → the default."""
-    return PRESETS.get((getattr(settings, "model_preset", "") or "").strip(), PRESETS[DEFAULT])
+    key = (getattr(settings, "model_preset", "") or "").strip()
+    return effective(key if key in PRESETS else DEFAULT)
 
 
 def models(key: str) -> dict[str, str]:
     """Every text role's model under package ``key`` (role defaults + its overrides)."""
-    from app.providers.roles import ROLES
+    from app.providers.roles import default_for
 
-    p = PRESETS[key]
-    return {r: p.overrides.get(r, ROLES[r].default) for r in TEXT_ROLES}
+    p = effective(key)
+    return {r: p.overrides.get(r) or default_for(r) for r in TEXT_ROLES}
 
 
 def is_custom() -> bool:
@@ -94,9 +110,9 @@ def is_custom() -> bool:
 def known_models() -> list[str]:
     """Every id a package or a role default uses — offered in the role lists even before
     the live model list is fetched."""
-    from app.providers.roles import ROLES
+    from app.providers.roles import ROLES, default_for
 
-    ids = {r.default for r in ROLES.values()}
-    for p in PRESETS.values():
-        ids.update(p.overrides.values())
+    ids = {r.default for r in ROLES.values()} | {default_for(k) for k in ROLES}
+    for key in PRESETS:
+        ids.update(effective(key).overrides.values())
     return sorted(ids)

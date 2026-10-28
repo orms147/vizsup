@@ -1,0 +1,207 @@
+"""Model catalog updates (2026-10-29): newer / cheaper models without reinstalling vizsup.
+
+The owner keeps ``catalog/models.json`` in the vizsup repository (public on GitHub). The app
+fetches it with a plain GET (no key, nothing about the user is sent), checks it and caches it
+in ``storage/_cache/model_catalog.json``. Role defaults and model packages then read from it:
+
+    MODEL_<ROLE> (the user's own pick) → package (catalog, else presets.py)
+                                       → role default (catalog, else roles.py)
+
+A catalog is used only when it is well-formed, names known roles and packages only, and
+every model id in it exists on OpenRouter's live model list — a typo or a retired model can
+never break translation, and the built-in tables stay the fallback. It also names the latest
+app version, so Settings can say "Có bản mới" (the user downloads the installer themselves).
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import urllib.request
+from pathlib import Path
+
+from app import __version__
+from app.config import settings
+from app.fsutil import atomic_write_text
+
+SCHEMA = 1
+URL = "https://raw.githubusercontent.com/orms147/vizsup/main/catalog/models.json"
+OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"     # public, no key
+RELEASES = "https://github.com/orms147/vizsup/"                # the only allowed app link
+CACHE = Path("_cache") / "model_catalog.json"
+MAX_AGE = 24 * 3600.0           # check at most once a day
+_ID = re.compile(r"^[a-z0-9][\w.-]*/[\w.:-]+$", re.I)
+_VER = re.compile(r"^\d+(\.\d+){0,3}$")
+
+_memo: tuple[float, dict] | None = None     # (cache mtime, catalog) — read once per change
+
+
+def _get_json(url: str, timeout: float = 10.0):
+    req = urllib.request.Request(url, headers={"User-Agent": f"vizsup/{__version__}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:    # noqa: S310 (fixed https URLs)
+        return json.loads(r.read().decode("utf-8"))
+
+
+def cache_path() -> Path:
+    return Path(settings.vizsup_storage_dir) / CACHE
+
+
+def _ids(data: dict) -> set[str]:
+    ids = set((data.get("role_defaults") or {}).values())
+    for p in (data.get("presets") or {}).values():
+        ids.update((p.get("overrides") or {}).values())
+    return ids
+
+
+def validate(data, live: set[str] | None) -> list[str]:
+    """Problems with a downloaded catalog ([] = usable). ``live`` = OpenRouter's model ids
+    (None skips that check — tests, or reading back our own cache). Pure."""
+    from app.providers.presets import PRESETS, TEXT_ROLES
+    from app.providers.roles import ROLES
+
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        return [f"không phải danh mục model (schema {SCHEMA})"]
+    bad: list[str] = []
+    rd = data.get("role_defaults") or {}
+    if not isinstance(rd, dict):
+        return ["role_defaults phải là bảng"]
+    for role, mid in rd.items():
+        if role not in ROLES:
+            bad.append(f"việc không có trong app: {role}")
+        if not isinstance(mid, str) or not _ID.match(mid):
+            bad.append(f"id model sai: {mid!r}")
+    ps = data.get("presets") or {}
+    if not isinstance(ps, dict):
+        return bad + ["presets phải là bảng"]
+    for key, p in ps.items():
+        if key not in PRESETS or not isinstance(p, dict):
+            bad.append(f"gói không có trong app: {key}")
+            continue
+        ov = p.get("overrides") or {}
+        if not isinstance(ov, dict):
+            bad.append(f"{key}.overrides phải là bảng")
+            continue
+        for role, mid in ov.items():
+            if role not in TEXT_ROLES:
+                bad.append(f"{key}: việc không thuộc gói: {role}")
+            if not isinstance(mid, str) or not _ID.match(mid):
+                bad.append(f"{key}: id model sai: {mid!r}")
+        for f in ("usd_per_min", "usd_per_video"):
+            if f in p and not (isinstance(p[f], (int, float)) and 0 <= p[f] < 1):
+                bad.append(f"{key}.{f} không hợp lệ")
+        for f in ("label", "hint"):
+            if f in p and not (isinstance(p[f], str) and len(p[f]) <= 400):
+                bad.append(f"{key}.{f} không hợp lệ")
+    app = data.get("app") or {}
+    if app:
+        if not isinstance(app, dict) or not _VER.match(str(app.get("latest") or "")):
+            bad.append("app.latest không hợp lệ")
+        elif app.get("url") and not str(app["url"]).startswith(RELEASES):
+            bad.append("app.url phải là trang vizsup trên GitHub")
+    if live is not None and not bad:
+        gone = sorted(i for i in _ids(data) if i not in live)
+        bad += [f"OpenRouter không có model: {i}" for i in gone]
+    return bad
+
+
+def current() -> dict:
+    """The cached catalog ({} when there is none or it is unreadable)."""
+    global _memo
+    p = cache_path()
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return {}
+    if _memo and _memo[0] == mtime:
+        return _memo[1]
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if validate(data, None):
+        data = {}
+    _memo = (mtime, data)
+    return data
+
+
+def role_default(role: str) -> str | None:
+    return (current().get("role_defaults") or {}).get(role) or None
+
+
+def preset_patch(key: str) -> dict:
+    """The catalog's changes to one package: {overrides?, label?, hint?, usd_*?}."""
+    return dict((current().get("presets") or {}).get(key) or {})
+
+
+def newer(latest: str | None, have: str = __version__) -> bool:
+    def parts(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+    try:
+        return bool(latest) and parts(str(latest)) > parts(have)
+    except ValueError:
+        return False
+
+
+def due(now: float | None = None) -> bool:
+    """A check is due: no cache yet, or the last successful one is older than a day.
+    Never with VIZSUP_NO_UPDATE_CHECK=1 (the test suite; anyone who wants no checks)."""
+    if os.environ.get("VIZSUP_NO_UPDATE_CHECK"):
+        return False
+    try:
+        age = (now or time.time()) - cache_path().stat().st_mtime
+    except OSError:
+        return True
+    return age > MAX_AGE
+
+
+def _effective(data: dict) -> dict[str, str]:
+    """"role" and "package/role" → model, under a catalog (for the change list)."""
+    from app.providers.presets import PRESETS, TEXT_ROLES
+    from app.providers.roles import ROLES
+
+    rd = data.get("role_defaults") or {}
+    out = {r: rd.get(r) or ROLES[r].default for r in ROLES}
+    for key, p in PRESETS.items():
+        ov = {**p.overrides, **((data.get("presets") or {}).get(key) or {}).get("overrides", {})}
+        for r in TEXT_ROLES:
+            out[f"{key}/{r}"] = ov.get(r) or out[r]
+    return out
+
+
+def refresh(*, get=_get_json) -> dict:
+    """Download, check and cache the catalog. Returns {ok, changes [str], problems [str],
+    latest, update (bool), url}. A bad catalog keeps the previous one. Never raises."""
+    try:
+        data = get(URL)
+        live = {m.get("id") for m in (get(OPENROUTER_MODELS).get("data") or [])
+                if isinstance(m, dict)}
+    except Exception as exc:  # noqa: BLE001 — offline, GitHub/OpenRouter down, bad JSON
+        return {"ok": False, "changes": [], "problems": [f"không tải được: {exc}"],
+                "latest": None, "update": False, "url": ""}
+    problems = validate(data, live)
+    if problems:
+        return {"ok": False, "changes": [], "problems": problems, "latest": None,
+                "update": False, "url": ""}
+    before, after = _effective(current()), _effective(data)
+    changes = [f"{k}: {before[k]} → {after[k]}" for k in after if before.get(k) != after[k]]
+    p = cache_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(p, json.dumps({**data, "_fetched": time.time()}, ensure_ascii=False,
+                                    indent=1), encoding="utf-8")
+    app = data.get("app") or {}
+    return {"ok": True, "changes": changes, "problems": [], "latest": app.get("latest"),
+            "update": newer(app.get("latest")), "url": app.get("url") or RELEASES + "releases"}
+
+
+def summary() -> str:
+    """One line for Settings: what the cached catalog is."""
+    data = current()
+    if not data:
+        return "Đang dùng danh sách model có sẵn trong app."
+    when = time.strftime("%d/%m/%Y", time.localtime(float(data.get("_fetched") or 0)))
+    line = f"Danh sách model: bản {data.get('updated') or '?'} (kiểm tra {when})."
+    latest = (data.get("app") or {}).get("latest")
+    if newer(latest):
+        line += f" Có vizsup {latest} mới (đang dùng {__version__})."
+    return line
