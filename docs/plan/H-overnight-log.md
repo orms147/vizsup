@@ -186,3 +186,7 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   8.5 → 0.7 ms with 700 cues) → aaf9964. Real window re-checked: overview + ruler + wave + voice band +
   cue lane all visible, chip fits. Trade-off at logical 667 px height: the cue list shows ~2.5 rows
   (splitters can be dragged). sesion 2: all assigned work done.
+- 04:20 — full suite at a4d6cf0: 1483 passed, 1 skipped, ruff clean (37 min under load).
+  Final-head run (0b66ad2) in progress, using one core steadily (not hung). NOTE: the suite took ~100 s
+  at 00:30 and takes 10+ min alone now — some of tonight's tests are slow (likely subprocess / 1.5×
+  scale UI tests); to profile with --durations after this run. Both sessions done; nothing to merge.
