@@ -282,3 +282,55 @@ def test_reading_speed_flag_and_line_wrap():
     issues = review.cue_issues(cues)
     assert "read" not in issues[0] and "read" in issues[1] and "read" in issues[2]
     assert review.LABELS["read"] == "Đọc không kịp" and "read" in review.ORDER
+
+
+def test_time_warp_moves_lines_between_anchors_monotonic():
+    from app.models import Cue
+    from app.pipeline import asr
+
+    old = [Cue(1, 0.0, 1.0, "a"), Cue(2, 2.0, 3.0, "b"), Cue(3, 4.0, 6.0, "c")]
+    new = [Cue(1, 7.0, 8.0, "a"), Cue(2, 8.5, 9.5, "b"), Cue(3, 10.0, 14.0, "c")]
+    w = asr.time_warp(old, new)
+    assert (w(0.0), w(1.0), w(2.5), w(5.0), w(6.0)) == (7.0, 8.0, 9.0, 12.0, 14.0)
+    assert w(7.0) == 15.0                                     # past the end: shifted
+    ts = [w(t / 10) for t in range(0, 70)]
+    assert ts == sorted(ts)
+
+
+def test_vi_lines_that_no_longer_pair_follow_the_warp(job):
+    """2026-10-28, a real 10-min episode: 325 Chinese lines, 324 Vietnamese (the
+    translator merged two) — the re-timed Chinese never reached the Vietnamese."""
+    from app.pipeline import asr
+
+    (job.work_dir / asr.BEFORE_RETIME).write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\n一\n\n2\n00:00:02,000 --> 00:00:03,000\n二\n",
+        encoding="utf-8")
+    job.cn_srt.write_text(
+        "1\n00:00:05,000 --> 00:00:06,000\n一\n\n2\n00:00:06,500 --> 00:00:08,000\n二\n",
+        encoding="utf-8")
+    merged = [(0.0, 3.0)]                                     # one VI line for both
+    assert asr.vi_time_map(job, ["一二"], merged) == [(5.0, 8.0)]
+    # one CN line split into two VI lines, then a normal one
+    got = asr.vi_time_map(job, ["a", "b", "c"], [(0.0, 0.5), (0.5, 1.0), (2.0, 3.0)])
+    assert got == [(5.0, 5.5), (5.5, 6.0), (6.5, 8.0)]
+
+
+def test_retime_puts_split_lines_back_into_the_chunk_they_were_heard_in():
+    """2026-10-28: 40 clause-split lines stacked on the 240.000 s chunk edge were
+    regrouped by that (wrong) start into the next chunk and never aligned."""
+    from app.pipeline import asr
+
+    saved = [((0.0, 240.0), ["你好，我来了。", "再见。"]), ((240.0, 480.0), ["明天见。"])]
+    lines = ["你好，", "我来了。", "再见。", "明天见。"]          # Tách vế split line 1
+    g = asr.regroup_by_text(lines, saved)
+    assert g == [((0.0, 240.0), ["你好，", "我来了。", "再见。"]), ((240.0, 480.0), ["明天见。"])]
+    assert asr.regroup_by_text(["改过的字"], saved) is None          # text edited: no map
+
+
+def test_align_lines_pairs_in_order_with_merges():
+    from app.pipeline import asr
+
+    old = [(0.0, 1.0), (1.0, 2.5), (8.0, 9.0), (9.0, 10.0)]
+    vi = [(0.0, 1.4), (1.4, 2.5), (8.0, 10.0)]                        # last two merged
+    kinds = [(k, ci, vj) for k, ci, vj in asr.align_lines(old, vi)]
+    assert kinds == [("11", [0], [0]), ("11", [1], [1]), ("21", [2, 3], [2])]

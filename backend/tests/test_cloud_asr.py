@@ -574,3 +574,46 @@ def test_cached_word_chunks_are_not_charged_again(cfg, monkeypatch, tmp_path):
         for _ in range(2):                                   # the second run hits the cache
             _cloud.cloud_words([(chunk, (0.0, 10.0))], "zh", cache_dir=cache, audio_id=aid)
     assert _usage_models(job)[_cloud.DEFAULT_TIMING_MODEL]["calls"] == 1
+
+
+# --- a word track that comes back empty for speech (2026-10-28) ------------------------
+
+def test_empty_word_answer_for_speech_is_asked_again_and_not_cached(cfg, tmp_path, monkeypatch):
+    """The service once answered a 4-minute chunk full of speech with its text but NO
+    words; cached, that left 72 lines on guessed times for good."""
+    chunk = tmp_path / "c.mp3"
+    chunk.write_bytes(b"x")
+    replies = [{"text": "你好", "words": [], "segments": []},
+               _word_reply([("你", 1.0, 1.2), ("好", 1.2, 1.5)])]
+    fc = FakeClient(transcribe=lambda kw: replies.pop(0))
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    words = _cloud.cloud_words([(chunk, (0.0, 240.0))], "zh", cache_dir=tmp_path,
+                               audio_id="a")
+    assert words == [("你", 1.0, 1.2), ("好", 1.2, 1.5)] and len(fc.calls) == 2
+
+
+def test_still_empty_falls_back_to_segment_times_or_is_not_cached(cfg, tmp_path, monkeypatch):
+    chunk = tmp_path / "c.mp3"
+    chunk.write_bytes(b"x")
+    seg = {"text": "你好", "words": [], "segments": [{"start": 2.0, "end": 3.0, "text": "你好"}]}
+    fc = FakeClient(transcribe=lambda kw: seg)
+    monkeypatch.setattr(_cloud, "client", lambda: fc)
+    words = _cloud.cloud_words([(chunk, (10.0, 20.0))], "zh", cache_dir=tmp_path,
+                               audio_id="a")
+    assert words == [("你", 12.0, 12.5), ("好", 12.5, 13.0)]       # spread over its segment
+
+    empty = {"text": "你好", "words": [], "segments": []}
+    fc2 = FakeClient(transcribe=lambda kw: empty)
+    monkeypatch.setattr(_cloud, "client", lambda: fc2)
+    other = tmp_path / "b"
+    other.mkdir()
+    assert _cloud.cloud_words([(chunk, (0.0, 5.0))], "zh", cache_dir=other,
+                              audio_id="b") == []
+    assert not list(other.glob("words_*.json"))                    # asked again next time
+
+    silent = {"text": "", "words": [], "segments": []}               # real silence: kept
+    fc3 = FakeClient(transcribe=lambda kw: silent)
+    monkeypatch.setattr(_cloud, "client", lambda: fc3)
+    assert _cloud.cloud_words([(chunk, (0.0, 5.0))], "zh", cache_dir=other,
+                              audio_id="c") == []
+    assert len(fc3.calls) == 1 and len(list(other.glob("words_*.json"))) == 1

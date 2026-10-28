@@ -981,7 +981,8 @@ class EditorView(QWidget):
         def done(_moved):
             if self.job is not job:
                 return
-            times = asr.vi_time_map(job, [c.zh for c in self.cues])
+            times = asr.vi_time_map(job, [c.zh for c in self.cues],
+                                    [(c.start, c.end) for c in self.cues])
             from app.pipeline import review
 
             self._guess = review.load_guess_spans(job)

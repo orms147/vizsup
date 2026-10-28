@@ -293,12 +293,14 @@ def text_tag(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
-def chunk_cache(cache_dir: Path | None, kind: str, key: str, compute: Callable[[], T]) -> T:
+def chunk_cache(cache_dir: Path | None, kind: str, key: str, compute: Callable[[], T],
+                keep: Callable[[T], bool] | None = None) -> T:
     """Return the value stored under ``key``, or compute it, store it and return it.
 
     One JSON file per result. A failing ``compute`` raises and stores nothing, so the
     chunk is simply asked again next time. An empty answer (``""``, ``[]``) is a real
-    result and IS stored. ``cache_dir=None`` just computes.
+    result and IS stored — unless ``keep(value)`` says it is not worth keeping (a word
+    track that came back empty for speech). ``cache_dir=None`` just computes.
     """
     if cache_dir is None:
         return compute()
@@ -308,7 +310,8 @@ def chunk_cache(cache_dir: Path | None, kind: str, key: str, compute: Callable[[
     if hit is not _MISS:
         return hit
     value = compute()
-    _write_entry(cache_dir, path, key, value)
+    if keep is None or keep(value):
+        _write_entry(cache_dir, path, key, value)
     return value
 
 
@@ -408,6 +411,26 @@ def record_stt(model: str, resp, seconds: float) -> None:
     usage.record_audio(model, get("usage"), seconds, settings.stt_price_per_min)
 
 
+def _field(obj, name: str):
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+def _words_from_segments(resp, offset: float) -> list[Word]:
+    """Word-like timings from the response's SEGMENTS (each character spread over its
+    segment) — for an answer whose word list came back empty. Far closer than spreading
+    whole sentences over a 4-minute chunk. Pure."""
+    out: list[Word] = []
+    for seg in _field(resp, "segments") or []:
+        text = "".join(str(_field(seg, "text") or "").split())
+        s, e = _field(seg, "start"), _field(seg, "end")
+        if not text or s is None or e is None or float(e) <= float(s):
+            continue
+        step = (float(e) - float(s)) / len(text)
+        for k, ch in enumerate(text):
+            out.append((ch, offset + float(s) + k * step, offset + float(s) + (k + 1) * step))
+    return out
+
+
 def _words_of(resp, offset: float) -> list[Word]:
     out: list[Word] = []
     for w in (resp.get("words") if isinstance(resp, dict) else getattr(resp, "words", None)) or []:
@@ -443,14 +466,29 @@ def cloud_words(items: list[tuple[Path, tuple[float, float]]], language: str,
                             timestamp_granularities=["word", "segment"])
                 resp = with_retry(send)
                 record_stt(model, resp, sp[1] - sp[0])          # E-14 per-job cost
-                return _words_of(resp, sp[0])
+                words = _words_of(resp, sp[0])
+                if not words and str(_field(resp, "text") or "").strip():
+                    # 2026-10-28: the service answered a 4-min chunk full of speech with
+                    # text but NO words; asked again it gave 675 — ask once more, then
+                    # fall back to the segment timings
+                    heard[0] = True
+                    resp = with_retry(send)
+                    record_stt(model, resp, sp[1] - sp[0])
+                    words = _words_of(resp, sp[0]) or _words_from_segments(resp, sp[0])
+                    if log:
+                        log(f"⚠ Mốc từng chữ {sp[0]:.0f}–{sp[1]:.0f}s trả về rỗng — "
+                            + ("hỏi lại được" if _words_of(resp, sp[0]) else
+                               "dùng mốc theo đoạn" if words else "vẫn rỗng, sẽ hỏi lại lần sau"))
+                return words
 
             pieces = split_on_drop(media, (lo, _hi), path, one_piece, log=log)
             return [w for _sp, words in pieces for w in words]
 
         key = f"words|{model}|{span_tag((lo, _hi))}|{audio_id}|{language}"
+        heard = [False]       # the chunk has speech (text) — an empty word list is a failure
         # JSON gives lists back: rebuild the tuples so cached and fresh results are equal
-        return [(t, s, e) for t, s, e in chunk_cache(cache, "words", key, fetch)]
+        return [(t, s, e) for t, s, e in chunk_cache(
+            cache, "words", key, fetch, keep=lambda v: bool(v) or not heard[0])]
 
     return [w for chunk in run_chunks(one, items) for w in chunk]
 
