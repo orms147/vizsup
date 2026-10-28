@@ -303,14 +303,15 @@ _PROJECT_FILES = ("job.json", "metadata.json", "source.mp4", "cn.srt", "vi.srt",
 # "Chỉ xóa file nặng": media the app rebuilds by itself (render caches, extracted audio,
 # the quick proof). Subtitles, settings, the user's own recordings and output.mp4 stay.
 HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3")
-HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect")
+HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm")   # _norm: a stopped join
 
 
 def is_project_dir(d: Path) -> bool:
     """A project folder: has job.json, or is named like a job id and holds project files.
     Never ``_models`` / ``_browser`` / bench folders, a split video's parent folder
     (group.json — listed through its parts), test leftovers like ``smoke`` or empty dirs."""
-    if not d.is_dir() or d.name.startswith(("_", ".")) or (d / "group.json").exists():
+    if not d.is_dir() or d.name.startswith(("_", ".")) or (d / "group.json").exists() \
+            or (d / "compilation.json").exists():
         return False
     if (d / "job.json").exists():
         return True
@@ -332,6 +333,9 @@ def library_items() -> list[dict]:
         return rows
     groups: dict[str, dict] = {}
     for d in base.iterdir():
+        if _is_compilation_dir(d):
+            rows.append(_compilation_row(d))
+            continue
         if not is_project_dir(d):
             continue
         j = _job_row(d)
@@ -354,6 +358,55 @@ def library_items() -> list[dict]:
         rows.append(row)
     rows.sort(key=lambda x: x["mtime"], reverse=True)
     return rows
+
+
+def _is_compilation_dir(d: Path) -> bool:
+    return d.is_dir() and not d.name.startswith(("_", ".")) and (d / "compilation.json").exists()
+
+
+def _compilation_row(d: Path) -> dict:
+    """A "Ghép tập" result (app/pipeline/compilation.py): one video, no editor."""
+    try:
+        info = json.loads((d / "compilation.json").read_text(encoding="utf-8"))
+        info = info if isinstance(info, dict) else {}
+    except (OSError, ValueError):
+        info = {}
+    out = d / "output.mp4"
+    try:
+        mtime = (out if out.exists() else d / "compilation.json").stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    try:
+        duration = float(info.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return {"kind": "compilation", "id": d.name, "title": info.get("title") or d.name,
+            "mtime": mtime, "duration": duration, "status": "compiled",
+            "has_output": out.exists(), "has_source": False, "has_preview": False,
+            "has_vi": (d / "vi.srt").exists(), "unfinished": False, "dirs": [str(d)],
+            "episodes": len(info.get("episodes") or []) or len(info.get("sources") or []),
+            "chapters": len(info.get("chapters") or []), "platform": None, "url": None,
+            "opts": {}, "group": None}
+
+
+def compile_sources(ids: list[str]) -> list:
+    """compilation.Source per library item id (projects, split videos, compilations);
+    ids whose folder is gone are dropped."""
+    from app.pipeline import compilation
+
+    out = []
+    for i in ids:
+        s = compilation.source_from_dir(_storage(), i)
+        if s is not None:
+            out.append(s)
+    return out
+
+
+def compile_candidates() -> list:
+    """Every library item that has a rendered video to join (Thêm video… in the dialog)."""
+    return [s for s in compile_sources([it["id"] for it in library_items()
+                                        if it.get("has_output") or it.get("kind") == "group"])
+            if s.state != "missing"]
 
 
 def _group_row(gid: str) -> dict:
@@ -403,6 +456,9 @@ def videos_of(item: dict) -> list[tuple[str, Path]]:
     """Playable files, best first: (label, path). A project: bản dựng → bản xem nhanh →
     video gốc. A split video: the joined MP4, each part's best file, the original."""
     out: list[tuple[str, Path]] = []
+    if item.get("kind") == "compilation":
+        video = Path(item["dirs"][0]) / "output.mp4"
+        return [("Video ghép", video)] if video.exists() else []
     if item.get("kind") == "group":
         parent = _storage() / item["id"]
         if (parent / "output.mp4").exists():

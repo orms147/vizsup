@@ -214,6 +214,36 @@ def cmd_join(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compile(args: argparse.Namespace) -> int:
+    """Ghép tập: join rendered projects / split videos / compilations into one video."""
+    import uuid
+
+    from app.pipeline import compilation
+
+    storage = Path(args.storage).resolve() if args.storage else settings.vizsup_storage_dir
+    sources = []
+    for item in args.items:
+        s = compilation.source_from_dir(storage, item)
+        if s is None:
+            print(f"error: no project folder {storage / item}", file=sys.stderr)
+            return 2
+        sources.append(s)
+    if not args.keep_order:
+        sources = compilation.order(sources)
+    for w in compilation.warnings(sources):
+        print(f"[compile] ⚠ {w}")
+    cid = uuid.uuid4().hex[:12]
+    try:
+        out = compilation.compile_videos(storage / cid, sources, log=print,
+                                         title=args.title or compilation.default_title(sources))
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        shutil.rmtree(storage / cid, ignore_errors=True)
+        return 2
+    print(f"[compile] done -> {out} (+ vi.srt, {compilation.CHAPTERS_TXT})")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     work_dir = Path(args.workdir)
     if not work_dir.exists():
@@ -351,6 +381,14 @@ def build_parser() -> argparse.ArgumentParser:
     jn = sub.add_parser("join", help="join a split long video's rendered parts into one MP4")
     jn.add_argument("--group", required=True, help="the original video's folder (has group.json)")
     jn.set_defaults(func=cmd_join)
+    cp = sub.add_parser("compile", help="join rendered episodes (or earlier compilations) into "
+                                        "one video with chapters")
+    cp.add_argument("items", nargs="+", help="project / split-video / compilation folder names")
+    cp.add_argument("--title", default="", help="video title (default: Tổng hợp tập A–B)")
+    cp.add_argument("--keep-order", action="store_true",
+                    help="join in the given order (default: by episode number in the titles)")
+    cp.add_argument("--storage", default="", help="storage folder (default: the app's)")
+    cp.set_defaults(func=cmd_compile)
 
     pr.set_defaults(func=cmd_providers)
 

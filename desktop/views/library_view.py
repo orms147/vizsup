@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -45,6 +46,7 @@ THUMB_W, THUMB_H = 40, 56
 W_CHECK, W_DUR, W_STATUS, W_DATE, W_SIZE, W_ACT = 20, 76, 128, 104, 88, 210
 
 STATUS = {"rendered": ("Đã dựng", "ok"), "approved": ("Đã duyệt", "ok"),
+          "compiled": ("Đã ghép", "ok"),
           "review": ("Chờ duyệt", "purple"), "unfinished": ("Dở dang", "warn")}
 
 
@@ -140,6 +142,7 @@ class _Row(QFrame):
     deleteRequested = Signal(str)
     cleanRequested = Signal(str)
     externalRequested = Signal(str)
+    chaptersRequested = Signal(str)
 
     def __init__(self, item: dict, busy: str | None) -> None:
         super().__init__()
@@ -181,16 +184,25 @@ class _Row(QFrame):
         self.title = _ElideLabel(short_title(title), "h3")
         self.title.setToolTip(title)
         col.addWidget(self.title)
-        chips = QHBoxLayout()
+        # the chips may be cut at the right on a narrow window — never the action buttons
+        # (their widths would push the row past the list and hide "···")
+        chip_box = QWidget()
+        chip_box.setObjectName("bare")
+        chip_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        chips = QHBoxLayout(chip_box)
+        chips.setContentsMargins(0, 0, 0, 0)
         chips.setSpacing(5)
         if busy:
             chips.addWidget(badge(busy[:1].upper() + busy[1:], "purple"))
         if item.get("kind") == "group":
             chips.addWidget(badge(f"Video dài · {item.get('total') or len(item['parts'])} phần"))
+        compiled = item.get("kind") == "compilation"
+        if compiled:
+            chips.addWidget(badge(f"Video ghép · {item.get('episodes') or '?'} tập", "purple"))
         files = [("has_source", "Video gốc"), ("has_output", "Bản dựng"),
                  ("has_preview", "Xem nhanh")]
         shown = [name for key, name in files if item.get(key)]
-        for name in shown:
+        for name in shown if not compiled else []:
             chips.addWidget(badge(name))
         if not shown:
             chips.addWidget(label("Chưa có video trên máy", "small"))
@@ -200,7 +212,7 @@ class _Row(QFrame):
             chips.addSpacing(4)
             chips.addWidget(label(plat, "small"))
         chips.addStretch(1)
-        col.addLayout(chips)
+        col.addWidget(chip_box)
         h.addLayout(col, 1)
 
         dur = label(duration_label(item["duration"]) if item.get("duration") else "—", "mono")
@@ -231,7 +243,9 @@ class _Row(QFrame):
         al = QHBoxLayout(acts)
         al.setContentsMargins(8, 0, 0, 0)
         al.setSpacing(4)
-        self.open_btn = button("Mở", small=True, tip="Mở để sửa phụ đề / dựng video")
+        self.open_btn = button("Thêm tập" if compiled else "Mở", small=True,
+                               tip="Ghép video này với các tập mới thành một video dài hơn"
+                               if compiled else "Mở để sửa phụ đề / dựng video")
         self.open_btn.clicked.connect(lambda: self.openRequested.emit(iid))
         self.watch_btn = button("Xem", "Play", small=True, icon_size=13,
                                 tip="Xem video trong ứng dụng")
@@ -244,6 +258,10 @@ class _Row(QFrame):
         ext = m.addAction("Xem bằng trình phát của máy",
                           lambda: self.externalRequested.emit(iid))
         ext.setEnabled(self._playable)
+        if compiled:
+            ch = m.addAction("Sao chép mục lục chương (dán vào mô tả YouTube)",
+                             lambda: self.chaptersRequested.emit(iid))
+            ch.setEnabled(bool(item.get("chapters")))
         m.addSeparator()
         self.clean_act = m.addAction("Chỉ xóa file nặng…", lambda: self.cleanRequested.emit(iid))
         self.delete_act = m.addAction("Xóa dự án (vào Thùng rác)…",
@@ -353,6 +371,8 @@ class LibraryView(QWidget):
     closed = Signal()                      # "Quay lại"
     changed = Signal()                     # something went to the Recycle Bin
     message = Signal(str, str)             # status bar text, kind
+    compileRequested = Signal(dict)        # CompileDialog.spec() → main window runs the join
+    compileCancelRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -385,6 +405,11 @@ class LibraryView(QWidget):
         head.addWidget(label("Mọi dự án trên máy — xem lại, mở tiếp hoặc dọn cho nhẹ ổ đĩa",
                              "secondary"))
         head.addStretch(1)
+        self.compose_btn = button("Ghép video", "Merge", small=True,
+                                  tip="Nối nhiều tập đã dựng thành một video dài (mỗi tập một "
+                                      "chương)")
+        self.compose_btn.clicked.connect(lambda: self.compose(self.selected()))
+        head.addWidget(self.compose_btn)
         folder = button("Mở thư mục dự án", "FolderOpen", variant="ghost", small=True)
         folder.clicked.connect(lambda: open_external(store._storage()))
         head.addWidget(folder)
@@ -427,6 +452,7 @@ class LibraryView(QWidget):
         self.total = label("", "secondary")
         tools.addWidget(self.total)
         pv.addLayout(tools)
+        pv.addWidget(self._build_compile_bar())
 
         panel = QFrame()
         panel.setObjectName("panel")
@@ -448,6 +474,10 @@ class LibraryView(QWidget):
                                 tip="Giữ phụ đề và cài đặt; xóa video gốc, bản xem nhanh, "
                                     "giọng lồng, nhạc tách")
         self.clean_btn.clicked.connect(lambda: self.delete_items(self.selected(), heavy_only=True))
+        self.compile_btn = button("Ghép thành 1 video", "Merge", variant="ghost", small=True,
+                                  tip="Nối các video đã chọn (đã dựng) thành một video dài")
+        self.compile_btn.clicked.connect(lambda: self.compose(self.selected()))
+        sb.addWidget(self.compile_btn)
         sb.addWidget(self.clean_btn)
         self.delete_btn = button("Xóa dự án đã chọn", "Trash2", variant="danger", small=True)
         self.delete_btn.clicked.connect(lambda: self.delete_items(self.selected()))
@@ -529,6 +559,7 @@ class LibraryView(QWidget):
             row.watchRequested.connect(self._watch)
             row.folderRequested.connect(self._folder)
             row.externalRequested.connect(self._external)
+            row.chaptersRequested.connect(self._copy_chapters)
             row.deleteRequested.connect(lambda iid: self.delete_items([self._item(iid)]))
             row.cleanRequested.connect(
                 lambda iid: self.delete_items([self._item(iid)], heavy_only=True))
@@ -648,6 +679,8 @@ class LibraryView(QWidget):
         self.sel_label.setText(
             "" if not n else f"Đã chọn {n} · {fmt_size(size) if known else '…'}")
         self.delete_btn.setEnabled(n > 0)
+        self.compile_btn.setEnabled(n > 0)
+        self.compile_btn.setText(f"Ghép {n} video thành 1" if n > 1 else "Ghép thành 1 video")
         self.delete_btn.setText(f"Xóa {n} dự án đã chọn" if n else "Xóa dự án đã chọn")
         self.clean_btn.setEnabled(n > 0 and (heavy > 0 or not known))
         self.clean_btn.setText(f"Chỉ xóa file nặng · {fmt_size(heavy)}" if n and known and heavy
@@ -669,6 +702,9 @@ class LibraryView(QWidget):
     # --- actions ----------------------------------------------------------------------
     def _open(self, iid: str) -> None:
         it = self._item(iid)
+        if it.get("kind") == "compilation":
+            self.compose([it])
+            return
         if it.get("kind") != "group":
             self.openRequested.emit(iid)
             return
@@ -759,6 +795,120 @@ class LibraryView(QWidget):
         self.changed.emit()
         self.message.emit(what, "ok")
         return True
+
+    # --- Ghép tập (app/pipeline/compilation.py) ------------------------------------------
+    def _build_compile_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("inset")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(14, 10, 12, 10)
+        h.setSpacing(12)
+        h.addWidget(icon_label("Merge", V2["purple_bright"], 16))
+        col = QVBoxLayout()
+        col.setSpacing(5)
+        self.cb_title = label("", "h3")
+        col.addWidget(self.cb_title)
+        self.cb_bar = QProgressBar()
+        self.cb_bar.setRange(0, 1000)
+        self.cb_bar.setTextVisible(False)
+        col.addWidget(self.cb_bar)
+        self.cb_msg = label("", "small")
+        col.addWidget(self.cb_msg)
+        h.addLayout(col, 1)
+        self.cb_watch = button("Xem", "Play", small=True)
+        self.cb_watch.clicked.connect(self._watch_compiled)
+        self.cb_folder = icon_button("FolderOpen", "Mở thư mục video ghép")
+        self.cb_folder.clicked.connect(
+            lambda: self._cb_path is not None and open_external(self._cb_path.parent))
+        self.cb_cancel = button("Hủy", variant="ghost", small=True)
+        self.cb_cancel.clicked.connect(self._cancel_compile)
+        self.cb_close = icon_button("X", "Ẩn")
+        self.cb_close.clicked.connect(lambda: bar.setVisible(False))
+        for w in (self.cb_watch, self.cb_folder, self.cb_cancel, self.cb_close):
+            h.addWidget(w)
+        self._cb_path: Path | None = None
+        self._cb_running = False
+        self.compile_bar = bar
+        bar.setVisible(False)
+        return bar
+
+    def compose(self, items: list[dict]) -> bool:
+        """Open the "Ghép thành một video" dialog with these items (may be none); emits
+        compileRequested with its spec when the user confirms."""
+        from app.pipeline import compilation
+
+        from desktop.widgets.compile_dialog import CompileDialog
+
+        if self._cb_running:
+            self.message.emit("Đang ghép một video — đợi xong rồi ghép tiếp.", "warn")
+            return False
+        sources = compilation.order(store.compile_sources([it["id"] for it in items if it]))
+        dlg = CompileDialog(self.window(), sources, candidates=store.compile_candidates)
+        if not self._run_dialog(dlg):
+            return False
+        self.compileRequested.emit(dlg.spec())
+        return True
+
+    def _run_dialog(self, dlg) -> bool:
+        return bool(dlg.exec())
+
+    def compile_started(self, title: str, count: int) -> None:
+        self._cb_path = None
+        self._cb_running = True
+        self.cb_title.setText(title)
+        self.cb_msg.setText(f"Đang chuẩn bị ghép {count} video…")
+        self.cb_bar.setValue(0)
+        self.cb_bar.setVisible(True)
+        self.cb_cancel.setVisible(True)
+        self.cb_cancel.setEnabled(True)
+        for w in (self.cb_watch, self.cb_folder, self.cb_close):
+            w.setVisible(False)
+        self.compile_bar.setVisible(True)
+        self.compose_btn.setEnabled(False)
+
+    def set_compile_progress(self, frac: float, msg: str) -> None:
+        self.cb_bar.setValue(int(max(0.0, min(1.0, frac)) * 1000))
+        if msg:
+            self.cb_msg.setText(msg)
+
+    def compile_finished(self, path: str | None, msg: str) -> None:
+        """Done (path) or failed/cancelled (None): the bar stays with the outcome."""
+        self._cb_running = False
+        self._cb_path = Path(path) if path else None
+        self.cb_bar.setVisible(False)
+        self.cb_cancel.setVisible(False)
+        self.cb_msg.setText(msg)
+        self.cb_watch.setVisible(bool(path))
+        self.cb_folder.setVisible(bool(path))
+        self.cb_close.setVisible(True)
+        self.compose_btn.setEnabled(True)
+        self.compile_bar.setVisible(True)
+        if path:
+            self.refresh()
+
+    def _watch_compiled(self) -> None:
+        if self._cb_path is not None and self._cb_path.exists():
+            PlayerDialog(self.window(), self.cb_title.text(),
+                         [("Video ghép", self._cb_path)]).exec()
+
+    def _cancel_compile(self) -> None:
+        self.cb_cancel.setEnabled(False)
+        self.cb_msg.setText("Đang hủy…")
+        self.compileCancelRequested.emit()
+
+    def _copy_chapters(self, iid: str) -> None:
+        from app.pipeline import compilation
+
+        it = self._item(iid)
+        p = Path(it["dirs"][0]) / compilation.CHAPTERS_TXT
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            self.message.emit("Không thấy mục lục chương của video này.", "warn")
+            return
+        QApplication.clipboard().setText(text)
+        self.message.emit(f"Đã sao chép {len(text.splitlines())} chương — dán vào mô tả video.",
+                          "ok")
 
     def shutdown(self) -> None:
         self._bg.shutdown()

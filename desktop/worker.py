@@ -158,6 +158,42 @@ class PipelineWorker(QObject):
         finally:
             self.finished.emit()
 
+    @Slot()
+    def run_compile(self) -> None:
+        """Ghép tập: join rendered episodes / compilations into ``self.job.work_dir``
+        (a new folder). opts["_compile"] = {title, ids, names} from CompileDialog.spec().
+        A run that fails or is cancelled removes its half-made folder."""
+        from app.pipeline import compilation
+
+        spec = self.opts.get("_compile") or {}
+        storage = settings.vizsup_storage_dir
+        out_dir = self.job.work_dir
+        try:
+            self.stage_started.emit("compile")
+            names = spec.get("names") or {}
+            sources = []
+            for sid in spec.get("ids") or []:
+                s = compilation.source_from_dir(storage, sid)
+                if s is None:
+                    raise RuntimeError("Một video trong danh sách không còn trên máy (đã xóa?).")
+                if s.kind != "compilation" and names.get(sid):
+                    s.chapters = [(0.0, str(names[sid]))]
+                sources.append(s)
+            out = compilation.compile_videos(
+                out_dir, sources, title=spec.get("title") or compilation.default_title(sources),
+                log=self.log.emit, progress=lambda f, m: self.progress.emit(f, m),
+                cancel=lambda: self._cancel)
+            self.progress.emit(1.0, "Hoàn tất")
+            self.render_done.emit(str(out))
+        except (_Cancelled, InterruptedError):
+            self.failed.emit("Đã hủy.")
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(_user_message(exc))
+        finally:
+            if not (out_dir / compilation.COMP_FILE).exists():
+                shutil.rmtree(out_dir, ignore_errors=True)
+            self.finished.emit()
+
     # --- to the edit gate ----------------------------------------------------
     @Slot()
     def run_to_gate(self) -> None:

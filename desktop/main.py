@@ -123,6 +123,10 @@ class MainWindow(QMainWindow):
         self.library.changed.connect(self.input.refresh_recent)
         self.library.message.connect(self.status.set_status)
         self.library.set_guard(self._library_guard)
+        self.library.compileRequested.connect(self._start_compile)
+        self.library.compileCancelRequested.connect(self._cancel_compile)
+        self._compile_ids: set[str] = set()   # sources + output of the running "Ghép tập"
+        self._compile_worker = None
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -342,6 +346,8 @@ class MainWindow(QMainWindow):
         if ids & {o.get("_job_id") for o in self._queue if o.get("_job_id")}:
             return "đang chờ trong hàng đợi"
         if self._join_gid in ids and self._any_busy():
+            return "đang ghép video"
+        if ids & self._compile_ids and self._any_busy():
             return "đang ghép video"
         return None
 
@@ -669,6 +675,50 @@ class MainWindow(QMainWindow):
         self.render.show_joined(path, title)
         self.input.refresh_recent()
         self._notify("Đã ghép xong video đầy đủ", title[:120])
+
+    # --- Ghép tập: rendered episodes → one long video (app/pipeline/compilation.py) ----
+    def _start_compile(self, spec: dict) -> None:
+        slot = self._render_slot()
+        if slot is None:
+            self.library.compile_finished(None, "Đang bận (dựng / xử lý video) — ghép lại khi "
+                                                "tác vụ hiện tại xong.")
+            self.status.set_status("Đang bận — ghép video khi tác vụ hiện tại xong.", "warn")
+            return
+        cid = uuid.uuid4().hex[:12]
+        job = Job(id=cid, work_dir=settings.vizsup_storage_dir / cid)
+        title = spec.get("title") or "Video ghép"
+        self._compile_ids = {*spec.get("ids", []), cid}
+        self.library.compile_started(title, len(spec.get("ids") or []))
+        self.status.set_status(f"Đang ghép “{title}”…", "busy")
+        self._run("run_compile", {"_compile": spec}, {
+            "progress": self.library.set_compile_progress,
+            "failed": self._on_compile_failed,
+            "render_done": lambda path, t=title: self._on_compile_done(path, t),
+        }, job=job, slot=slot)
+        self._compile_worker = self._rworker if slot == "render" else self._worker
+
+    def _cancel_compile(self) -> None:
+        try:
+            if self._compile_worker is not None:
+                self._compile_worker.cancel()
+        except RuntimeError:              # the worker already finished and was deleted
+            pass
+
+    def _on_compile_done(self, path: str, title: str) -> None:
+        self._compile_ids, self._compile_worker = set(), None
+        self.library.compile_finished(path, "✓ Đã ghép xong — xem, hoặc mở thư mục để lấy "
+                                            "video, phụ đề .srt và mục lục chương")
+        self.status.set_status(f"Đã ghép xong “{title}”", "ok")
+        self._notify("Đã ghép xong video", title[:120])
+
+    def _on_compile_failed(self, msg: str) -> None:
+        self._compile_ids, self._compile_worker = set(), None
+        cancelled = msg.strip().startswith("Đã hủy")
+        self.library.compile_finished(None, "Đã hủy ghép video." if cancelled else f"⚠ {msg}")
+        self.status.set_status("Đã hủy ghép video." if cancelled else "Chưa ghép được video.",
+                               "warn")
+        if not cancelled:
+            self._notify("Chưa ghép được video", msg[:160], "err")
 
     def _delete_group(self, gid: str) -> None:
         """A split video from the recent list: every part + the parent folder, through
