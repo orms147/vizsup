@@ -48,7 +48,7 @@ def save_ui_state(opts: dict) -> None:
 # Preferences of other screens (render page): merged in, never cleared by the start screen.
 _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "render_res",
                   "render_quality", "render_split", "recent_colors", "watermark", "render_fill",
-                  "episode_card")
+                  "episode_card", "cue_density")
 
 
 def update_ui_state(**kv) -> None:

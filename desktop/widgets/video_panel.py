@@ -202,7 +202,9 @@ class VideoPanel(QFrame):
         if ok:
             self._dims_lbl.setText(f"● {w} × {h}")
             self._dims_lbl.adjustSize()
-            self._orient.setText("Dọc · giữ đúng tỉ lệ" if h > w else "Ngang · giữ đúng tỉ lệ")
+            self._orient.setText("Dọc" if h > w else "Ngang")      # short: the panel can be ~300 px
+            self._orient.setToolTip("Video dọc, giữ đúng tỉ lệ gốc" if h > w
+                                    else "Video ngang, giữ đúng tỉ lệ gốc")
             self.dimsChanged.emit(w, h)
 
     def set_style(self, style: dict, size_px: int, font: str) -> None:

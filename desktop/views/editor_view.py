@@ -54,17 +54,39 @@ BULK_TARGET_CPS = 20.0     # "Rút gọn hàng loạt" aims under the 25 cps fla
 # wide windows: past these widths the inspector / cue list only spread their content
 # apart, so the extra room goes to the video instead
 INSPECTOR_MAX, LIST_MAX = 560, 820
+PANEL_CHROME = 112         # video panel head + control bar (the rest is the picture)
 
 
-def split_sizes(total: int, layout: str, inspector_min: int = 0) -> list[int]:
+VIDEO_MIN = 300            # the video pane never narrower (its controls need it)
+PORTRAIT_SLACK = 24        # a little air around a vertical picture
+
+
+def split_sizes(total: int, layout: str, inspector_min: int = 0, *, aspect: float = 0.0,
+                pic_h: int = 0) -> list[int]:
     """[video, cue list, inspector] widths for a ``total``-px row: the layout's ratio,
     the inspector never below what its tabs need (``inspector_min``) nor above
-    INSPECTOR_MAX, the list capped at LIST_MAX, the video takes the rest."""
+    INSPECTOR_MAX, the list capped at LIST_MAX, the video takes the rest.
+
+    A vertical source (``aspect`` = width / height < 1, 9:16 for Douyin) only needs
+    ``pic_h * aspect`` px: in "cân bằng" the video column shrinks to that and the width it
+    would have wasted on black bars goes to the list, then the inspector."""
     rv, rl, ri = LAYOUTS[layout][1]
     ins = 0 if ri == 0 else max(inspector_min, min(int(total * ri / 100), INSPECTOR_MAX))
     rest = max(0, total - ins)
     lst = min(int(rest * rl / (rv + rl)), LIST_MAX)
-    return [rest - lst, lst, ins]
+    vid = rest - lst
+    if layout == "balanced" and 0 < aspect < 1 and pic_h > 0:
+        want = max(VIDEO_MIN, int(pic_h * aspect) + PORTRAIT_SLACK)
+        if want < vid:
+            vid = want
+            lst = min(rest - vid, LIST_MAX)
+            spare = rest - vid - lst
+            if ins and spare > 0:
+                more = min(spare, max(0, INSPECTOR_MAX - ins))
+                ins += more
+                spare -= more
+            vid += spare              # nothing left to give: the picture takes the rest
+    return [vid, lst, ins]
 
 
 class _Splitter(QSplitter):
@@ -209,6 +231,7 @@ class EditorView(QWidget):
         # the layout ratio follows the window (maximize, 1366 → 2560) until the user
         # drags a handle; after that only the video and the list take extra width
         self._user_split = False
+        self._aspect = 0.0                  # source width / height once known (vertical → < 1)
         self.top.splitterMoved.connect(lambda *_: setattr(self, "_user_split", True))
         self.top.resized.connect(lambda: self._user_split or self._fit_split())
         for i, stretch in enumerate((3, 2, 0)):
@@ -477,7 +500,10 @@ class EditorView(QWidget):
         ins = self.inspector.content_min_width()
         self.inspector.setMinimumWidth(ins)
         total = (self.top.width() or 1330) - 2 * self.top.handleWidth()
-        self.top.setSizes(split_sizes(max(900, total), self._layout, ins))
+        # the picture's height = the row's height minus the video panel's head and controls
+        pic_h = max(0, self.top.height() - PANEL_CHROME) if self.top.height() > 0 else 0
+        self.top.setSizes(split_sizes(max(900, total), self._layout, ins, aspect=self._aspect,
+                                      pic_h=pic_h))
 
     # --- find / replace (UX-4) -----------------------------------------------
     def _find_bar(self) -> QWidget:
@@ -1327,6 +1353,7 @@ class EditorView(QWidget):
         self._meta = {"title": _job_title(job), "platform": job.metadata.get("platform") or
                       _job_field(job, "platform") or "", "dur": 0.0, "dims": (0, 0)}
         self._update_project()
+        self._aspect = 0.0               # the new video reports its size when it loads
         self.video.load(job.source_video)
         self.timeline.set_peaks([])
         self._undo_stack.clear()
@@ -1601,6 +1628,9 @@ class EditorView(QWidget):
     def _on_dims(self, w: int, h: int) -> None:
         self._meta["dims"] = (w, h)
         self._update_project()
+        self._aspect = w / h if w > 0 and h > 0 else 0.0
+        if not self._user_split:
+            self._fit_split()           # a vertical video gives its spare width to the list
 
     def _update_project(self) -> None:
         m = self._meta
