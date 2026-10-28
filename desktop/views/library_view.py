@@ -153,8 +153,10 @@ class _Row(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(
             f"QFrame#libRow{{background:transparent;border:none;border-bottom:1px solid "
-            f"{V2['line_soft']};border-radius:0;}}"
+            f"{V2['line_soft']};border-left:3px solid transparent;border-radius:0;}}"
             f"QFrame#libRow:hover{{background:{V2['raised']};}}"
+            f"QFrame#libRow[cur=\"true\"]{{border-left-color:{V2['purple_bright']};"
+            f"background:{V2['raised']};}}"
             f"QFrame#libRow[picked=\"true\"]{{background:{V2['purple_soft']};}}")
         self._playable = bool(item.get("has_output") or item.get("has_preview")
                               or item.get("has_source"))
@@ -284,6 +286,12 @@ class _Row(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def set_cursor_row(self, on: bool) -> None:
+        """The keyboard cursor (↑/↓ in the list) — Enter / Space / Delete act on this row."""
+        self.setProperty("cur", bool(on))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def set_status(self, st: str) -> None:
         text, kind = STATUS.get(st, STATUS["unfinished"])
         self.status.setText(text)
@@ -389,6 +397,8 @@ class LibraryView(QWidget):
         self._checked: set[str] = set()
         self._guard: Callable[[dict], str | None] = lambda _it: None
         self._sort = "new"
+        self._cur: str | None = None          # the keyboard cursor row (↑/↓, Enter, Space, Delete)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -524,6 +534,7 @@ class LibraryView(QWidget):
         self._list.setSpacing(0)
         self._list.addStretch(1)
         scroll.setWidget(holder)
+        self._scroll = scroll
         pl.addWidget(scroll, 1)
         self.empty = label("", "secondary")
         self.empty.setAlignment(Qt.AlignCenter)
@@ -538,6 +549,8 @@ class LibraryView(QWidget):
                              "rác để lấy lại dung lượng. Dự án đang mở hoặc đang chạy không xóa "
                              "được.", "small"), 1)
         pv.addLayout(foot)
+        pv.addWidget(label("↑ ↓ chọn dự án · Enter mở · Space xem · Delete xóa · Ctrl+A chọn tất cả "
+                           "· Ctrl+F tìm · Esc quay lại", "small"))
         self._update_selection()
 
     # --- data -------------------------------------------------------------------------
@@ -556,6 +569,8 @@ class LibraryView(QWidget):
             self._list.removeWidget(row)
             row.deleteLater()
         self._rows.clear()
+        if self._cur not in ids:
+            self._cur = None
         for it in self._items:
             busy = self._guard(it)
             if busy:
@@ -579,6 +594,8 @@ class LibraryView(QWidget):
         self._relayout()
         self._update_total()
         self._update_selection()
+        if self._cur in self._rows:
+            self._rows[self._cur].set_cursor_row(True)
         items = list(self._items)
         if items:
             self._bg.run(lambda: store.library_details(items),
@@ -706,6 +723,69 @@ class LibraryView(QWidget):
             self.total.setText(f"Tổng: {fmt_size(size)} · {n} dự án")
         else:
             self.total.setText(f"Tổng: đang tính… · {n} dự án")
+
+    # --- keyboard ---------------------------------------------------------------------
+    def cursor_id(self) -> str | None:
+        return self._cur
+
+    def set_cursor(self, iid: str | None) -> None:
+        if self._cur in self._rows:
+            self._rows[self._cur].set_cursor_row(False)
+        self._cur = iid if iid in self._rows else None
+        if self._cur is not None:
+            row = self._rows[self._cur]
+            row.set_cursor_row(True)
+            self._scroll.ensureWidgetVisible(row)
+
+    def move_cursor(self, step: int) -> None:
+        ids = self.visible_ids()
+        if not ids:
+            return
+        at = ids.index(self._cur) if self._cur in ids else (-1 if step > 0 else len(ids))
+        self.set_cursor(ids[max(0, min(len(ids) - 1, at + step))])
+
+    def _cursor_or_first(self) -> str | None:
+        ids = self.visible_ids()
+        return self._cur if self._cur in ids else (ids[0] if ids else None)
+
+    def keyPressEvent(self, ev) -> None:  # noqa: N802
+        """Open / watch / delete without the mouse. Space, Delete and Ctrl+A stay text
+        editing while the search box has the focus; ↑/↓ and Enter work from there too
+        (type a name, ↓, Enter)."""
+        k, mods = ev.key(), ev.modifiers()
+        typing = isinstance(QApplication.focusWidget(), QLineEdit)
+        if k in (Qt.Key_Up, Qt.Key_Down) and not mods:
+            self.move_cursor(-1 if k == Qt.Key_Up else 1)
+        elif k in (Qt.Key_Return, Qt.Key_Enter) and not mods:
+            iid = self._cursor_or_first()
+            if iid is None:
+                return
+            self.set_cursor(iid)
+            self._open(iid)
+        elif k == Qt.Key_Space and not mods and not typing:
+            iid = self._cursor_or_first()
+            if iid is not None:
+                self.set_cursor(iid)
+                self._watch(iid)
+        elif k == Qt.Key_Delete and not mods and not typing:
+            items = self.selected() or ([self._item(self._cur)] if self._cur else [])
+            self.delete_items(items)
+        elif k == Qt.Key_A and mods == Qt.ControlModifier and not typing:
+            self.check_all.setChecked(True)
+            self._on_check_all(True)
+        elif k == Qt.Key_F and mods == Qt.ControlModifier:
+            self.search.setFocus()
+            self.search.selectAll()
+        else:
+            super().keyPressEvent(ev)
+            return
+        ev.accept()
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
+        fw = QApplication.focusWidget()
+        if fw is None or not self.isAncestorOf(fw):
+            self.setFocus(Qt.OtherFocusReason)
 
     # --- actions ----------------------------------------------------------------------
     def _open(self, iid: str) -> None:
