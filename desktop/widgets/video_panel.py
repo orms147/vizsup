@@ -38,6 +38,7 @@ except Exception:  # noqa: BLE001
     HAVE_MM = False
 
 SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+VOLUME_MIN_PANEL = 400      # below this width the volume slider is hidden
 
 
 class VideoPanel(QFrame):
@@ -141,7 +142,8 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._loop)
         ctl.addWidget(self._time)
         ctl.addStretch(1)
-        ctl.addWidget(icon_label("Volume2", V2["secondary"], 16))
+        self._vol_icon = icon_label("Volume2", V2["secondary"], 16)
+        ctl.addWidget(self._vol_icon)
         self._vol = QSlider(Qt.Horizontal)
         self._vol.setFixedWidth(96)
         self._vol.setRange(0, 100)
@@ -159,6 +161,14 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._speed)
         tl.addLayout(ctl)
         root.addWidget(bar)
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        # a 9:16 video gets a ~300 px column: the transport keeps play / loop / time / speed and
+        # drops the volume slider (it needs ~130 px) until the panel is wider again
+        wide = self.width() >= VOLUME_MIN_PANEL
+        self._vol.setVisible(wide)
+        self._vol_icon.setVisible(wide)
 
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:

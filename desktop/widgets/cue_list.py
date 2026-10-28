@@ -41,7 +41,7 @@ PAD_X, PAD_Y = 12, 10
 IDX_W = 34          # index column
 GAP = 4
 # compact rows ("Gọn", the default): index | VI over a one-line CN | start time over duration
-C_PAD_X, C_PAD_Y = 10, 5
+C_PAD_X, C_PAD_Y = 10, 4
 C_IDX_W = 30
 C_TIME_W = 66
 

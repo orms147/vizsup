@@ -11,6 +11,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QSlider, QVBoxLayout, QWidget
 
+from desktop import cuemodel
 from desktop.cuemodel import EditorCue, fmt_time
 from desktop.theme import V2, fonts
 from desktop.widgets.chrome import button, icon_button, label
@@ -22,6 +23,7 @@ TOTAL_H = RULER_H + WAVE_H + BLOCK_H + 6
 EDGE = 6                  # px edge grab zone
 MIN_PPS, MAX_PPS = 8.0, 400.0
 MIN_LEN = 0.2
+OVERVIEW_H = 22           # the whole-episode strip above the zoomed timeline
 
 
 def _c(hex_str: str, alpha: int | None = None) -> QColor:
@@ -38,6 +40,7 @@ class Timeline(QWidget):
     dragStarted = Signal()     # a drag gesture BEGAN — one undo snapshot per drag
     dragFinished = Signal(int)
     zoomChanged = Signal(float)
+    marksChanged = Signal()    # cues / flags / reviewed marks / playhead / selection changed
     contextRequested = Signal(int, object)   # right-click on a block: (index, global QPoint)
 
     def __init__(self) -> None:
@@ -64,10 +67,16 @@ class Timeline(QWidget):
     def set_cues(self, cues: list[EditorCue]) -> None:
         self._cues = cues
         self._update_dur()
+        self.marksChanged.emit()
 
     def set_issues(self, issues: list[list[str]]) -> None:
         self._issues = issues or []
         self.update()
+        self.marksChanged.emit()
+
+    def marks_changed(self) -> None:
+        """A cue was marked "Đã xem" (or edited) outside a drag: redraw the overview."""
+        self.marksChanged.emit()
 
     def set_peaks(self, peaks: list[float], per_sec: int = 50) -> None:
         self._peaks, self._per_sec = peaks or [], per_sec
@@ -93,14 +102,20 @@ class Timeline(QWidget):
     def set_duration(self, seconds: float) -> None:
         self._video_dur = max(0.0, seconds)
         self._update_dur()
+        self.marksChanged.emit()
 
     def set_time(self, t: float) -> None:
         self._t = t
         self.update()
+        self.marksChanged.emit()
 
     def set_selected(self, idx: int) -> None:
         self._sel = idx
         self.update()
+        self.marksChanged.emit()
+
+    def duration(self) -> float:
+        return self._dur
 
     def playhead_x(self) -> int:
         return int(self._t * self._pps)
@@ -375,6 +390,116 @@ class Timeline(QWidget):
             ev.ignore()
 
 
+class OverviewStrip(QWidget):
+    """The whole episode in one thin bar: a tick per cue — amber = flagged and still to look
+    at, green = flagged and marked "Đã xem", dim purple = nothing to check, bright = the
+    selected cue — the rectangle is what the zoomed timeline below shows, the line the
+    playhead. Press / drag anywhere to jump there."""
+
+    seekRequested = Signal(float)
+
+    def __init__(self, timeline: Timeline) -> None:
+        super().__init__()
+        self._tl = timeline
+        self._view = (0.0, 0.0)
+        self.setFixedHeight(OVERVIEW_H)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMouseTracking(True)
+        self._down = False
+        timeline.marksChanged.connect(self.update)
+        timeline.cueChanged.connect(lambda _i: self.update())
+        self._tip_t = -1.0
+
+    def set_view(self, a: float, b: float) -> None:
+        if (a, b) != self._view:
+            self._view = (a, b)
+            self.update()
+
+    def view(self) -> tuple[float, float]:
+        return self._view
+
+    # geometry: the bar spans the widget minus a small margin
+    MARGIN = 14
+
+    def _w(self) -> float:
+        return max(1.0, self.width() - 2 * self.MARGIN)
+
+    def x_of(self, t: float) -> float:
+        return self.MARGIN + t / max(1.0, self._tl.duration()) * self._w()
+
+    def t_of(self, x: float) -> float:
+        dur = self._tl.duration()
+        return max(0.0, min(dur, (x - self.MARGIN) / self._w() * dur))
+
+    def paintEvent(self, ev) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), _c(V2["panel"]))
+        top, bot = 4, self.height() - 4
+        h = bot - top
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(V2["input"]))
+        p.drawRoundedRect(QRectF(self.MARGIN - 3, top - 1, self._w() + 6, h + 2), 4, 4)
+        tl = self._tl
+        sel = tl._sel
+        issues = tl._issues
+        base, seen, pend = [], [], []
+        for i, c in enumerate(tl._cues):
+            flagged = i < len(issues) and bool(issues[i])
+            kind = ((pend if not cuemodel.is_reviewed(c) else seen) if flagged else base)
+            kind.append(i)
+
+        def tick(i: int, colour: str, frac: float, alpha: int = 255) -> None:
+            c = tl._cues[i]
+            x = self.x_of(c.start)
+            w = max(1.6, self.x_of(c.end) - x)
+            hh = h * frac
+            p.setBrush(_c(colour, alpha))
+            p.drawRect(QRectF(x, bot - hh, w, hh))
+
+        for i in base:
+            tick(i, V2["purple_line"], 0.45)
+        for i in seen:
+            tick(i, V2["green"], 0.65, 200)
+        for i in pend:
+            tick(i, V2["amber"], 1.0)
+        if 0 <= sel < len(tl._cues):
+            tick(sel, V2["purple_bright"], 1.0)
+        a, b = self._view
+        if b > a:
+            x0, x1 = self.x_of(a), max(self.x_of(b), self.x_of(a) + 6)
+            r = QRectF(x0, top - 2, x1 - x0, h + 4)
+            p.setBrush(_c(V2["purple_bright"], 38))
+            p.setPen(QPen(_c(V2["purple_bright"]), 1))
+            p.drawRoundedRect(r, 3, 3)
+        x = self.x_of(tl._t)
+        p.setPen(QPen(_c("#ffffff", 220), 1))
+        p.drawLine(QPointF(x, top - 3), QPointF(x, bot + 3))
+
+    def _jump(self, ev) -> None:
+        self.seekRequested.emit(self.t_of(ev.position().x()))
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() == Qt.LeftButton:
+            self._down = True
+            self._jump(ev)
+
+    def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        if self._down and ev.buttons() & Qt.LeftButton:
+            self._jump(ev)
+        else:
+            self._down = False
+            t = self.t_of(ev.position().x())
+            pend = sum(1 for i, c in enumerate(self._tl._cues)
+                       if i < len(self._tl._issues) and self._tl._issues[i]
+                       and not cuemodel.is_reviewed(c))
+            self.setToolTip(f"{fmt_time(t, 0)} · bấm để nhảy tới · cả video: "
+                            f"{len(self._tl._cues)} câu, {pend} câu cần xem lại "
+                            f"(vạch cam)")
+
+    def mouseReleaseEvent(self, _ev) -> None:  # noqa: N802
+        self._down = False
+
+
 class TimelinePanel(QFrame):
     """Panel head (Dòng thời gian · visible range · Khớp câu · zoom) over a scrolling
     Timeline. Keeps the playhead in view while playing ("follow")."""
@@ -419,6 +544,10 @@ class TimelinePanel(QFrame):
         v.addWidget(head)
 
         self.timeline = Timeline()
+        self.overview = OverviewStrip(self.timeline)
+        self.overview.seekRequested.connect(self._overview_seek)
+        self.timeline.marksChanged.connect(self._sync_overview)
+        v.addWidget(self.overview)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.timeline)
@@ -457,6 +586,22 @@ class TimelinePanel(QFrame):
         a = sb.value() / pps
         b = (sb.value() + self.scroll.viewport().width()) / pps
         self.range_lbl.setText(f"{fmt_time(a, 0)} — {fmt_time(b, 0)}")
+        self._sync_overview()
+
+    def _sync_overview(self, *_a) -> None:
+        sb = self.scroll.horizontalScrollBar()
+        pps = self.timeline.pps()
+        a = sb.value() / pps
+        b = (sb.value() + self.scroll.viewport().width()) / pps
+        self.overview.set_view(a, b)
+        # a clip the zoomed view already shows whole needs no overview
+        self.overview.setVisible(b - a < self.timeline.duration() - 0.5)
+
+    def _overview_seek(self, t: float) -> None:
+        """A press on the overview: the video, the playhead and the zoomed view go there."""
+        self.timeline.seeked.emit(t)
+        self.timeline.set_time(t)
+        self.ensure_visible(t, center=True)
 
     def ensure_visible(self, t: float, *, center: bool = False) -> None:
         sb = self.scroll.horizontalScrollBar()

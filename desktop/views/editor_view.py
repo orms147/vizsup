@@ -35,7 +35,7 @@ from desktop.widgets.music_panel import MusicPanel
 from desktop.widgets.cue_inspector import CueInspector
 from desktop.widgets.cue_list import CueList
 from desktop.widgets.style_panel import StylePanel
-from desktop.widgets.timeline import TimelinePanel
+from desktop.widgets.timeline import OVERVIEW_H, TimelinePanel
 from desktop.widgets.video_panel import VideoPanel
 from app.fsutil import atomic_write_text
 
@@ -243,7 +243,7 @@ class EditorView(QWidget):
         self.split.addWidget(self.timeline_panel)
         self.split.setStretchFactor(0, 1)
         self.split.setStretchFactor(1, 0)
-        self.timeline_panel.setMinimumHeight(150)
+        self.timeline_panel.setMinimumHeight(150 + OVERVIEW_H)     # + the whole-episode strip
         # the rows keep their widths (video | list | inspector, timeline) and scroll sideways
         # when the window is narrower — the window itself never grows past the screen
         self._scroll = QScrollArea()
@@ -492,7 +492,7 @@ class EditorView(QWidget):
         self._user_split = False
         self._fit_split()
         if initial:
-            self.split.setSizes([560, 170])
+            self.split.setSizes([560, 170 + OVERVIEW_H])
 
     def _fit_split(self) -> None:
         """Size the three panes for the current width (split_sizes); the inspector's
@@ -1203,6 +1203,7 @@ class EditorView(QWidget):
             return
         cuemodel.mark_reviewed(self.cues[i])
         self.cue_list.refresh_row(i)
+        self.timeline.marks_changed()
         self._mark_dirty()
         nxt = self.cue_list.next_pending(i)
         self.cue_list.reapply_filter()
