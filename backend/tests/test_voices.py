@@ -76,10 +76,11 @@ def test_guess_job_writes_overrides_and_never_overwrites(storage, monkeypatch):
     (job.work_dir / "vocals.wav").write_bytes(b"x")
     monkeypatch.setattr(voices, "_decode", lambda src: x)
     seen = {}
-    monkeypatch.setattr(voices, "_audio_source", lambda j: seen.setdefault("src", j.work_dir / "vocals.wav"))
+    monkeypatch.setattr(voices, "_audio_source",
+                        lambda j, log=None: seen.setdefault("src", j.work_dir / "vocals.wav"))
     logs: list[str] = []
     rep = voices.guess_job(job, log=logs.append)
-    assert rep == {"set": 3, "female": 1, "male": 2, "unknown": 0}
+    assert rep == {"set": 3, "female": 1, "male": 2, "unknown": 0, "split_hz": None}   # too few lines to split
     assert [r["voice"] for r in sidecars.load_overrides(job)] == ["m", "f", "m"]
     assert "2 câu nam · 1 câu nữ" in logs[-1]
     rows = sidecars.load_overrides(job)
@@ -312,3 +313,102 @@ def test_worker_guess_failure_is_logged_not_raised(storage, monkeypatch):
     w.log.connect(logs.append)
     w._guess_voices(w.job)
     assert logs and logs[-1].startswith("⚠ Bỏ qua bước đoán giọng")
+
+
+# --- per-video split (2026-10-29: ep 7 gave 2 male / 30 female / 50 unknown) --------------------
+
+MEN = [115, 120, 128, 135, 150, 162, 175, 183, 187, 192]            # real ep-7 male line medians
+WOMEN = [212, 217, 225, 240, 262, 289, 325, 370, 440, 500]
+
+
+def test_split_falls_in_the_widest_gap_between_the_two_clusters():
+    thr = voices.split_threshold(MEN + WOMEN)
+    assert 192 < thr < 212                                      # ≈ 202 Hz, not the fixed 165
+    assert voices.split_threshold(WOMEN[::-1] + MEN) == thr    # order does not matter
+
+
+@pytest.mark.parametrize("medians", [
+    [118, 122, 130, 126, 119, 133, 140],                          # one man (or only men)
+    [230, 250, 245, 260, 300, 310, 480],                          # only women: lower side not male-ish
+    [210, 215, 260, 265, 270, 275, 280],                          # two women, a gap at 238
+    [120, 230, 300],                                              # too few lines
+    [],
+])
+def test_no_split_when_there_are_not_two_clusters(medians):
+    assert voices.split_threshold(medians) is None
+
+
+def test_the_split_needs_each_side_to_be_a_real_group():
+    # one lonely low outlier is not a cluster of men
+    assert voices.split_threshold([110] + [230, 240, 250, 260, 270, 280, 290, 300, 310, 320]) is None
+
+
+def test_without_a_split_only_surely_male_or_female_lines_get_a_tag():
+    stats = [(30, 118.0), (30, 125.0), (30, 190.0), (30, 330.0), (30, 140.0), (4, None), (30, 150.0)]
+    tags, thr = voices.tags_from_stats(stats)
+    # one man-only cluster plus one 190 and one 330 → no clean gap in the band
+    assert thr is None or isinstance(thr, float)
+    if thr is None:
+        assert tags == ["m", "m", None, "f", "m", None, "m"]    # 150 is the edge: not < ABS_MALE
+    assert tags[5] is None
+
+
+def test_tags_from_stats_uses_the_split_and_leaves_unvoiced_lines_unknown():
+    stats = [(30, float(m)) for m in MEN + WOMEN] + [(3, None)]
+    tags, thr = voices.tags_from_stats(stats)
+    assert thr and tags[:10] == ["m"] * 10 and tags[10:20] == ["f"] * 10 and tags[20] is None
+
+
+def test_the_loose_voicing_threshold_keeps_more_frames_and_the_default_is_unchanged():
+    from app.pipeline import pitch
+
+    t = np.arange(int(SR * 1.0)) / SR
+    noisy = (0.3 * np.sin(2 * np.pi * 120 * t) + 0.09 * np.random.default_rng(1).standard_normal(len(t))
+             ).astype(np.float32)
+    strict, loose = pitch.f0_frames(noisy), pitch.f0_frames(noisy, conf=0.2)
+    assert len(strict) == 0 and len(loose) > 0                 # noise this strong: only the loose one hears it
+    assert abs(float(np.median(loose)) - 120) < 12              # still the right pitch
+    assert pitch.CONF == 0.1 and voices.VOICING == 0.2
+
+
+def test_audio_source_makes_the_speech_stem_when_there_is_none(storage, monkeypatch):
+    from app.pipeline import separate
+
+    job = make_job(storage)
+    job.source_video.write_bytes(b"x")
+    made = job.work_dir / "vocals.wav"
+
+    def fake(j, log=None):
+        made.write_bytes(b"v")
+        return made
+
+    monkeypatch.setattr(separate, "speech_stem", fake)
+    assert voices._audio_source(job) == made
+
+
+def test_audio_source_falls_back_to_the_source_without_a_gpu_or_demucs(storage, monkeypatch):
+    from app.pipeline import separate
+
+    job = make_job(storage)
+    job.source_video.write_bytes(b"x")
+    monkeypatch.setattr(separate, "speech_stem", lambda j, log=None: None)
+    assert voices._audio_source(job) == job.source_video
+    monkeypatch.setattr(separate, "speech_stem", lambda j, log=None: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert voices._audio_source(job) == job.source_video         # a failing separation never stops the guess
+
+
+def test_guess_job_reports_the_split_and_writes_the_tags(storage, monkeypatch):
+    lines = tuple(f"Câu {i}" for i in range(1, 13))
+    job = make_job(storage, lines)
+    write_srt([Cue(i, i * 1.0, i * 1.0 + 0.9, t) for i, t in enumerate(lines, 1)], job.vi_srt)
+    x = np.zeros(SR * 14, np.float32)
+    for i in range(1, 13):
+        f0 = 115.0 if i % 2 else 235.0
+        x[int(i * SR):int((i + 0.9) * SR)] = tone(f0, 0.9)
+    (job.work_dir / "vocals.wav").write_bytes(b"x")
+    monkeypatch.setattr(voices, "_decode", lambda src: x)
+    logs: list[str] = []
+    rep = voices.guess_job(job, log=logs.append)
+    assert rep["male"] == 6 and rep["female"] == 6 and 120 < rep["split_hz"] < 230
+    assert "ngưỡng nam/nữ của video này" in logs[-1]
+    assert [r["voice"] for r in sidecars.load_overrides(job)] == ["m", "f"] * 6
