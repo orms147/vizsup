@@ -131,6 +131,50 @@ def watermark_events(wm: dict | None, duration: float) -> list[dict]:
     return out
 
 
+# Series episodes (2026-10-29): "Tập 9" at the start and "Còn tiếp · Tập 10" over the last
+# seconds — viewers of a series look for both. Templates, so one setting fits every episode
+# of a batch: {n} = this episode ("1–5" for a range post), {next} = the one after it.
+CARD_DEFAULT = {"on": False, "chip": "Tập {n}", "end": "Còn tiếp · Tập {next}"}
+END_SECONDS = 4.0
+CHIP_MARGIN_V = 165         # one line below the credit / AI-label row (Tag margin 100)
+
+
+def _fill(template: str, n: str, nxt: str) -> str:
+    t = str(template or "").replace("{n}", n).replace("{next}", nxt)
+    return " ".join(t.replace("{", "").replace("}", "").split())[:60]   # no ASS overrides
+
+
+def card_texts(card: dict | None, title: str | None) -> tuple[str, str]:
+    """(chip, end card) for an episode title; ("", "") without an episode number. Pure."""
+    from app.pipeline.compilation import episode_range
+
+    r = episode_range(title)
+    if not r:
+        return "", ""
+    a, b = r
+    c = {**CARD_DEFAULT, **(card or {})}
+    n = f"{a}–{b}" if b > a else str(a)
+    return _fill(c["chip"], n, str(b + 1)), _fill(c["end"], n, str(b + 1))
+
+
+def episode_events(card: dict | None, title: str | None, duration: float) -> list[dict]:
+    """Tag events ``{start, end, text, align[, margin_v]}``: the chip at the top centre for
+    the first TAG_SECONDS, the end card in the middle for the last END_SECONDS. [] when
+    off or the title has no episode number. Pure."""
+    if not card or not card.get("on"):
+        return []
+    chip, end = card_texts(card, title)
+    dur = float(duration or 0)
+    out = []
+    if chip:
+        out.append({"start": 0.0, "end": min(TAG_SECONDS, dur) if dur > 1 else TAG_SECONDS,
+                    "text": "{\\fscx140\\fscy140}" + chip, "align": 8, "margin_v": CHIP_MARGIN_V})
+    if end and dur > 2 * END_SECONDS:
+        out.append({"start": dur - END_SECONDS, "end": dur,
+                    "text": "{\\fscx180\\fscy180}" + end, "align": 5})
+    return out
+
+
 def post_description(job: Job, *, ai_voice: bool, title: str = "") -> str:
     """Text for the post's description: what it is, who made the original, how the
     Vietnamese was made, and the right to use it — editable by the user."""

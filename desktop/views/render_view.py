@@ -461,6 +461,7 @@ class RenderView(QWidget):
         ll.addWidget(self.credit_cb)
         ll.addWidget(self.ai_label_cb)
         ll.addWidget(self._build_watermark(st))
+        ll.addWidget(self._build_episode_card(st))
         rrow = QHBoxLayout()
         rrow.setSpacing(8)
         cap = label("Quyền sử dụng", "secondary")
@@ -756,6 +757,7 @@ class RenderView(QWidget):
         self._show_music()
         if changed:
             self._probe_source(job)
+            self._on_episode_card(save=False)      # this video's "Tập N" in the hint
         self._load_posting()
         if tts:
             self._tts = tts
@@ -1217,6 +1219,64 @@ class RenderView(QWidget):
         if save:
             store.update_ui_state(watermark=wm)
 
+    # --- series: "Tập 9" chip + "Còn tiếp" end card (disclosure.episode_events) ---------
+    def _build_episode_card(self, st: dict) -> QWidget:
+        from app.pipeline import disclosure
+
+        card = {**disclosure.CARD_DEFAULT, **(st.get("episode_card") or {})}
+        box = QWidget()
+        box.setObjectName("bare")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(6)
+        self.card_cb = QCheckBox("Thẻ tập: số tập ở đầu, “Còn tiếp” ở cuối")
+        self.card_cb.setToolTip("Cho phim nhiều tập. Số tập lấy từ tiêu đề (《剧名》06, 第12集, "
+                                "Tập 5…); {n} = tập này, {next} = tập sau. Video không có số tập "
+                                "thì bỏ qua.")
+        self.card_cb.setChecked(bool(card["on"]))
+        v.addWidget(self.card_cb)
+        self.card_body = QWidget()
+        self.card_body.setObjectName("bare")
+        g = QGridLayout(self.card_body)
+        g.setContentsMargins(24, 0, 0, 0)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
+        self.card_chip = QLineEdit(str(card["chip"]))
+        self.card_chip.setPlaceholderText(disclosure.CARD_DEFAULT["chip"])
+        self.card_chip.setMaxLength(60)
+        g.addWidget(label("Đầu video", "secondary"), 0, 0)
+        g.addWidget(self.card_chip, 0, 1)
+        self.card_end = QLineEdit(str(card["end"]))
+        self.card_end.setPlaceholderText(disclosure.CARD_DEFAULT["end"])
+        self.card_end.setMaxLength(60)
+        g.addWidget(label("4 giây cuối", "secondary"), 1, 0)
+        g.addWidget(self.card_end, 1, 1)
+        self.card_hint = label("", "small", wrap=True)
+        g.addWidget(self.card_hint, 2, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(self.card_body)
+        self.card_cb.toggled.connect(self._on_episode_card)
+        self.card_chip.textChanged.connect(self._on_episode_card)
+        self.card_end.textChanged.connect(self._on_episode_card)
+        self._on_episode_card(save=False)
+        return box
+
+    def episode_card(self) -> dict:
+        return {"on": self.card_cb.isChecked(), "chip": self.card_chip.text().strip(),
+                "end": self.card_end.text().strip()}
+
+    def _on_episode_card(self, *_a, save: bool = True) -> None:
+        from app.pipeline import compilation, disclosure
+
+        card = self.episode_card()
+        self.card_body.setEnabled(card["on"])
+        title = compilation._job_title(self._job.work_dir) if self._job is not None else ""
+        chip, end = disclosure.card_texts(card, title)
+        self.card_hint.setText(f"Video này: “{chip}” … “{end}”" if chip or end else
+                               "Tiêu đề video này không có số tập — sẽ không hiện thẻ.")
+        if save:
+            store.update_ui_state(episode_card=card)
+
     # --- cover ↔ style, quality ------------------------------------------------------
     def _sync_cover(self) -> None:
         """“Kính mờ trắng” is a subtitle style AND a cover: with that style the cover is
@@ -1350,6 +1410,8 @@ class RenderView(QWidget):
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         wm = self.watermark()
         opts["watermark"] = wm if wm["on"] and wm["text"] else None
+        card = self.episode_card()
+        opts["episode_card"] = card if card["on"] else None
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         return opts

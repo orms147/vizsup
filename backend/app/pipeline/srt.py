@@ -247,6 +247,6 @@ def write_ass(
     for e in extra or []:
         text = "{\\an%d}" % int(e.get("align", 7)) + str(e["text"]).replace("\n", "\\N")
         lines.append(f"Dialogue: 1,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Tag,,"
-                     f"0,0,0,,{text}")
+                     f"0,0,{int(e.get('margin_v') or 0)},,{text}")
     atomic_write_text(Path(path), "\n".join(lines) + "\n", encoding="utf-8")
     return Path(path)

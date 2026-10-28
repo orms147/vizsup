@@ -620,6 +620,7 @@ class PipelineWorker(QObject):
             commentary=voiced,
             watermark=o.get("watermark"),      # the translator's own mark
             fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
+            episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card
         )
         review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
         self.progress.emit(1.0, "Hoàn tất")

@@ -130,4 +130,6 @@ def describe(opts: dict | None) -> str:
     wm = opts.get("watermark") or {}
     if wm.get("on") and str(wm.get("text") or "").strip():
         bits.append(f"watermark “{str(wm['text']).strip()[:24]}”")
+    if (opts.get("episode_card") or {}).get("on"):
+        bits.append("thẻ tập")
     return " · ".join(bits)
