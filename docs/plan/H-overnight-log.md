@@ -96,3 +96,15 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   tags; spend ≈ $0.0005.
 - 00:54 — E2E batch: ep 1–5 (10:44) rendered in 84 s (NVENC 7.7×), ep 6 done, ep 7 rendering,
   ep 8 + ep 9 queued. Roadmap statuses updated.
+- 00:59 — merged feat/series-voices (sesion 1: per-line voice m/f from pitch in overrides.json,
+  render option "Giọng theo nhân vật (nam/nữ)" default off, Bộ phim dialog, CLI --series) → 82356dc;
+  checked: existing approvals are not revoked (rows without "voice" hash as before).
+- 00:59 — merged feat/ux-wave2 (sesion 2: compact cue list "Gọn" default ~1.7× more lines at
+  1366×768, 9:16-aware editor split, overview strip, library chips + "Theo tập" sort) → 2dcdbec
+  (1 trivial store.py conflict). Full suite 1278 passed.
+- 00:59 — E2E DONE on copies (scratchpad/e2e_storage):
+  * batch of 4 (ep 1–5, 6, 7, 8) + ep 9 queued mid-batch: all 5 rendered (NVENC, 720p).
+  * "Ghép tập" 1–8 (passed out of order): chapters Tập 1–5 @0:00, 6 @10:45, 7 @12:24, 8 @14:39; 2/4
+    re-encoded because of 1282×720 vs 1280×720 → fixed: commit 9548d67 snaps near-16:9 to standard.
+  * added ep 9 to the 1–8 compilation: stream copy, 5 chapters, 582 subtitle lines, 20:23.
+- 00:59 — next: sesion 1 → Vietnamese subtitle lint; sesion 2 → safe-zone overlay + CSV.
