@@ -14,7 +14,8 @@ is deliberately NOT touched: per-clause subtitles end on commas all the time.
 
 - ``han``   — Chinese characters left in the Vietnamese line;
 - ``latin`` — an ASCII word that cannot be a Vietnamese syllable (pinyin such as ``zhang`` /
-              ``xiao``, an English name) and is not in the glossary or the allow-list;
+              ``xiao``, an English name) and is not in the glossary, the allow-list or the
+              Chinese source line itself (English kept on purpose);
 - ``num``   — digits in the Chinese line that are neither in the Vietnamese line as digits nor
               spelled out in words;
 - ``term``  — a glossary term is in the Chinese line but its Vietnamese rendering is not in the
@@ -251,7 +252,10 @@ def flags(vi: str, zh: str = "", *, glossary: Mapping[str, str] | None = None,
         out.append("pron")
     if glossary and zh and glossary_missing(zh, vi, glossary):
         out.append("term")
-    if latin_words(vi, [w for v in (glossary or {}).values() for w in re.findall(r"[A-Za-z]+", v)]):
+    # English that is in the SOURCE line too ("外貌 check") was left on purpose
+    known = [w for v in (glossary or {}).values() for w in re.findall(r"[A-Za-z]+", v)]
+    known += re.findall(r"[A-Za-z]+", zh or "")
+    if latin_words(vi, known):
         out.append("latin")
     return out
 

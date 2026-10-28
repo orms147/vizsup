@@ -110,6 +110,125 @@ def _place_on_voice(weights: list[int], segs: list[Span]) -> list[Span]:
     return out
 
 
+# --- lines onto voice "islands" ---------------------------------------------------------------
+# Proportional placement over the CONCATENATED voice (_place_on_voice) lets one line straddle
+# a long silence: on a real sung 《诗经》 ad, three 4-character lines sharing 4 s of voice came
+# out as 195.4–197.5, 197.5–198.9 and 198.9–206.9 — the last one bridging 16 s of nothing
+# (Whisper had heard other hanzi there, so no text anchor existed). A spoken or sung line is
+# one continuous stretch of voice, so: merge the voice into ISLANDS (gaps < ISLAND_GAP), then
+# give each line to ONE island, in order, by dynamic programming — an island's voice time
+# should match its lines' characters at a natural pace; voice nobody was given costs a little.
+
+ISLAND_GAP = 1.0      # s — voice separated by less than this is one island
+ISLAND_MIN = 0.25     # s — a shorter island is a click / breath, not a line
+NATURAL_RATE = 0.25   # s per character a line normally takes
+RATE_LO, RATE_HI = 0.10, 0.60   # s per character: a placement outside this proves nothing
+UNUSED_COST = 0.15    # per second of unexplained voice left over
+MAX_DP_CELLS = 3_000_000   # lines² × islands above this: the old linear placement
+
+
+def voice_islands(segs: list[Span]) -> list[Span]:
+    """Voice segments merged across gaps < ISLAND_GAP, slivers dropped. Pure."""
+    out: list[list[float]] = []
+    for s, e in sorted(segs):
+        if out and s - out[-1][1] < ISLAND_GAP:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [(a, b) for a, b in out if b - a >= ISLAND_MIN]
+
+
+def _group_cost(dur: float, chars: int) -> float:
+    import math
+
+    if chars <= 0:
+        return UNUSED_COST * min(dur, 4.0)
+    return abs(math.log(max(dur, 0.05) / (chars * NATURAL_RATE)))
+
+
+def assign_to_islands(weights: list[int], islands: list[Span]) -> list[int]:
+    """Which island each line goes to (non-decreasing indices), minimising the pace mismatch
+    plus the voice left unexplained. Pure; ``islands`` must not be empty."""
+    k, m = len(weights), len(islands)
+    pre = [0]
+    for w in weights:
+        pre.append(pre[-1] + w)
+    dur = [e - s for s, e in islands]
+    inf = float("inf")
+    f = [[inf] * (k + 1) for _ in range(m + 1)]     # f[i][n_lines]: islands[:i] host lines[:n_lines]
+    back = [[0] * (k + 1) for _ in range(m + 1)]
+    f[0][0] = 0.0
+    for i in range(1, m + 1):
+        for n_lines in range(k + 1):
+            for p in range(n_lines + 1):                  # island i-1 hosts lines p..n_lines-1
+                if f[i - 1][p] == inf:
+                    continue
+                c = f[i - 1][p] + _group_cost(dur[i - 1], pre[n_lines] - pre[p])
+                if c < f[i][n_lines]:
+                    f[i][n_lines], back[i][n_lines] = c, p
+    out = [0] * k
+    n_lines = k
+    for i in range(m, 0, -1):
+        p = back[i][n_lines]
+        for q in range(p, n_lines):
+            out[q] = i - 1
+        n_lines = p
+    return out
+
+
+def heard_spans(words, gap: float = 0.5) -> list[Span]:
+    """Where Whisper heard SOMETHING (any hanzi) — its text may be wrong over singing, but the
+    timestamps are real voice events (or a music hallucination: both are reasons to doubt)."""
+    good = sorted((float(w[1]), float(w[2])) for w in words or []
+                  if len(w) >= 3 and 0.02 < float(w[2]) - float(w[1]) <= 1.5)
+    out: list[list[float]] = []
+    for a, b in good:
+        if out and a - out[-1][1] < gap:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def place_on_islands(weights: list[int], segs: list[Span], *, heard: list[Span] = (),
+                     window: Span | None = None) -> tuple[list[Span], list[bool]]:
+    """Place consecutive lines (char weights) on the voice ``segs`` of their gap: each line
+    inside one island, lines of an island share it by characters. Returns (spans, sure).
+    ``sure[k]``: line k alone fills an island at a plausible pace, so BOTH its edges are real
+    voice edges. Lines sharing an island split it by character count (an estimate), and
+    nothing is sure when voice is left unexplained — an island nobody got (> 0.5 s) or
+    Whisper-heard time (``heard``, inside ``window``) outside every island (> 1 s: the VAD
+    probably missed part of the line). Without an island: the old proportional placement."""
+    islands = voice_islands(segs)
+    if not islands or len(weights) ** 2 * len(islands) > MAX_DP_CELLS:   # huge run: stay linear
+        return (_place_on_voice(weights, segs) if segs else []), [False] * len(weights)
+    which = assign_to_islands(weights, islands)
+    out: list[Span] = [(0.0, 0.0)] * len(weights)
+    sure = [False] * len(weights)
+    for i, (s, e) in enumerate(islands):
+        mine = [k for k, w in enumerate(which) if w == i]
+        if not mine:
+            continue
+        placed = _place_on_voice([weights[k] for k in mine], [(s, e)])
+        for k, sp in zip(mine, placed):
+            out[k] = sp
+        if len(mine) == 1:
+            k = mine[0]
+            sure[k] = (RATE_LO <= (e - s) / max(weights[k], 1) <= RATE_HI
+                       or (weights[k] <= 2 and 0.15 <= e - s <= 2.5))   # "啊？" is one breath
+    used = set(which)
+    unused = sum(e - s for i, (s, e) in enumerate(islands) if i not in used)
+    lo, hi = window if window else (islands[0][0], islands[-1][1])
+    outside = 0.0
+    for hs, he in heard:
+        a, b = max(hs, lo), min(he, hi)
+        if b > a:
+            outside += (b - a) - sum(max(0.0, min(b, e) - max(a, s)) for s, e in islands)
+    if unused > 0.5 or outside > 1.0:
+        sure = [False] * len(weights)
+    return out, sure
+
+
 def _place_free(weights: list[int], a: float, b: float, where: str) -> list[Span]:
     """No voice data: natural length (SECONDS_PER_CHAR) against the anchored side,
     squeezed into [a, b] when it does not fit (instead of piling up on the boundary).
@@ -241,6 +360,7 @@ def align_text_to_words(
             _, s, e = stream[ib]
             anchors[ia] = (s, e)
     keys = sorted(anchors)
+    heard = heard_spans(words)
 
     def at(k: int, edge: int) -> float:       # edge 0 = start time, 1 = end time
         if k in anchors:
@@ -297,9 +417,14 @@ def align_text_to_words(
             where = "middle"                    # nothing anchored at all: fill the window
         weights = [max(1, k1 - k0 + 1) for _t, k0, k1 in items[i:j]]
         segs = _voice_in(voice, gap_a, gap_b)
-        placed = (_place_on_voice(weights, segs) if segs
-                  else _place_free(weights, gap_a, max(gap_a, gap_b), where))
-        for k, w, (ps, pe) in zip(range(i, j), weights, placed):
+        if segs:
+            placed, sure = place_on_islands(weights, segs, heard=heard, window=(gap_a, gap_b))
+        else:
+            placed = _place_free(weights, gap_a, max(gap_a, gap_b), where)
+            sure = [False] * len(weights)
+        for k, w, (ps, pe), ok in zip(range(i, j), weights, placed, sure):
+            if ok:
+                guess[k] = False        # alone on a stretch of real voice: edges are measured
             # a lone guessed line must not swallow a whole stretch of voice
             times[k] = (ps, min(pe, ps + max(MAX_FREE_SEC, MAX_SEC_PER_CHAR * w)))
         i = j
@@ -359,8 +484,8 @@ def repair_runs(cues: list[Cue], *, voice: list[Span] | None = None,
         b = cues[j].start if j < n else (duration or max(c.end for c in cues[i:j]))
         weights = [max(1, len(_chars(c.text))) for c in cues[i:j]]
         segs = _voice_in(voice, a, b)
-        placed = _place_on_voice(weights, segs) if segs else _place_free(weights, a, max(a, b),
-                                                                         "middle")
+        placed = (place_on_islands(weights, segs)[0] if segs
+                  else _place_free(weights, a, max(a, b), "middle"))
         for c, (s, e) in zip(cues[i:j], placed):
             c.start, c.end, c.guess = round(s, 3), round(max(e, s + MIN_CUE), 3), True
             fixed += 1
