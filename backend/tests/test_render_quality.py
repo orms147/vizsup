@@ -54,6 +54,9 @@ def test_720p_scales_before_the_burn_and_never_upscales(job):
             ":flags=lanczos[vscl]") in graph
     assert graph.index("scale=") < graph.index("ass=subs.ass")
     assert "[vscl]ass=subs.ass" in graph
+    # with the source size known, the exact (16:9-snapped) size is used
+    _cmd, graph = _build(j, segs, res="720", burn_w=1280, burn_h=720)
+    assert "[0:v]scale=1280:720:flags=lanczos[vscl]" in graph
 
 
 def test_presets_map_to_crf_cq_and_audio():
@@ -103,6 +106,15 @@ def test_burn_and_output_sizes():
     assert assemble.burn_size(src, "tiktok", "720") == (720, 404)    # as ffmpeg's fit does
     assert assemble.output_size(src, "tiktok", "720") == (720, 1280)
     assert assemble.burn_size(None, "source", "720") is None
+
+
+def test_a_hair_off_16_9_snaps_so_episodes_join_without_reencoding():
+    # 2026-10-29 E2E: two 《末日校车》 episodes came out 1282×720, two 1280×720 → "Ghép
+    # tập" had to re-encode half of them
+    assert assemble.burn_size((1924, 1080), "source", "720") == (1280, 720)
+    assert assemble.burn_size((1080, 1924), "source", "720") == (720, 1280)
+    assert assemble.burn_size((1440, 1080), "source", "720") == (960, 720)    # 4:3 kept
+    assert assemble.burn_size((2560, 1080), "source", "720") == (1706, 720)   # 21:9 kept
 
 
 def test_size_estimate_shrinks_with_lines_and_preset():
