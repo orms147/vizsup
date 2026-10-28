@@ -374,6 +374,8 @@ def test_the_loose_voicing_threshold_keeps_more_frames_and_the_default_is_unchan
 def test_audio_source_makes_the_speech_stem_when_there_is_none(storage, monkeypatch):
     from app.pipeline import separate
 
+    monkeypatch.delenv("VIZSUP_NO_AUTO_SEPARATE", raising=False)   # conftest sets it
+
     job = make_job(storage)
     job.source_video.write_bytes(b"x")
     made = job.work_dir / "vocals.wav"
@@ -412,3 +414,17 @@ def test_guess_job_reports_the_split_and_writes_the_tags(storage, monkeypatch):
     assert rep["male"] == 6 and rep["female"] == 6 and 120 < rep["split_hz"] < 230
     assert "ngưỡng nam/nữ của video này" in logs[-1]
     assert [r["voice"] for r in sidecars.load_overrides(job)] == ["m", "f"] * 6
+
+
+def test_the_switch_skips_the_automatic_speech_stem(storage, monkeypatch):
+    """VIZSUP_NO_AUTO_SEPARATE (set by the test suite): no Demucs just for the guess —
+    a real separation in every worker / CLI test made the suite 100 s → 34 min."""
+    from app.pipeline import separate
+
+    job = make_job(storage)
+    job.source_video.write_bytes(b"x")
+    monkeypatch.setenv("VIZSUP_NO_AUTO_SEPARATE", "1")
+    called = []
+    monkeypatch.setattr(separate, "speech_stem", lambda *a, **k: called.append(1))
+    voices._audio_source(job)
+    assert called == []

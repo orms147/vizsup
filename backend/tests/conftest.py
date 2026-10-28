@@ -13,6 +13,7 @@ def pytest_configure(config):
     import os
 
     os.environ["VIZSUP_NO_UPDATE_CHECK"] = "1"     # app/catalog.py: no network from tests
+    os.environ["VIZSUP_NO_AUTO_SEPARATE"] = "1"    # voices.py: no real Demucs per worker test
     try:
         from app.config import settings
     except Exception:  # noqa: BLE001
@@ -100,3 +101,39 @@ def _private_storage(tmp_path_factory, monkeypatch):
     # renders are built for libx264 unless a test asks otherwise — a machine with an
     # NVIDIA GPU must not change what the graph tests see
     monkeypatch.setattr(settings, "vizsup_video_encoder", "cpu")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _drop_module_windows():
+    """After each test module, delete the top-level widgets it left alive. Tests close but
+    rarely delete their windows; thousands of leftovers made every app-wide restyle
+    (qapp.setStyleSheet / load_fonts in the 150 %-DPI layout tests) re-polish them all —
+    ~95 s per call, the suite went from ~100 s to 34 min (2026-10-29)."""
+    import sys
+
+    def app_now():
+        if "PySide6.QtWidgets" not in sys.modules:     # never import Qt for a non-Qt module
+            return None
+        from PySide6.QtWidgets import QApplication
+
+        return QApplication.instance()
+
+    app = app_now()
+    if app is not None:
+        from shiboken6 import getCppPointer
+
+        before = {getCppPointer(w)[0] for w in app.topLevelWidgets()}
+    else:
+        before = set()
+    yield
+    app = app_now()
+    if app is None:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import getCppPointer, isValid
+
+    for w in app.topLevelWidgets():
+        if isValid(w) and getCppPointer(w)[0] not in before:
+            w.close()
+            w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

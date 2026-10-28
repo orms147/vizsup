@@ -18,6 +18,7 @@ used here — pitch is the only evidence.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 
 import numpy as np
@@ -114,7 +115,9 @@ def _audio_source(job: Job, log=None):
     voc = job.work_dir / "vocals.wav"
     if voc.exists():
         return voc
-    if job.source_video.exists():
+    # VIZSUP_NO_AUTO_SEPARATE=1: never start Demucs just for the guess (the test suite sets
+    # it — a real separation in every worker / CLI test made the suite 100 s → 34 min)
+    if job.source_video.exists() and not os.environ.get("VIZSUP_NO_AUTO_SEPARATE"):
         from app.pipeline import separate
 
         try:
