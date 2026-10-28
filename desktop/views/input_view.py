@@ -558,6 +558,12 @@ class InputView(QWidget):
             "thiểu 2 khung hình, kéo câu quá ngắn lên ~0,8 s nếu còn chỗ — như chuẩn phụ đề "
             "Netflix. Chỉ đổi thời gian, không đổi chữ. Chạy trên máy.")
         g.addWidget(self.timing_pass, 9, 1)
+        self.vi_lint = QCheckBox("Soát lỗi tiếng Việt")
+        self.vi_lint.setToolTip(
+            "Sau khi dịch, tự sửa lỗi trình bày an toàn (dấu cách thừa/thiếu, ba chấm, ngoặc kép, "
+            "từ chức năng bị lặp như “là là”) và đánh dấu câu còn chữ Trung, lệch số, từ chưa "
+            "dịch. Chạy trên máy, không tốn API.")
+        g.addWidget(self.vi_lint, 12, 0)
         self.ai_review = QCheckBox("AI soát bản dịch")
         self.ai_review.setToolTip(
             "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
@@ -641,6 +647,7 @@ class InputView(QWidget):
         self.auto_snap.setChecked(bool(st.get("auto_snap", True)))
         self.clause_split.setChecked(bool(st.get("clause_split", True)))
         self.timing_pass.setChecked(bool(st.get("timing_pass", True)))
+        self.vi_lint.setChecked(bool(st.get("vi_lint", True)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
@@ -748,6 +755,7 @@ class InputView(QWidget):
             "auto_snap": self.auto_snap.isChecked(),
             "clause_split": self.clause_split.isChecked(),
             "timing_pass": self.timing_pass.isChecked(),
+            "vi_lint": self.vi_lint.isChecked(),
             "ai_review": self.ai_review.isChecked(),
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),

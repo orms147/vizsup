@@ -69,6 +69,15 @@ class PipelineWorker(QObject):
             store.debug(f"timing pass failed: {type(exc).__name__}: {exc}")
             self.log.emit(f"⚠ Bỏ qua bước chỉnh thời gian chuẩn ({type(exc).__name__}: {exc})")
 
+    def _vi_lint(self, job: Job) -> None:
+        from app.pipeline import vi_lint
+
+        try:
+            vi_lint.fix_job(job, log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"vi lint failed: {type(exc).__name__}: {exc}")
+            self.log.emit(f"⚠ Bỏ qua bước soát lỗi tiếng Việt ({type(exc).__name__}: {exc})")
+
     def _guess_voices(self, job: Job) -> None:
         from app.pipeline import voices
 
@@ -477,6 +486,10 @@ class PipelineWorker(QObject):
                                 refine=o.get("refine"), glossary=gl or None,
                                 log=self.log.emit, cancel=lambda: self._cancel)
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
+            # 3.4) Vietnamese typography lint (spaces, …, quotes, repeated function words)
+            # BEFORE the AI review, whose findings are tied to the unchanged line text
+            if o.get("vi_lint", True):
+                self._vi_lint(job)
             # 3.5) E-5: a strong model points at lines worth a human look (never edits)
             if o.get("ai_review", True) and o.get("translator", "passthrough") != "passthrough":
                 self._check()

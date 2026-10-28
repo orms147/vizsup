@@ -182,6 +182,14 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
     else:
         print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
         translate.translate(job, draft=args.translator, refine=args.refine, force=force, log=print)
+        # 3.4) Vietnamese typography lint, before the AI review (its findings need unchanged text)
+        if not getattr(args, "no_vi_lint", False):
+            from app.pipeline import vi_lint
+
+            try:
+                vi_lint.fix_job(job, log=lambda m: print(f"[run] {m}"))
+            except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+                print(f"[run] vi lint skipped ({exc})")
         # 3.5) E-5: AI QA pass → qa_report.json (never edits vi.srt)
         if not getattr(args, "no_qa", False) and args.translator != "passthrough":
             from app.pipeline import brief, qa
@@ -385,6 +393,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--series", default="auto", metavar="auto|SLUG|none",
                    help="series profile (\"Bộ phim\"): auto = from the 《…》 in the title, a saved "
                         "series' slug, or none")
+    r.add_argument("--no-vi-lint", action="store_true",
+                   help="do not auto-fix Vietnamese typography (spaces, …, quotes) after translating")
     r.add_argument("--no-voice-guess", action="store_true",
                    help="do not guess each line's male/female voice from the pitch")
     r.add_argument("--no-timing-pass", action="store_true",
