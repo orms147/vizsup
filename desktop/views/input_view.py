@@ -581,6 +581,21 @@ class InputView(QWidget):
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
         g.addWidget(self.asr_note, 10, 0, 1, 2)
+        self.series_combo = QComboBox()
+        self.series_combo.setToolTip(
+            "Bộ phim nhiều tập: tên nhân vật, xưng hô, bản tóm tắt, kiểu phụ đề, giọng đọc và cài "
+            "đặt dựng được giữ qua các tập; vài câu cuối tập trước (đã duyệt) giúp dịch nối mạch. "
+            "“Tự nhận” lấy tên trong 《…》 của tiêu đề video.")
+        self.series_note = label("", "small", wrap=True)
+        self.series_combo.currentIndexChanged.connect(self._update_series_note)
+        sf = QWidget()
+        sf.setObjectName("bare")
+        sf.setLayout(_field("Bộ phim", self.series_combo))
+        sf.layout().setContentsMargins(0, 0, 0, 0)
+        sf.layout().addWidget(self.series_note)
+        self._series_field = sf
+        g.addWidget(sf, 11, 0, 1, 2)
+        self.refresh_series()
         for w in (self.source, self.ocr_region, self.ocr_engine, self.draft, self.refine,
                   self.asr, self.tts):
             compact_combo(w, 14)          # long engine names elide, never widen the panel
@@ -727,6 +742,7 @@ class InputView(QWidget):
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),
             "ocr_fast": self.ocr_fast.isChecked(),
+            "series": self.series_combo.currentData() or "auto",
         }
         note = self.context_note.toPlainText().strip()
         if note:
@@ -815,6 +831,43 @@ class InputView(QWidget):
 
     def refresh_recent(self) -> None:
         self.recent.refresh()
+        self.refresh_series()
+
+    def refresh_series(self) -> None:
+        """Fill the "Bộ phim" combo: auto · every saved series · none (keeps the pick)."""
+        from app.pipeline import series
+
+        keep = self.series_combo.currentData() or "auto"
+        self._series_profiles = {}
+        self.series_combo.blockSignals(True)
+        self.series_combo.clear()
+        self.series_combo.addItem("Tự nhận theo tên 《…》 của video", "auto")
+        try:
+            profiles = series.list_profiles()
+        except Exception:  # noqa: BLE001 - a broken storage never blocks the page
+            profiles = []
+        for p in profiles:
+            self._series_profiles[p.slug] = p
+            self.series_combo.addItem(f"《{p.name}》 · {p.terms} thuật ngữ", p.slug)
+        self.series_combo.addItem("Không dùng bộ phim", "none")
+        i = self.series_combo.findData(keep)
+        self.series_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.series_combo.blockSignals(False)
+        self._update_series_note()
+
+    def _update_series_note(self, *_a) -> None:
+        from app.pipeline import series
+
+        key = self.series_combo.currentData()
+        p = self._series_profiles.get(key)
+        if p is not None:
+            self.series_note.setText(series.summary(p))
+        elif key == "none":
+            self.series_note.setText("Video này dịch riêng, không dùng bộ phim nào.")
+        else:
+            self.series_note.setText("Có tên trong 《…》 thì tạo / dùng bộ phim đó"
+                                     + (f" ({len(self._series_profiles)} bộ phim đã lưu)."
+                                        if self._series_profiles else "."))
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
