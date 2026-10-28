@@ -34,7 +34,8 @@ MAX_AGE = 24 * 3600.0           # check at most once a day
 _ID = re.compile(r"^[a-z0-9][\w.-]*/[\w.:-]+$", re.I)
 _VER = re.compile(r"^\d+(\.\d+){0,3}$")
 
-_memo: tuple[float, dict] | None = None     # (cache mtime, catalog) — read once per change
+_memo: tuple[tuple[str, float], dict] | None = None   # ((cache path, mtime), catalog)
+_URL = re.compile(r"^https://github\.com/orms147/vizsup/[A-Za-z0-9._~/%-]*$")
 
 
 def _get_json(url: str, timeout: float = 10.0):
@@ -91,13 +92,15 @@ def validate(data, live: set[str] | None) -> list[str]:
             if f in p and not (isinstance(p[f], (int, float)) and 0 <= p[f] < 1):
                 bad.append(f"{key}.{f} không hợp lệ")
         for f in ("label", "hint"):
-            if f in p and not (isinstance(p[f], str) and len(p[f]) <= 400):
+            # shown in QLabels that render HTML: a catalog may carry plain text only
+            if f in p and not (isinstance(p[f], str) and len(p[f]) <= 400 and "<" not in p[f]):
                 bad.append(f"{key}.{f} không hợp lệ")
     app = data.get("app") or {}
     if app:
         if not isinstance(app, dict) or not _VER.match(str(app.get("latest") or "")):
             bad.append("app.latest không hợp lệ")
-        elif app.get("url") and not str(app["url"]).startswith(RELEASES):
+        elif app.get("url") and not (_URL.match(str(app["url"]))
+                                     and ".." not in str(app["url"]).split("/")):
             bad.append("app.url phải là trang vizsup trên GitHub")
     if live is not None and not bad:
         gone = sorted(i for i in _ids(data) if i not in live)
@@ -110,10 +113,10 @@ def current() -> dict:
     global _memo
     p = cache_path()
     try:
-        mtime = p.stat().st_mtime
+        stamp = (str(p), p.stat().st_mtime)      # the path too: another storage is another catalog
     except OSError:
         return {}
-    if _memo and _memo[0] == mtime:
+    if _memo and _memo[0] == stamp:
         return _memo[1]
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -121,7 +124,7 @@ def current() -> dict:
         data = {}
     if validate(data, None):
         data = {}
-    _memo = (mtime, data)
+    _memo = (stamp, data)
     return data
 
 
@@ -199,7 +202,10 @@ def summary() -> str:
     data = current()
     if not data:
         return "Đang dùng danh sách model có sẵn trong app."
-    when = time.strftime("%d/%m/%Y", time.localtime(float(data.get("_fetched") or 0)))
+    try:
+        when = time.strftime("%d/%m/%Y", time.localtime(float(data.get("_fetched") or 0)))
+    except (TypeError, ValueError, OverflowError, OSError):     # a hand-edited / old cache file
+        when = "?"
     line = f"Danh sách model: bản {data.get('updated') or '?'} (kiểm tra {when})."
     latest = (data.get("app") or {}).get("latest")
     if newer(latest):
