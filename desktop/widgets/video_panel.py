@@ -206,6 +206,12 @@ class VideoPanel(QFrame):
             store.update_ui_state(safe_zone=key)
         self.safeZoneChanged.emit(key)
 
+    def set_min_picture_height(self, h: int) -> None:
+        """How short the picture may get (the canvas wants 300 px by default): on a laptop the
+        render page's right column must be able to give height back instead of making the page
+        scroll and pushing the options' footer out of view."""
+        self._canvas.setMinimumHeight(max(60, int(h)))
+
     def safe_zone(self) -> str:
         return self._zone_btn.property("zone") or ""
 

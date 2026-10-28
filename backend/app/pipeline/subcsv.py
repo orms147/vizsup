@@ -61,7 +61,7 @@ def export_text(cues: Sequence) -> str:
     w = csv.writer(buf, lineterminator="\r\n")
     w.writerow(COLUMNS)
     for i, c in enumerate(cues, 1):
-        w.writerow([i, fmt_ts(c.start), fmt_ts(c.end), c.zh or "", c.vi or ""])
+        w.writerow([i, fmt_ts(c.start), fmt_ts(c.end), guard(c.zh or ""), guard(c.vi or "")])
     return BOM + buf.getvalue()
 
 
@@ -81,6 +81,28 @@ def read_text(path: str | Path) -> str:
         except UnicodeDecodeError:
             continue
     return raw.decode("latin-1")
+
+
+FORMULA_STARTS = "-=+@"        # Excel / Sheets read a cell starting with one of these as a formula
+
+
+def guard(text: str) -> str:
+    """A text cell safe to open in a spreadsheet: a leading apostrophe before ``- = + @`` (a
+    dialogue dash "- Anh đi đâu?" would become a formula). Also guards a text that already starts
+    with "'" + one of them, so that :func:`unguard` removes exactly the guard and nothing else."""
+    probe = text[1:] if text.startswith("'") else text
+    return "'" + text if probe[:1] and probe[0] in FORMULA_STARTS else text
+
+
+def unguard(text: str) -> str:
+    """Undo :func:`guard`: strip ONE leading apostrophe when what follows it (past at most one more
+    apostrophe — the one :func:`guard` keeps for a text that itself began with "'") starts with
+    ``- = + @``. A cell that merely starts with an apostrophe is left alone."""
+    if text[:1] != "'":
+        return text
+    rest = text[1:]
+    probe = rest[1:] if rest.startswith("'") else rest
+    return rest if probe[:1] and probe[0] in FORMULA_STARTS else text
 
 
 def _nl(text: str) -> str:
@@ -118,7 +140,7 @@ def read_rows(text: str) -> list[dict]:
         except (ValueError, OverflowError):        # "abc", "", "nan", "inf", "1e999"
             raise CsvError(f"Dòng {n} của file: cột index “{cell('index')}” không phải số.") from None
         out.append({"index": idx, "start": cell("start"), "end": cell("end"),
-                    "zh": _nl(cell("zh")), "vi": _nl(cell("vi"))})
+                    "zh": unguard(_nl(cell("zh"))), "vi": unguard(_nl(cell("vi")))})
     return out
 
 
