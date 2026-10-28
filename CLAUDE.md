@@ -19,7 +19,7 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 - **series ("Bộ phim", `pipeline/series.py`)** — profiles in `storage/_series/<slug>/series.json` (glossary, characters + xưng hô, brief, style, render settings, pronounce); a project links via `series_link.json` (auto from 《…》 in the title, or picked in input / `--series`). Inherited at run start (glossary layer suggested < series < global < project; series sheet + the previous approved episode's last 8 lines in the prompt); learned on approval (terms still in the approved vi.srt, earlier wins) and from the first real render. Dialog `desktop/series_dialog.py`.
 - **vi-lint ("Soát lỗi tiếng Việt", `pipeline/vi_lint.py`)** — after translate, before AI review: typography auto-fix only (…, spaces around punctuation, quotes, doubled function words); flags han / num / latin / pron / term through `review.cue_issues`. Option + editor ··· action; `--no-vi-lint`.
 - **voice guess (`pipeline/voices.py`)** — per-line "m"/"f" from median F0 into overrides.json (`voice` key, part of the approved revision); render option "Giọng theo nhân vật (nam/nữ)" (default OFF) picks HoaiMy / NamMinh per line. Accuracy still being checked (2026-10-29: implausible on an OCR job without vocals.wav).
-- **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.** Opening an approved project must never change its revision files (vi.srt, style.json, style_overrides.json, commentary.json, overrides.json) — 83c808c. Editor extras: compact list ("Gọn"/"Rộng"), overview strip, safe-zone overlay (`widgets/safe_zones.py`), CSV export/import (`pipeline/subcsv.py`), edge snapping on drag.
+- **HUMAN EDIT GATE** — PySide6 timeline+table editor (desktop/). **Nothing downstream runs until the user approves.** Approval is a hash of the revision files (`pipeline/approval.py`); opening an approved project must never change its revision files (vi.srt, style.json, style_overrides.json, commentary.json, overrides.json) — 83c808c. Editor extras: compact list ("Gọn"/"Rộng"), overview strip, safe-zone overlay (`widgets/safe_zones.py`), CSV export/import (`pipeline/subcsv.py`), edge snapping on drag.
 - **TTS** — provider-pluggable; default edge-tts vi-VN (needs edge-tts ≥ 7.3.1 — Microsoft refused 7.2.8 with HTTP 403 on 2026-10-16; Settings → "Cập nhật edge-tts"). edge-tts answers "no audio" at random (~40 % some nights): each line retries alone (0.3/1/2 s) before the shared cooldown; 6 lines in flight. Text is spoken through `pipeline/speak.py` (numbers, units, abbreviations + `pronounce.json`, global and per project); the TTS cache key is the spoken text.
 - **commentary (F-4)** — the user's own notes (`pipeline/commentary.py`, `commentary.json`, editor tab "Bình luận"): text in a voice other than the dub's or their own recording; "pause" freezes the picture (ONE `tpad` per piece — a second chained tpad drops its padding) and shifts everything after it, "over" speaks over the video. Counts towards the approved revision; `output.srt` = subtitles as rendered (output timeline).
 - **fit+mix** — place each VI segment at its absolute start, atempo to fit, pad silence; duck/replace original audio.
@@ -32,11 +32,11 @@ Decision record and tool rationale: **[docs/research.md](docs/research.md)**. Pi
 
 - **Keep the human-edit gate AFTER translation and BEFORE TTS/render.** Never spend TTS credits or encode time on un-approved subtitles.
 - **Providers are pluggable and UI-selectable.** Every translation/TTS/ASR/OCR engine implements the interface in `backend/app/providers/base.py` and registers in `registry.py`. Adding one = one file + register. Never hardcode a single provider in pipeline code.
-- **ASR: timing ≠ accuracy.** WhisperX for word timestamps, a Chinese-native model (FunASR Paraformer) for the transcript. Don't use Whisper alone for Mandarin (CER 3–5× worse).
+- **ASR: timing ≠ accuracy.** One model writes the Chinese text (default: cloud Qwen-Omni via OpenRouter; FunASR Paraformer locally), Whisper only gives word timestamps. Don't use Whisper alone for Mandarin (CER 3–5× worse).
 - **OCR: crop to the bottom third** before detection/recognition. Keep Google-Lens mode opt-in (it uploads frames).
 - **Dub timing**: build VI audio on an **absolute timeline** with exact silence padding (no cumulative drift). Cap `atempo` at **~1.3×** (it skips samples above 2×); prefer shorter VI translations and `rubberband` over heavy speed-up.
 - **Fonts**: subtitles need a **Vietnamese-diacritic Unicode font** (Be Vietnam Pro / Noto Sans). Use `BorderStyle=4` opaque box to cover leftover CN hardsubs.
-- **Model ids**: use `deepseek-v4-flash`/`deepseek-v4-pro` (legacy `deepseek-chat`/`deepseek-reasoner` deprecate 2026-07-24). **GLM-5.2** is the current GLM. Verify any model id/pricing via web — don't trust memory.
+- **Model ids**: the defaults live in `providers/roles.py` + `providers/presets.py`, and `catalog/models.json` (main) can override them — change models there, never in pipeline code. Verify any model id/pricing via https://openrouter.ai/api/v1/models — don't trust memory.
 - **8GB VRAM**: run heavy models (WhisperX, FunASR, Demucs) **sequentially**, not concurrently.
 - **Out of scope (v1)**: Kuaishou & Xiaohongshu download (no reliable OSS path); voice cloning (stock voice is enough).
 
@@ -47,7 +47,7 @@ backend/app/          pipeline + providers + FastAPI (Python) — UI-agnostic co
   pipeline/           one module per stage
   providers/          base.py, registry.py, translation/, tts/, asr/, ocr/
 desktop/              PySide6 (Qt) GUI — PRIMARY, built (calls app.* directly, no HTTP)
-storage/              per-job working dirs (gitignored)
+storage/              per-job working dirs (gitignored); _series/ (Bộ phim profiles), _cache/ (model catalog), _models/ (VAD)
 samples/              test clips
 docs/                 research, architecture, providers, dev-plan; docs/plan/ = active handbook
 .claude/              skills, agents, settings
@@ -60,6 +60,8 @@ docs/                 research, architecture, providers, dev-plan; docs/plan/ = 
 # backend (venv: backend/.venv)
 uv pip install -e .            # or: pip install -e .  (from backend/)
 python -m app.cli URL          # headless: download → subs → translate → gate; then `vizsup render`
+                               #   run: --series auto|SLUG|none --no-timing-pass --timing-scenes --no-vi-lint --no-voice-guess
+                               #   render: --voice-by-gender
 python -m app.cli retime --workdir ../storage/<id>   # re-time an old job's lines to the audio (text kept, backups made)
 python -m app.cli join --group ../storage/<id>       # join a split long video's rendered parts
 python -m app.cli compile <id> <id> ... [--title T]  # Ghép tập: join rendered episodes into one video
