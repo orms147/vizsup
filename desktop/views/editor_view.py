@@ -1371,13 +1371,18 @@ class EditorView(QWidget):
         self._redo_stack.clear()
         self._sel = -1
         self._reload(dirty=False)
+        from app.pipeline import approval
+
         st = self._load_style(job)
         if st:
             self.style_panel.set_from(st)
-        elif _has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE:
-            # burned-in Chinese under an outline-only line shows through → cover it
+        elif (_has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE
+              and not approval.is_approved(job)):
+            # burned-in Chinese under an outline-only line shows through → cover it. Never
+            # on an approved project: the saved style.json would revoke the approval just
+            # by opening it (seen 2026-10-29 on an approved, rendered episode)
             self.style_panel.box_style.setCurrentText(COVER_STYLE)
-            QTimer.singleShot(0, lambda: self.message.emit(
+            QTimer.singleShot(0, self, lambda: self.message.emit(   # dropped with the view
                 "Video có chữ Trung in sẵn — đã chọn nền “Hộp đặc” để che. Đổi ở tab Kiểu chữ.",
                 "info"))
         self._set_global_from_panel()

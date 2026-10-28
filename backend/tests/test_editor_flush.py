@@ -56,3 +56,34 @@ def test_flush_noop_when_clean(qapp, tmp_path, monkeypatch):
     ev.load(Job(id="j", work_dir=tmp_path / "j"))
     ev.flush()
     assert saved == []
+
+
+def _hardsub_job(tmp_path, name):
+    import json
+
+    d = tmp_path / name
+    d.mkdir()
+    (d / "vi.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
+    (d / "cn.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+    (d / "metadata.json").write_text(json.dumps({"has_hardsubs": True}), encoding="utf-8")
+    return Job(id=name, work_dir=d)
+
+
+def test_opening_an_approved_project_keeps_its_approval(qapp, tmp_path):
+    """2026-10-29: an approved, rendered episode without style.json lost its approval just
+    by being opened — the editor picked "Hộp đặc" for the burned-in Chinese and saved it."""
+    from app.pipeline import approval
+
+    job = _hardsub_job(tmp_path, "ok")
+    approval.approve(job)
+    ev = editor_view.EditorView()
+    ev.load(job)
+    qapp.processEvents()
+    ev.flush()                            # what leaving the editor does
+    ev.load(_hardsub_job(tmp_path, "other"))
+    assert approval.is_approved(job)
+    # an unapproved one still gets the cover box
+    fresh = _hardsub_job(tmp_path, "fresh")
+    ev.load(fresh)
+    assert ev.style_panel.box_style.currentText() == editor_view.COVER_STYLE
+    qapp.processEvents()                  # its "đã chọn nền" note fires while ev lives
