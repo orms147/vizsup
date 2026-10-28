@@ -137,3 +137,6 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 01:28 — merged feat/ux-wave3 (sesion 2: safe-zone overlay TikTok/Reels/Shorts/YouTube in
   editor + render preview, CSV export/import, timeline edge snapping, library "Sửa", window clamped to
   screen) → cd6b461. sesion 2 next: render page sticky actions + collapsible "Đăng tải & thương hiệu".
+- 02:03 — full suite after the wave-3 merge: 1400 passed, ruff clean. Merged the pinyin eval doc.
+  SPEND check (OpenRouter /key, UTC day incl. the owner's own daytime use): $0.077 today — far under
+  the $2–3 cap. Claude/Meta API keys: not used by me (sessions run on the subscription).
