@@ -432,6 +432,9 @@ class MainWindow(QMainWindow):
                                     duration=fmt_time(dur, 0),
                                     pending=self.editor.pending_count())
                 if not dlg.exec():
+                    if dlg.review_requested:
+                        self.stack.setCurrentIndex(EDITOR)
+                        self.editor.show_pending()
                     return
                 approval.approve(self.job, cues=len(self.editor.cues))
                 self.editor.refresh_approval()

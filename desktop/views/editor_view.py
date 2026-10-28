@@ -1179,6 +1179,15 @@ class EditorView(QWidget):
     def pending_count(self) -> int:
         return len(self.cue_list.pending_rows())
 
+    def show_pending(self) -> None:
+        """"Xem N câu" in the approve dialog: only the lines still to look at, the first
+        one selected, the keyboard on the list (D / F8 / ↑↓ carry on from there)."""
+        self.cue_list.set_review_only(True)
+        rows = self.cue_list.pending_rows()
+        if rows:
+            self.cue_list.selectRow(rows[0])
+        self.cue_list.view.setFocus()
+
     # --- dub preview / shorten -------------------------------------------------
     def _toast(self, msg: str) -> None:
         self.message.emit(msg, "warn")
