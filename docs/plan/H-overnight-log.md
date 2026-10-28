@@ -203,3 +203,4 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   re-polished thousands of widgets leaked by earlier modules (~95 s per call) → conftest deletes each
   module's leftover top-level windows. Real app behaviour unchanged.
 - 05:29 — idle check: all planned work merged and pushed (head bfdf2a2), suite green, both sessions finished.
+- 06:03 — idle check.
