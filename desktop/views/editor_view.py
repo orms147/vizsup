@@ -298,6 +298,7 @@ class EditorView(QWidget):
         cl.tidyRequested.connect(self._tidy_timing)
         cl.clauseSplitRequested.connect(self._split_clauses)
         cl.timingPassRequested.connect(self._timing_pass)
+        cl.viLintRequested.connect(self._vi_lint)
         cl.findRequested.connect(lambda: self._toggle_find())
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
@@ -899,6 +900,33 @@ class EditorView(QWidget):
         extra = f" · bỏ qua {len(rep.locked)} chỗ có câu khóa" if rep.locked else ""
         self.message.emit(f"Đã chỉnh thời gian: {rep.summary()}{extra} — Ctrl+Z để hoàn tác.", "ok")
 
+    def _vi_lint(self) -> None:
+        """"Soát lỗi tiếng Việt": safe typography fixes on every line (one undo step) and the
+        lint flags refreshed. Policy in pipeline.vi_lint (pure, tested)."""
+        from app.pipeline import vi_lint
+
+        if not self.cues:
+            return
+        fixes = [vi_lint.fix_text(c.vi) for c in self.cues]
+        counts: dict[str, int] = {}
+        for _t, fired in fixes:
+            for k in fired:
+                counts[k] = counts.get(k, 0) + 1
+        if counts:
+            self._snapshot()
+            for c, (text, fired) in zip(self.cues, fixes):
+                if fired:
+                    c.vi = text
+            self._reload()
+        else:
+            self._refresh_issues()
+        flagged = sum(1 for iss in self.issues if {"han", "num", "pron", "latin"} & set(iss))
+        msg = (f"Đã sửa {sum(counts.values())} chỗ: {vi_lint.describe(counts)} — Ctrl+Z để hoàn tác."
+               if counts else "Không có lỗi trình bày để sửa.")
+        if flagged:
+            msg += f" {flagged} câu cần xem tay (chữ Trung, lệch số, từ chưa dịch, xưng hô)."
+        self.message.emit(msg, "ok")
+
     def _rate_str(self) -> str:
         """The voice speed as the TTS/render options spell it ("+30%")."""
         return f"{int(round((self._voice_rate() - 1) * 100)):+d}%"
@@ -1046,10 +1074,18 @@ class EditorView(QWidget):
     # --- tự canh lời (snap to the voice) ----------------------------------------
     def _compute_issues(self) -> list[list[str]]:
         ocr, term = self._spans
+        lint = None
+        if self.job is not None:
+            try:
+                from app.pipeline import vi_lint
+
+                lint = vi_lint.context(self.job)       # glossary + series ban, cached by stamps
+            except Exception:  # noqa: BLE001 - the lint flags are hints
+                lint = None
         return review.cue_issues(self.cues, ocr_spans=ocr, term_spans=term,
                                  guess_spans=self._guess, voice=self._speech,
                                  qa_findings=self._qa, late=getattr(self, "_late", []),
-                                 rate=self._voice_rate())
+                                 rate=self._voice_rate(), lint=lint)
 
     def reload_fit_report(self) -> None:
         """F-10: after a render (or a quick preview), flag lines whose dub came in late."""
@@ -1373,13 +1409,18 @@ class EditorView(QWidget):
         self._redo_stack.clear()
         self._sel = -1
         self._reload(dirty=False)
+        from app.pipeline import approval
+
         st = self._load_style(job)
         if st:
             self.style_panel.set_from(st)
-        elif _has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE:
-            # burned-in Chinese under an outline-only line shows through → cover it
+        elif (_has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE
+              and not approval.is_approved(job)):
+            # burned-in Chinese under an outline-only line shows through → cover it. Never
+            # on an approved project: the saved style.json would revoke the approval just
+            # by opening it (seen 2026-10-29 on an approved, rendered episode)
             self.style_panel.box_style.setCurrentText(COVER_STYLE)
-            QTimer.singleShot(0, lambda: self.message.emit(
+            QTimer.singleShot(0, self, lambda: self.message.emit(   # dropped with the view
                 "Video có chữ Trung in sẵn — đã chọn nền “Hộp đặc” để che. Đổi ở tab Kiểu chữ.",
                 "info"))
         self._set_global_from_panel()

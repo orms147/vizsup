@@ -326,6 +326,7 @@ class CueList(QFrame):
     tidyRequested = Signal()
     clauseSplitRequested = Signal()
     timingPassRequested = Signal()
+    viLintRequested = Signal()
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
@@ -503,6 +504,7 @@ class CueList(QFrame):
         m.addAction("Xuất bảng CSV để soát (Google Sheets / Excel)…", self.csvExportRequested.emit)
         m.addAction("Nhập lại bảng CSV đã sửa…", self.csvImportRequested.emit)
         m.addAction("Chỉnh thời gian chuẩn (khoảng cách, độ dài)", self.timingPassRequested.emit)
+        m.addAction("Soát lỗi tiếng Việt", self.viLintRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

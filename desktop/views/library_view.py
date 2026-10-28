@@ -242,6 +242,12 @@ class _Row(QFrame):
             chips.addSpacing(4)
             chips.addWidget(label(plat, "small"))
         chips.addStretch(1)
+        for k in range(chips.count()):
+            # a narrow column cuts whole chips off at the right; squeezing them to
+            # their minimum showed "Video ç" / "Bản dự" (2026-10-29)
+            w = chips.itemAt(k).widget()
+            if w is not None:
+                w.setMinimumWidth(w.sizeHint().width())
         col.addWidget(chip_box)
         h.addLayout(col, 1)
 

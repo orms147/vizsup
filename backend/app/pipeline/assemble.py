@@ -542,7 +542,14 @@ def burn_size(src: tuple[int, int] | None, frame: str, res: str | None) -> tuple
     t = RESOLUTIONS.get(res or "source")
     if not t or t >= min(w, h):
         return w, h
-    return (_even(w * t / h), t) if w >= h else (t, _even(h * t / w))
+    long_side = _even(max(w, h) * t / min(w, h))
+    std = _even(t * 16 / 9)
+    if abs(long_side - std) <= max(2, std // 100):
+        # a source a hair off 16:9 (1924×1080 → 1282×720) snaps to the standard size
+        # (≤1 % stretch, invisible): every episode of a series then has the same size
+        # and "Ghép tập" joins them by stream copy instead of re-encoding
+        long_side = std
+    return (long_side, t) if w >= h else (t, long_side)
 
 
 def output_size(src: tuple[int, int] | None, frame: str, res: str | None) -> tuple[int, int] | None:
@@ -727,6 +734,7 @@ def _build_render(
     glass_band: tuple | None = None,   # cover "glass": the band (glass.band) to blur…
     glass_mask: str = "glass_mask.ass",  # …and the mask .ass drawn by glass.write_mask
     burn_h: int = 1080,        # height of the picture the subs are burned on (blur sigma)
+    burn_w: int | None = None,  # its width: an exact downscale (burn_size snaps to 16:9)
     glass_look: dict | None = None,  # glass.look(style): white tint + blur strength
     fill: str = "blur",        # 9:16 bars: "blur" (the picture, blurred, behind) | "black"
     loudness: bool = True,     # the final mix at FINAL_LUFS — episodes join without jumps
@@ -923,7 +931,8 @@ def _build_render(
     elif scale_filter(res):
         # downscale BEFORE the burn: libass draws the text at the final size (sharp),
         # and the .ass layout (PlayRes 1920x1080) scales with the frame
-        parts.append(f"{vsrc}{scale_filter(res)}[vscl]")
+        exact = f"scale={burn_w}:{burn_h}:flags=lanczos" if burn_w else scale_filter(res)
+        parts.append(f"{vsrc}{exact}[vscl]")
         vsrc = "[vscl]"
     if cover_mode == "glass" and glass_band:
         from app.pipeline import glass
@@ -1051,7 +1060,8 @@ def assemble(
                             frame=frame, plan=plan, dub=dub, encoder=encoder,
                             duration=total, inserts=ins, music=placed, res=res,
                             preset=preset, glass_band=glass_band, glass_mask=mask_name,
-                            burn_h=burn[1], glass_look=glass.look(style), fill=fill)
+                            burn_h=burn[1], burn_w=burn[0] if src_size else None,
+                            glass_look=glass.look(style), fill=fill)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]

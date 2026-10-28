@@ -96,3 +96,28 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   tags; spend ≈ $0.0005.
 - 00:54 — E2E batch: ep 1–5 (10:44) rendered in 84 s (NVENC 7.7×), ep 6 done, ep 7 rendering,
   ep 8 + ep 9 queued. Roadmap statuses updated.
+- 00:59 — merged feat/series-voices (sesion 1: per-line voice m/f from pitch in overrides.json,
+  render option "Giọng theo nhân vật (nam/nữ)" default off, Bộ phim dialog, CLI --series) → 82356dc;
+  checked: existing approvals are not revoked (rows without "voice" hash as before).
+- 00:59 — merged feat/ux-wave2 (sesion 2: compact cue list "Gọn" default ~1.7× more lines at
+  1366×768, 9:16-aware editor split, overview strip, library chips + "Theo tập" sort) → 2dcdbec
+  (1 trivial store.py conflict). Full suite 1278 passed.
+- 00:59 — E2E DONE on copies (scratchpad/e2e_storage):
+  * batch of 4 (ep 1–5, 6, 7, 8) + ep 9 queued mid-batch: all 5 rendered (NVENC, 720p).
+  * "Ghép tập" 1–8 (passed out of order): chapters Tập 1–5 @0:00, 6 @10:45, 7 @12:24, 8 @14:39; 2/4
+    re-encoded because of 1282×720 vs 1280×720 → fixed: commit 9548d67 snaps near-16:9 to standard.
+  * added ep 9 to the 1–8 compilation: stream copy, 5 chapters, 582 subtitle lines, 20:23.
+- 00:59 — next: sesion 1 → Vietnamese subtitle lint; sesion 2 → safe-zone overlay + CSV.
+- 01:07 — real-window check of the merged UI (demo app on copies):
+  * library: chips + counts, "Theo tập", compilations with "Thêm tập" OK; row chips were squeezed
+    ("Video ç") → fixed 78613da.
+  * editor at 1700×1000: the right panel and timeline header overflow the window after ux-wave2 →
+    sent to sesion 2 as priority (regression test requested).
+  * BUG (old, from e45da1e): opening an APPROVED project without style.json whose video has
+    hardsubs auto-picked "Hộp đặc", saved it and revoked the approval → fixed 83c808c (+ a deferred
+    note that could fire after the view was deleted). Read-only check of the real storage: both
+    approved projects still approved under tonight's code.
+- 01:07 — merged feat/vi-lint (sesion 1: "Soát lỗi tiếng Việt" typography auto-fix + flags
+  han/num/latin/pron/term, worker step + editor action, option in input) → 0f95ee3; 1343 passed.
+  Dry run on 750 real lines: 5 fixes, all correct; "latin" over-flags English present in the source
+  → sesion 1 fixing, then investigating "Timing đoán" causes.

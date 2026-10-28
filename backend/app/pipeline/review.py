@@ -12,6 +12,10 @@ Pure, UI-agnostic. A cue is flagged for any of:
 - ``novoice`` — filler-only Chinese (呼呜 / 啊啊) with no voice under it: likely an
                 ASR hallucination on music
 - ``ai``      — the AI QA pass (pipeline/qa.py) flagged the line and it is unchanged since
+- ``han`` / ``num`` / ``pron`` / ``latin`` / ``term`` (live) — the Vietnamese lint
+                (pipeline/vi_lint.py): Chinese characters left in the line, digits of the
+                source missing, a pronoun the series bans, a word that is not Vietnamese,
+                a glossary term not rendered. Only when ``cue_issues(lint=…)`` is given.
 - ``read``    — too fast to READ (F-6): over READ_FLAG_CPS characters per second, or more
                 than MAX_LINES lines at CHARS_PER_LINE. The Netflix Vietnamese guide says
                 17 cps / 42 per line / 2 lines for TV; real translated Douyin vlogs run at a
@@ -45,8 +49,13 @@ LABELS = {
     "ai": "AI nghi sai",
     "read": "Đọc không kịp",
     "late": "Lồng tiếng trễ",
+    "han": "Còn chữ Trung",
+    "num": "Lệch số",
+    "pron": "Xưng hô lệch bộ phim",
+    "latin": "Từ chưa dịch?",
 }
-ORDER = ("short", "overlap", "guess", "novoice", "ai", "long", "late", "read", "ocr", "term")
+ORDER = ("short", "overlap", "guess", "novoice", "ai", "han", "num", "pron", "long", "late",
+         "read", "ocr", "term", "latin")
 READ_CPS = 17.0          # Netflix Vietnamese Timed Text Style Guide, adults (changelog 2025-12)
 READ_FLAG_CPS = 25.0     # flagged above this (see the module docstring)
 CHARS_PER_LINE = 42
@@ -132,12 +141,16 @@ def late_lines(cues, late: list[dict]) -> dict[int, float]:
 def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
                guess_spans: list[Span] = (), voice: list[tuple[float, float]] | None = None,
                qa_findings: list[dict] = (), late: list[dict] = (),
-               rate: float = 1.0) -> list[list[str]]:
+               rate: float = 1.0, lint: dict | None = None) -> list[list[str]]:
     """``cues``: objects with ``start``, ``end``, and Vietnamese text in ``vi`` (editor
     cues) or ``text`` (+ optional Chinese ``zh``). ``voice``: VAD spans, when known.
     ``late``: fit_report.json "late" rows from the last render (F-10). ``rate``: the voice
     speed picked for this project ("Tốc độ nói") — "Quá dài" is judged at it. Returns,
-    per cue, its issue keys in ORDER."""
+    per cue, its issue keys in ORDER. ``lint``: ``vi_lint.context(job)`` — turns on the
+    Vietnamese lint flags; its glossary also replaces the (stale after edits) glossary
+    report for every cue that has Chinese text."""
+    from app.pipeline import vi_lint
+
     late_at = late_lines(cues, late)
     out: list[list[str]] = []
     for i, c in enumerate(cues):
@@ -169,10 +182,23 @@ def cue_issues(cues, *, ocr_spans: list[Span] = (), term_spans: list[Span] = (),
             cps, n_lines = reading(text, c.end - c.start)
             if cps > READ_FLAG_CPS or n_lines > MAX_LINES:
                 issues.append("read")
+        lint_keys: list[str] = []
+        live_terms = False
+        if lint is not None:
+            gl = lint.get("glossary") or {}
+            live_terms = bool(gl) and bool(zh.strip())
+            lint_keys = vi_lint.flags(text, zh, glossary=gl, forbidden=lint.get("forbidden", ()))
+        for k in ("han", "num", "pron"):
+            if k in lint_keys:
+                issues.append(k)
         if ocr_spans and _overlaps(c.start, c.end, ocr_spans):
             issues.append("ocr")
-        if term_spans and _overlaps(c.start, c.end, term_spans):
+        if ("term" in lint_keys) or (not live_terms and term_spans
+                                      and _overlaps(c.start, c.end, term_spans)):
             issues.append("term")
+        if "latin" in lint_keys:
+            issues.append("latin")
+        issues.sort(key=ORDER.index)
         out.append(issues)
     return out
 

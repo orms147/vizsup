@@ -407,3 +407,26 @@ def test_render_passes_voice_by_gender(render_stages, tmp_path):
     other.mkdir()
     run("render", "--workdir", str(_gated_job(other)))
     assert render_stages["tts"]["voice_by_gender"] is False
+
+
+def test_run_lints_the_translation_unless_told_not_to(stages, tmp_path, monkeypatch):
+    from app.pipeline import vi_lint
+
+    calls = []
+    monkeypatch.setattr(vi_lint, "fix_job", lambda job, **kw: calls.append(job.id))
+    run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr")
+    assert len(calls) == 1
+    run("run", "https://b23.tv/y", "--workdir", str(tmp_path / "b"), "--source", "asr",
+        "--no-vi-lint")
+    assert len(calls) == 1
+
+
+def test_a_failing_vi_lint_does_not_stop_the_run(stages, tmp_path, monkeypatch, capsys):
+    from app.pipeline import vi_lint
+
+    def boom(*_a, **_k):
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr(vi_lint, "fix_job", boom)
+    assert run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr") == 0
+    assert "vi lint skipped" in capsys.readouterr().out
