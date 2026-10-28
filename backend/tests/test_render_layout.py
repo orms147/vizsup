@@ -61,10 +61,17 @@ def test_seam_is_a_splitter_and_remembers_its_width(tmp_path, monkeypatch):
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
     v = render_view.RenderView()
+    v.resize(1300, 800)
+    v.show()                                            # the splitter lays out once shown
+    QApplication.processEvents()
     assert v._split.count() == 2 and v._split.childrenCollapsible() is False
-    v._split.setSizes([500, 600])
+    v._split.setSizes([500, 700])
+    QApplication.processEvents()
     v._split.splitterMoved.emit(500, 1)                 # what a drag of the seam emits
     saved = json.loads((tmp_path / "ui_state.json").read_text(encoding="utf-8"))
     assert saved["render_split"] == v._split.sizes()
     v2 = render_view.RenderView()                       # a new page starts where it was left
-    assert v2._split.sizes()[0] == saved["render_split"][0]
+    v2.resize(1300, 800)
+    v2.show()
+    QApplication.processEvents()
+    assert abs(v2._split.sizes()[0] - saved["render_split"][0]) <= 2

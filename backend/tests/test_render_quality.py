@@ -155,7 +155,7 @@ def test_render_view_quality_is_sent_and_remembered(qapp):
     got: list[dict] = []
     rv.renderRequested.connect(got.append)
     rv._emit_render()
-    assert got[-1]["res"] == "source" and got[-1]["preset"] == "balanced"
+    assert got[-1]["res"] == "source" and got[-1]["preset"] == "sharp"
     rv.res.setCurrentIndex(rv.res.findData("720"))
     rv.preset.setCurrentIndex(rv.preset.findData("light"))
     rv._emit_render()

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLineEdit,
+    QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from app.pipeline import review
 from desktop import cuemodel, store
+from desktop.audio import follow_default_output
 from desktop.cuemodel import EditorCue, fmt_time
 from desktop.ui_thread import connect_on_ui
 from desktop.widgets.chrome import ProjectBar, badge, button, icon_button, label
@@ -125,6 +127,7 @@ class EditorView(QWidget):
             self._dub_player = QMediaPlayer()
             self._dub_audio = QAudioOutput()
             self._dub_player.setAudioOutput(self._dub_audio)
+            follow_default_output(self._dub_audio)
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(SAVE_MS)
@@ -175,7 +178,13 @@ class EditorView(QWidget):
         self.split.setStretchFactor(0, 1)
         self.split.setStretchFactor(1, 0)
         self.timeline_panel.setMinimumHeight(150)
-        bl.addWidget(self.split, 1)
+        # the rows keep their widths (video | list | inspector, timeline) and scroll sideways
+        # when the window is narrower — the window itself never grows past the screen
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setWidget(self.split)
+        bl.addWidget(self._scroll, 1)
         root.addWidget(body, 1)
 
         self.cue_list.layout().insertWidget(1, self._find_bar())

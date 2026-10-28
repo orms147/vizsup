@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import store
+from desktop.audio import follow_default_output
 from desktop.cuemodel import fmt_time
 from desktop.icons import icon, pixmap
 from desktop.theme import V2
@@ -102,7 +103,7 @@ COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
 RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1080p", "1080"), ("720p", "720"),
                ("480p", "480"))
 PRESETS = (("Nhẹ · file nhỏ", "light"), ("Cân bằng", "balanced"), ("Nét · file lớn", "sharp"))
-DEFAULT_PRESET = "balanced"
+DEFAULT_PRESET = "sharp"          # text sharpness: the subtitles are the point of the video
 SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của bạn."
 
 
@@ -241,6 +242,7 @@ class RenderView(QWidget):
             self._player = QMediaPlayer()
             self._audio = QAudioOutput()
             self._player.setAudioOutput(self._audio)
+            follow_default_output(self._audio)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -264,11 +266,15 @@ class RenderView(QWidget):
         saved = store.load_ui_state().get("render_split")
         ok = isinstance(saved, list) and len(saved) == 2 and all(isinstance(v, int) for v in saved)
         split.setSizes(saved if ok else [440, 900])
+        scroll = QScrollArea()                # narrower window: scroll, never grow past the screen
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(split)
         split.splitterMoved.connect(lambda *_: store.update_ui_state(render_split=split.sizes()))
         self._split = split
         body = QVBoxLayout()
         body.setContentsMargins(18, 4, 18, 14)
-        body.addWidget(split)
+        body.addWidget(scroll)
         root.addLayout(body, 1)
         self._update_lock()
 

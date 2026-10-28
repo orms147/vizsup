@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import store
+from desktop.audio import follow_default_output
 from desktop.cuemodel import fmt_time
 from desktop.icons import icon
 from desktop.theme import V2
@@ -100,6 +101,7 @@ class VideoPanel(QFrame):
             self._player = QMediaPlayer()
             self._audio = QAudioOutput()
             self._player.setAudioOutput(self._audio)
+            follow_default_output(self._audio)
             self._sink = QVideoSink()
             self._player.setVideoSink(self._sink)
             self._sink.videoFrameChanged.connect(self._on_frame)
