@@ -1,6 +1,6 @@
 # Tóm tắt đêm 28→29/10/2026 (đọc cái này trước, chi tiết ở H-overnight-log.md)
 
-Nhánh: `api-optimization` (đã push; **không** đụng `main`). Bộ test: xem dòng cuối của log, ruff sạch.
+Nhánh: `api-optimization` (đã push; **không** đụng `main`). Bộ test: **1490 qua** (chạy 1 phút 50 giây), ruff sạch.
 Chi phí OpenRouter cả ngày (UTC, gồm cả phần bạn dùng ban ngày): **≈ $0.08** (trần $2–3).
 Không cài thư viện mới vào dự án. Không sửa dự án thật — mọi thử nghiệm chạy trên **bản sao**
 (`…\scratchpad\e2e_storage`). Kiểm tra chỉ-đọc: 2 dự án đã duyệt của bạn vẫn còn "đã duyệt".
