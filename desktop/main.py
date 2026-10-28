@@ -127,6 +127,21 @@ class MainWindow(QMainWindow):
         self.library.compileCancelRequested.connect(self._cancel_compile)
         self._compile_ids: set[str] = set()   # sources + output of the running "Ghép tập"
         self._compile_worker = None
+        # Dựng hàng loạt: approved projects rendered one by one in the SECOND slot, so the
+        # editor stays usable for the next episode meanwhile
+        self.library.batchRequested.connect(self._start_batch)
+        self.library.batchCancelRequested.connect(self._cancel_batch)
+        self.library.batch_queued = self._batch_ids
+        self.render.renderLaterRequested.connect(self._render_later)
+        self._batch: list[dict] = []          # {"id", "opts", "title"} waiting
+        self._batch_job: Job | None = None    # rendering now
+        self._batch_worker = None
+        self._batch_total = 0
+        self._batch_ok: list[str] = []
+        self._batch_failed: list[str] = []
+        self._batch_cancelled = False
+        self._batch_last: tuple[float, str] = (0.0, "")
+        self._main_method: str | None = None  # what the main slot runs (run_render, …)
         self.steps.clicked.connect(self._goto_step)
         self.stack.currentChanged.connect(self._on_page)
         self._on_page(INPUT)
@@ -295,9 +310,14 @@ class MainWindow(QMainWindow):
         if queued and job_id == self._queue_job.id:
             self.status.set_status("Video này đang xử lý trong hàng đợi.", "warn")
             return
+        if self._batch_job is not None and job_id == self._batch_job.id:
+            self.status.set_status("Video này đang được dựng (hàng loạt) — đợi xong rồi mở.",
+                                   "warn")
+            return
         # don't hijack self.job/self.opts from a running worker — a QUEUED run has its
-        # own job, so a finished project can still be opened for editing meanwhile
-        if (self._busy() and not queued) or self._render_busy():
+        # own job, so a finished project can still be opened for editing meanwhile; a
+        # batch render owns only its own job, so others open too
+        if (self._busy() and not queued) or (self._render_busy() and not self._batch_active()):
             self.status.setText("● Đang bận — đợi tác vụ hiện tại xong rồi mở dự án khác.")
             return
         loaded = store.load_job(job_id)
@@ -349,6 +369,10 @@ class MainWindow(QMainWindow):
             return "đang ghép video"
         if ids & self._compile_ids and self._any_busy():
             return "đang ghép video"
+        if self._batch_job is not None and self._batch_job.id in ids:
+            return "đang dựng"
+        if ids & {b["id"] for b in self._batch}:
+            return "đang chờ dựng"
         return None
 
     def _delete_job(self, job_id: str) -> None:
@@ -510,6 +534,9 @@ class MainWindow(QMainWindow):
         return "render" if self._queue_job is not None else None
 
     def _start_render(self, ropts: dict) -> None:
+        if self._batch_active() and not ropts.get("preview"):
+            self._render_later(ropts)           # one render at a time: join the batch
+            return
         slot = self._render_slot()
         if slot is None:
             self.status.set_status("Đang bận — dựng video khi tác vụ hiện tại xong.", "warn")
@@ -527,6 +554,9 @@ class MainWindow(QMainWindow):
             # TTS just spoke, even if vi.srt were somehow rewritten mid-render
             "burn_cues": parse_srt(self.job.vi_srt),
         }
+        from app.pipeline import batch
+
+        batch.save_opts(self.job.work_dir, merged)   # "Dựng hàng loạt" can copy them
         self._set_render_locked(True)
         self._run("run_render", merged, {
             "stage_started": self._on_render_stage,
@@ -545,6 +575,8 @@ class MainWindow(QMainWindow):
 
     def _cancel_render(self) -> None:
         worker = self._rworker if self._render_busy() else (self._worker if self._busy() else None)
+        if worker is not None and worker is self._batch_worker:
+            return                                # the batch has its own Hủy (Thư viện)
         if worker is not None and (worker is self._rworker or self._queue_job is None):
             worker.cancel()
             self.render.set_cancelling()
@@ -720,6 +752,184 @@ class MainWindow(QMainWindow):
         if not cancelled:
             self._notify("Chưa ghép được video", msg[:160], "err")
 
+    # --- Dựng hàng loạt (app/pipeline/batch.py) ----------------------------------------
+    def _batch_active(self) -> bool:
+        return self._batch_job is not None or bool(self._batch)
+
+    def _batch_ids(self) -> set[str]:
+        ids = {b["id"] for b in self._batch}
+        if self._batch_job is not None:
+            ids.add(self._batch_job.id)
+        return ids
+
+    def _render_later(self, ropts: dict) -> None:
+        """"Dựng sau" on the render page: queue the open (approved) project with the
+        settings chosen there; the user can go on to the next episode."""
+        from app.pipeline import approval, batch
+
+        if self.job is None or ropts.get("preview"):
+            return
+        self.editor.save_now()
+        if not approval.is_approved(self.job):
+            self.status.set_status("Duyệt phụ đề trước khi thêm vào hàng dựng.", "warn")
+            return
+        opts = {"tts": self.opts.get("tts") or settings.vizsup_default_tts,
+                "style": self.editor.get_style(), "font": self.editor.get_font(),
+                "size": self.editor.get_size_px(), **ropts}
+        batch.save_opts(self.job.work_dir, opts)
+        title = self.editor.project.title.toolTip() or self.job.id
+        added = self._batch_add([{"id": self.job.id, "opts": opts, "title": title}])
+        n = len(self._batch_ids())
+        self.status.set_status(
+            (f"Đã thêm vào hàng dựng ({n} video) — mở tập khác để sửa tiếp trong lúc chờ"
+             if added else "Video này đã có trong hàng dựng."), "ok" if added else "warn")
+
+    def _start_batch(self, spec: dict) -> None:
+        """Thư viện → Dựng hàng loạt: the picked projects with the template's settings."""
+        from app.pipeline import batch
+
+        tid = spec.get("template")
+        template = batch.template_from(settings.vizsup_storage_dir / tid) if tid else None
+        if not template:
+            self.status.set_status("Chưa có cài đặt mẫu — dựng một video trước.", "warn")
+            return
+        items = []
+        for jid in spec.get("ids") or []:
+            loaded = store.load_job(jid)
+            if loaded is None:
+                continue
+            job, jopts = loaded
+            opts = batch.opts_for(job.work_dir, template)
+            opts["tts"] = template.get("tts") or jopts.get("tts") or settings.vizsup_default_tts
+            items.append({"id": jid, "opts": opts,
+                          "title": job.metadata.get("title") or jid})
+        added = self._batch_add(items)
+        self.status.set_status(f"Đã thêm {added} video vào hàng dựng", "busy")
+
+    def _batch_add(self, items: list[dict]) -> int:
+        have = self._batch_ids()
+        fresh = [it for it in items if it["id"] not in have]
+        if not fresh:
+            return 0
+        starting = not self._batch_active()
+        if starting:
+            self._batch_total = 0
+            self._batch_ok, self._batch_failed = [], []
+            self._batch_cancelled = False
+        self._batch.extend(fresh)
+        self._batch_total += len(fresh)
+        self.render.set_batch_active(True)
+        if starting:
+            self.library.batch_started(self._batch_total)
+            self._batch_next()
+        else:
+            self._batch_progress(*self._batch_last)
+        return len(fresh)
+
+    def _heavy_busy(self) -> bool:
+        """A render / join / compile holds a slot (a batch item waits for it)."""
+        main_heavy = self._busy() and self._main_method in ("run_render", "run_join", "run_compile")
+        return self._render_busy() or main_heavy
+
+    def _batch_next(self) -> None:
+        if self._batch_job is not None:
+            return
+        if not self._batch:
+            self._batch_finish()
+            return
+        if self._heavy_busy():
+            QTimer.singleShot(1000, self._batch_next)
+            return
+        from app.pipeline.srt import parse_srt
+
+        item = self._batch.pop(0)
+        loaded = store.load_job(item["id"])
+        if loaded is None or not loaded[0].vi_srt.exists():
+            self._batch_failed.append(f"{item['title']}: không còn trên máy")
+            QTimer.singleShot(0, self._batch_next)
+            return
+        job = loaded[0]
+        self._batch_job = job
+        if self.job is not None and self.job.id == job.id:
+            self.editor.save_now()
+            self.editor.setEnabled(False)       # vi.srt must not change while it is voiced
+        opts = {**item["opts"], "burn_cues": parse_srt(job.vi_srt)}
+        self._batch_progress(0.0, "Bắt đầu…")
+        self._run("run_render", opts, {
+            "progress": self._batch_progress,
+            "failed": lambda m, it=item: self._batch_item_failed(it, m),
+            "render_done": lambda path, it=item: self._batch_item_done(it, path),
+        }, job=job, slot="render")
+        self._batch_worker = self._rworker
+
+    def _batch_progress(self, frac: float, msg: str) -> None:
+        self._batch_last = (frac, msg)
+        total = max(1, self._batch_total)
+        k = len(self._batch_ok) + len(self._batch_failed) + (1 if self._batch_job else 0)
+        title = ""
+        if self._batch_job is not None:
+            from app.pipeline.compilation import clean_title
+
+            title = clean_title(self._batch_job.metadata.get("title") or self._batch_job.id, 40)
+        text = f"Video {k}/{total}" + (f" · {title}" if title else "") + (f" — {msg}" if msg else "")
+        self.library.set_batch_progress((max(0, k - 1) + frac) / total, text)
+        self.status.set_status(f"Dựng hàng loạt {k}/{total} · {int(frac * 100)}%", "busy")
+
+    def _batch_item_done(self, item: dict, path: str) -> None:
+        self._batch_ok.append(item["title"])
+        self._batch_after(item)
+        shown = getattr(self.render, "_job", None)
+        if self.job is not None and self.job.id == item["id"] and shown is not None                 and getattr(shown, "id", None) == item["id"]:
+            self.render.show_done(path)
+            self.render.set_group(_group_status(self.job))
+
+    def _batch_item_failed(self, item: dict, msg: str) -> None:
+        if msg.strip().startswith("Đã hủy"):
+            self._batch_cancelled = True
+            self._batch.clear()
+        else:
+            self._batch_failed.append(f"{item['title']}: {msg}")
+        self._batch_after(item)
+
+    def _batch_after(self, item: dict) -> None:
+        if self.job is not None and self.job.id == item["id"]:
+            self.editor.setEnabled(True)
+        self._batch_job, self._batch_worker = None, None
+        self.input.refresh_recent()
+        QTimer.singleShot(300, self._batch_next)
+
+    def _batch_finish(self) -> None:
+        ok, failed = len(self._batch_ok), len(self._batch_failed)
+        total = self._batch_total
+        self.render.set_batch_active(False)
+        if not total:
+            return
+        if self._batch_cancelled:
+            msg = f"Đã dừng hàng dựng — {ok} video đã dựng xong"
+        else:
+            msg = f"✓ Đã dựng {ok}/{total} video" + (f" · {failed} lỗi" if failed else "")
+        if failed:
+            msg += "\n" + "\n".join(f"⚠ {f[:140]}" for f in self._batch_failed[:5])
+        self.library.batch_finished(msg)
+        self.status.set_status(msg.splitlines()[0], "warn" if failed or self._batch_cancelled
+                               else "ok")
+        if not self._batch_cancelled:
+            self._notify("Xong dựng hàng loạt", msg.splitlines()[0], "err" if failed and not ok
+                         else "ok")
+        self._batch_total = 0
+
+    def _cancel_batch(self) -> None:
+        self._batch_cancelled = True
+        self._batch.clear()
+        try:
+            if self._batch_worker is not None:
+                self._batch_worker.cancel()
+                return
+        except RuntimeError:
+            pass
+        if self._batch_job is None:
+            self._batch_finish()
+
     def _delete_group(self, gid: str) -> None:
         """A split video from the recent list: every part + the parent folder, through
         the library's flow (guard → confirm → Recycle Bin)."""
@@ -755,6 +965,8 @@ class MainWindow(QMainWindow):
         corrupted memory and killed the app at random later points (an access
         violation inside subprocess for ffmpeg, or in pathlib), 2026-10-01. With the
         relay, bound methods and lambdas alike are queued onto the GUI thread."""
+        if slot == "main":
+            self._main_method = method
         thread = QThread()
         worker = PipelineWorker(job or self.job, opts)
         worker.moveToThread(thread)

@@ -247,6 +247,8 @@ class _Row(QFrame):
                                tip="Ghép video này với các tập mới thành một video dài hơn"
                                if compiled else "Mở để sửa phụ đề / dựng video")
         self.open_btn.clicked.connect(lambda: self.openRequested.emit(iid))
+        if compiled:
+            self.open_btn.setMinimumWidth(84)    # the small-button hint cut "Thêm tập" at 150 %
         self.watch_btn = button("Xem", "Play", small=True, icon_size=13,
                                 tip="Xem video trong ứng dụng")
         self.watch_btn.setEnabled(self._playable)
@@ -373,6 +375,8 @@ class LibraryView(QWidget):
     message = Signal(str, str)             # status bar text, kind
     compileRequested = Signal(dict)        # CompileDialog.spec() → main window runs the join
     compileCancelRequested = Signal()
+    batchRequested = Signal(dict)          # BatchDialog.spec() → main window queues the renders
+    batchCancelRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -410,6 +414,10 @@ class LibraryView(QWidget):
                                       "chương)")
         self.compose_btn.clicked.connect(lambda: self.compose(self.selected()))
         head.addWidget(self.compose_btn)
+        self.batch_btn = button("Dựng hàng loạt", "MonitorPlay", small=True,
+                                tip="Dựng lần lượt các video đã duyệt, chạy nền")
+        self.batch_btn.clicked.connect(lambda: self.open_batch(self.selected()))
+        head.addWidget(self.batch_btn)
         folder = button("Mở thư mục dự án", "FolderOpen", variant="ghost", small=True)
         folder.clicked.connect(lambda: open_external(store._storage()))
         head.addWidget(folder)
@@ -828,6 +836,8 @@ class LibraryView(QWidget):
             h.addWidget(w)
         self._cb_path: Path | None = None
         self._cb_running = False
+        self._cb_kind = "compile"          # the bar shows a join ("compile") or a "batch"
+        self.batch_queued: Callable[[], set[str]] = lambda: set()   # set by the main window
         self.compile_bar = bar
         bar.setVisible(False)
         return bar
@@ -840,7 +850,7 @@ class LibraryView(QWidget):
         from desktop.widgets.compile_dialog import CompileDialog
 
         if self._cb_running:
-            self.message.emit("Đang ghép một video — đợi xong rồi ghép tiếp.", "warn")
+            self.message.emit("Đang ghép / dựng hàng loạt — đợi xong rồi ghép.", "warn")
             return False
         sources = compilation.order(store.compile_sources([it["id"] for it in items if it]))
         dlg = CompileDialog(self.window(), sources, candidates=store.compile_candidates)
@@ -852,7 +862,55 @@ class LibraryView(QWidget):
     def _run_dialog(self, dlg) -> bool:
         return bool(dlg.exec())
 
+    def open_batch(self, items: list[dict]) -> bool:
+        """"Dựng hàng loạt": pick approved projects + whose settings to copy; emits
+        batchRequested. Projects already queued are shown but can't be picked again."""
+        from desktop.widgets.batch_dialog import BatchDialog
+
+        if self._cb_running and self._cb_kind == "compile":
+            self.message.emit("Đang ghép video — đợi xong rồi dựng hàng loạt.", "warn")
+            return False
+        ready, waiting = store.batch_candidates()
+        pre = {it["id"] for it in items} | {p["id"] for it in items for p in it.get("parts") or []}
+        dlg = BatchDialog(self.window(), ready, store.batch_templates(), preselect=pre,
+                          waiting=waiting, queued=self.batch_queued())
+        if not self._run_dialog(dlg):
+            return False
+        spec = dlg.spec()
+        if not spec["ids"]:
+            return False
+        self.batchRequested.emit(spec)
+        return True
+
+    def batch_started(self, total: int) -> None:
+        self._task_started("batch", "Dựng hàng loạt", f"{total} video chờ dựng…")
+
+    def set_batch_progress(self, frac: float, msg: str) -> None:
+        if self._cb_kind == "batch":
+            self.set_compile_progress(frac, msg)
+
+    def batch_finished(self, msg: str) -> None:
+        if self._cb_kind == "batch":
+            self.compile_finished(None, msg)
+            self.refresh()
+
+    def _task_started(self, kind: str, title: str, msg: str) -> None:
+        self._cb_kind = kind
+        self._cb_path = None
+        self._cb_running = True
+        self.cb_title.setText(title)
+        self.cb_msg.setText(msg)
+        self.cb_bar.setValue(0)
+        self.cb_bar.setVisible(True)
+        self.cb_cancel.setVisible(True)
+        self.cb_cancel.setEnabled(True)
+        for w in (self.cb_watch, self.cb_folder, self.cb_close):
+            w.setVisible(False)
+        self.compile_bar.setVisible(True)
+        self.compose_btn.setEnabled(False)
+
     def compile_started(self, title: str, count: int) -> None:
+        self._cb_kind = "compile"
         self._cb_path = None
         self._cb_running = True
         self.cb_title.setText(title)
@@ -894,7 +952,8 @@ class LibraryView(QWidget):
     def _cancel_compile(self) -> None:
         self.cb_cancel.setEnabled(False)
         self.cb_msg.setText("Đang hủy…")
-        self.compileCancelRequested.emit()
+        (self.batchCancelRequested if self._cb_kind == "batch" else
+         self.compileCancelRequested).emit()
 
     def _copy_chapters(self, iid: str) -> None:
         from app.pipeline import compilation

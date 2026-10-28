@@ -206,6 +206,7 @@ class _StageRow(QWidget):
 
 class RenderView(QWidget):
     renderRequested = Signal(dict)
+    renderLaterRequested = Signal(dict)   # "Dựng sau": queue this approved project (batch)
     backRequested = Signal()
     cancelRequested = Signal()
     approveRequested = Signal()        # locked state → re-approve
@@ -230,6 +231,7 @@ class RenderView(QWidget):
         self._tts = "edge"             # provider key (registry)
         self._approved = True          # MainWindow sets the real state; worker re-checks
         self._rendering = False
+        self._batch = False                # a batch render runs: the primary button queues
         self._suggested = False        # "Giữ giọng gốc" already proposed for this job
         self._cues = 0
         self._t0 = 0.0
@@ -500,10 +502,17 @@ class RenderView(QWidget):
                                 tip="Dựng nhanh bản chất lượng thấp (640p) để nghe thử toàn bộ lồng "
                                     "tiếng trước. Giọng đã tạo được giữ — dựng thật sau nhanh hơn.")
         self.quick_btn.setStyleSheet("QPushButton{min-height:40px;}")
+        self._quick_tip = self.quick_btn.toolTip()
         self.quick_btn.clicked.connect(self._on_quick)
+        self.later_btn = button("Dựng sau", "Clock3", variant="ghost",
+                                tip="Thêm vào hàng dựng: dựng nền với cài đặt này, trong lúc bạn "
+                                    "sửa tập khác (Thư viện → Dựng hàng loạt)")
+        self.later_btn.setStyleSheet("QPushButton{min-height:40px;}")
+        self.later_btn.clicked.connect(self._on_later)
         prow = QHBoxLayout()
         prow.setSpacing(8)
         prow.addWidget(self.quick_btn)
+        prow.addWidget(self.later_btn)
         prow.addWidget(self.render_btn, 1)
         fl.addLayout(prow)
         self.again_lbl = label("Lần dựng sau chỉ tạo lại giọng cho câu đã sửa.", "small")
@@ -786,9 +795,19 @@ class RenderView(QWidget):
         self.gate_icon.setPixmap(pixmap("ShieldCheck" if ok else "LockKeyhole",
                                         V2["secondary"] if ok else V2["amber"], 15))
         if not self._rendering:
-            self.render_btn.setText(("Dựng lại" if self._out else "Dựng video") if ok else
+            queue = ok and self._batch
+            self.render_btn.setText("Thêm vào hàng dựng" if queue else
+                                    ("Dựng lại" if self._out else "Dựng video") if ok else
                                     "Duyệt phụ đề")
-            self.render_btn.setIcon(icon("MonitorPlay" if ok else "ShieldCheck", "#ffffff", 16))
+            self.render_btn.setIcon(icon("Plus" if queue else "MonitorPlay" if ok else "ShieldCheck",
+                                         "#ffffff", 16))
+            self.render_btn.setToolTip("Đang dựng hàng loạt — video này được dựng khi tới lượt"
+                                       if queue else "")
+            self.later_btn.setVisible(not self._batch)
+            self.later_btn.setEnabled(ok)
+            self.quick_btn.setEnabled(not self._batch)
+            self.quick_btn.setToolTip("Đang dựng hàng loạt — xem nhanh khi hàng dựng xong"
+                                      if self._batch else self._quick_tip)
         self.listen_btn.setEnabled(ok)
         self.listen_btn.setToolTip("Nghe thử giọng này (một câu mẫu)" if ok else
                                    "Duyệt phụ đề trước khi tạo giọng")
@@ -1079,6 +1098,7 @@ class RenderView(QWidget):
         self.render_btn.setEnabled(not on)
         self.back_btn.setEnabled(not on)
         self.quick_btn.setEnabled(not on)
+        self.later_btn.setEnabled(not on)
         self.cancel_btn.setVisible(on)
         self.cancel_btn.setEnabled(on)
         if on:
@@ -1188,7 +1208,22 @@ class RenderView(QWidget):
         if not self._approved:
             self.approveRequested.emit()
             return
+        if self._batch:
+            self._on_later()
+            return
         self._emit_render()
+
+    def _on_later(self) -> None:
+        if not self._approved:
+            self.approveRequested.emit()
+            return
+        self.renderLaterRequested.emit(self.collect_opts())
+
+    def set_batch_active(self, on: bool) -> None:
+        """A batch render is running in the background: "Dựng video" becomes "Thêm vào
+        hàng dựng" (one render at a time) and the quick proof waits."""
+        self._batch = on
+        self._update_lock()
 
     def _on_quick(self) -> None:
         if not self._approved:
@@ -1197,6 +1232,12 @@ class RenderView(QWidget):
         self._emit_render(preview=True)
 
     def _emit_render(self, preview: bool = False) -> None:
+        opts = self.collect_opts(preview)
+        self._start_progress(opts)
+        self.renderRequested.emit(opts)
+
+    def collect_opts(self, preview: bool = False) -> dict:
+        """The render settings chosen on this page (the job-independent part)."""
         speed = self.speed.value() / 100.0
         opts = {
             # the "(mặc định)" placeholder is UI text, not a voice id — sending it
@@ -1215,8 +1256,7 @@ class RenderView(QWidget):
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
-        self._start_progress(opts)
-        self.renderRequested.emit(opts)
+        return opts
 
     def _start_progress(self, opts: dict) -> None:
         self._joined = None

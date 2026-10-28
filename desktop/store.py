@@ -409,6 +409,51 @@ def compile_candidates() -> list:
             if s.state != "missing"]
 
 
+def _plain_jobs() -> list[dict]:
+    """Every project row incl. a split video's parts (library items flattened)."""
+    out = []
+    for it in library_items():
+        if it.get("kind") == "job":
+            out.append(it)
+        elif it.get("kind") == "group":
+            out += [{**p, "kind": "job"} for p in it.get("parts") or []]
+    return out
+
+
+def batch_candidates() -> tuple[list[dict], int]:
+    """Projects "Dựng hàng loạt" can render: approved, and not rendered since (state
+    "new" / "stale"); plus how many have subtitles still waiting for approval."""
+    from app.pipeline import batch
+
+    ready, waiting = [], 0
+    for j in _plain_jobs():
+        d = Path(j["dirs"][0])
+        state = batch.render_state(d)
+        if state:
+            ready.append({"id": j["id"], "title": j.get("title") or j["id"], "state": state,
+                          "duration": j.get("duration") or 0.0, "mtime": j.get("mtime") or 0.0})
+        elif j.get("has_vi") and not (d / "output.mp4").exists():
+            waiting += 1
+    return ready, waiting
+
+
+def batch_templates() -> list[dict]:
+    """Rendered projects whose settings can be copied, newest render first."""
+    from app.pipeline import batch
+
+    out = []
+    for j in _plain_jobs():
+        d = Path(j["dirs"][0])
+        if not (d / "output.mp4").exists():
+            continue
+        opts = batch.template_from(d)
+        if opts:
+            out.append({"id": j["id"], "title": j.get("title") or j["id"], "opts": opts,
+                        "mtime": (d / "output.mp4").stat().st_mtime})
+    out.sort(key=lambda t: t["mtime"], reverse=True)
+    return out
+
+
 def _group_row(gid: str) -> dict:
     info = _group_file(gid) or {}
     try:
