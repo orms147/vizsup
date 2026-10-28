@@ -115,7 +115,7 @@ def test_a_csv_with_spreadsheet_error_cells_is_refused_not_imported():
     good = subcsv.export_text(cues)
     assert len(subcsv.match(cues, subcsv.read_rows(good))) == 2
     for err in ("#NAME?", "#VALUE!", "#REF!", "#ERROR!", " #N/A "):
-        text = good.replace("- Anh đi đâu?", err)
+        text = good.replace("'- Anh đi đâu?", err)      # export guards the dash; a sheet that lost it
         with pytest.raises(subcsv.CsvError, match="Excel"):
             subcsv.match(cues, subcsv.read_rows(text))
     legit = good.replace("Tạm biệt", "#1 Tạm biệt")           # a line that merely starts with '#'
