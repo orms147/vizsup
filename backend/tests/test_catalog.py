@@ -131,3 +131,30 @@ def test_settings_card_checks_and_relabels(storage, monkeypatch):
 def test_never_due_when_switched_off(storage, monkeypatch):
     monkeypatch.setenv("VIZSUP_NO_UPDATE_CHECK", "1")
     assert not catalog.due()
+
+
+def _m(mid, pin, pout, mods=("text",)):
+    return {"id": mid, "pricing": {"prompt": str(pin / 1e6), "completion": str(pout / 1e6)},
+            "architecture": {"input_modalities": list(mods)}}
+
+
+def test_live_records_cap_price_and_need_images_for_vision():
+    live = {NEW: _m(NEW, 0.1, 0.5), "x/dear": _m("x/dear", 1, 180),
+            "x/textonly": _m("x/textonly", 0.1, 0.4), "x/eyes": _m("x/eyes", 0.1, 0.4, ("text", "image"))}
+    assert catalog.validate(_cat(role_defaults={"refine": NEW}), live) == []
+    bad = catalog.validate(_cat(role_defaults={"refine": "x/dear"}), live)
+    assert bad and "giá ngoài mức" in bad[0]
+    assert "không nhận ảnh" in catalog.validate(_cat(role_defaults={"ocr": "x/textonly"}), live)[0]
+    assert catalog.validate(_cat(role_defaults={"ocr": "x/eyes"}), live) == []
+    assert catalog.validate(_cat(presets={"economy": {"overrides": {"draft": "x/dear"}}}), live)
+
+
+def test_refresh_passes_the_records(storage):
+    live = [NEW, *presets.known_models()]
+
+    def get(url):
+        if url == catalog.URL:
+            return _cat(role_defaults={"refine": NEW})
+        return {"data": [_m(i, 0.1, 30 if i == NEW else 0.5) for i in live]}
+    res = catalog.refresh(get=get)
+    assert not res["ok"] and "giá ngoài mức" in res["problems"][0]

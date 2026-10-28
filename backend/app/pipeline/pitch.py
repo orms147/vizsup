@@ -21,8 +21,11 @@ SHARE = 0.7                    # this share of voiced frames on one side → a v
 MIN_FRAMES = 50                # ~1 s of clear voice before saying anything
 
 
-def f0_frames(x: np.ndarray, sr: int = SR) -> np.ndarray:
-    """F0 (Hz) of the clearly voiced frames of mono float audio. Vectorized YIN."""
+def f0_frames(x: np.ndarray, sr: int = SR, conf: float = CONF) -> np.ndarray:
+    """F0 (Hz) of the voiced frames of mono float audio. Vectorized YIN; ``conf`` is the
+    aperiodicity threshold (CONF = clearly voiced; a looser 0.2 keeps far more frames of
+    reverberant / dubbed speech and, being less strict, also finds the true period instead
+    of its half)."""
     win, hop = int(WIN * sr), int(HOP * sr)
     tmax, tmin = int(sr / FMIN), int(sr / FMAX)
     w = win - tmax
@@ -46,7 +49,7 @@ def f0_frames(x: np.ndarray, sr: int = SR) -> np.ndarray:
     cmnd[:, 1:] = d[:, 1:] * taus[1:] / np.maximum(np.cumsum(d[:, 1:], axis=1), 1e-12)
     out = []
     for row in cmnd:
-        below = np.nonzero(row[tmin:tmax] < CONF)[0]
+        below = np.nonzero(row[tmin:tmax] < conf)[0]
         if not len(below):
             continue
         t = tmin + below[0]

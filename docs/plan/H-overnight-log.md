@@ -121,3 +121,41 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   han/num/latin/pron/term, worker step + editor action, option in input) → 0f95ee3; 1343 passed.
   Dry run on 750 real lines: 5 fixes, all correct; "latin" over-flags English present in the source
   → sesion 1 fixing, then investigating "Timing đoán" causes.
+- 01:28 — merged fix/project-bar-width (sesion 2: a long title + DPI-scaled window made the
+  editor wider than the window; root cause = ProjectBar label min width, not the columns) → e9a3072.
+- 01:28 — merged feat/timing-guess (sesion 1: guessed lines placed on VAD voice islands by DP;
+  copies: ep 1–5 guessed 8 → 2, voice coverage 0.70 → 0.98; sung ad 13 → 11, worst silence inside a
+  line 7.6 s → 0.9 s; "latin" lint skips English present in the source) → 9eeb997. 1370 passed.
+- 01:28 — sesion 1 evaluated pinyin/homophone anchoring: NEGATIVE (false anchors on repeated
+  sung couplets / Whisper loops) → not shipped; eval doc only. pypinyin installed only in its scratch
+  dir, NOT in backend/.venv (no new library in the project tonight).
+- 01:28 — FRESH full run on the new code (copy, CLI, ep 7 URL): download → OCR → snap (73/82) →
+  timing pass → Bộ phim 《末日校车》 auto-linked → brief → translate (2 batches, 14 auto-shortened) →
+  vi-lint (1 fix) → AI review (9 flagged) → voice guess → gate. Translation spot-check good (xưng hô
+  per brief). Voice guess implausible (2 male / 30 female for a male-led episode, OCR job without
+  vocals.wav) → sesion 1 investigating; the render option stays default OFF.
+- 01:28 — merged feat/ux-wave3 (sesion 2: safe-zone overlay TikTok/Reels/Shorts/YouTube in
+  editor + render preview, CSV export/import, timeline edge snapping, library "Sửa", window clamped to
+  screen) → cd6b461. sesion 2 next: render page sticky actions + collapsible "Đăng tải & thương hiệu".
+- 02:03 — full suite after the wave-3 merge: 1400 passed, ruff clean. Merged the pinyin eval doc.
+  SPEND check (OpenRouter /key, UTC day incl. the owner's own daytime use): $0.077 today — far under
+  the $2–3 cap. Claude/Meta API keys: not used by me (sessions run on the subscription).
+- 02:29 — auto-continue check: both sessions idle since ~01:35–01:41 with uncommitted work
+  (voice2: pitch.py/voices.py; ux4: render_view.py/chrome.py) and no report → pinged both to continue
+  or say what blocks them. Nothing new to merge.
+- 02:31 — sesion 2 not blocked (long test wait + a hanging test of its own); render-page work
+  continues (collapsible "Đăng tải & thương hiệu" done; the action footer was already sticky).
+- 02:31 — merged feat/voice-guess-2 (sesion 1) → 3e5367e. Cause of the bad guess: a strict YIN
+  voicing threshold (only 32/82 lines measurable, octave errors) + a fixed 165 Hz split (the male lead
+  speaks at 170–190 Hz). Now: voicing 0.2, per-video split (widest gap 150–260 Hz), Demucs speech stem
+  when there is no vocals.wav (GPU only). ep 7: 2 m / 30 f / 50 ? → 25 m / 43 f / 14 ?; text-cue check
+  20 agree / 2 disagree. Render option "Giọng theo nhân vật" stays default OFF. Related tests 168 passed.
+- 02:50 — sesion 1 code review of the night's diff (files it did not write): 7 confirmed bugs
+  fixed with 17 failing-first tests → merged feat/review-fixes 4130850. Most important: a CSV whose
+  vi cells Excel turned into errors ("#NAME?") would have REPLACED the subtitles — now refused.
+  Others: catalog memo keyed by mtime only, app.url "../" escape, HTML in catalog labels, junk
+  _fetched stamp breaking Settings, postcopy.parse on a string/number, CSV index "inf".
+- 02:50 — my follow-ups 79126ed: catalog price cap (≤ $5/M in, ≤ $25/M out) + image input
+  required for vision/ocr (live records); exact downscale only when really downscaling (odd widths).
+  Remaining review items: U1 CSV formula guard, U4 library Delete with hidden checked rows, U6
+  timeline repaint throttle → sesion 2; U3 app exit during a network call → sesion 1.

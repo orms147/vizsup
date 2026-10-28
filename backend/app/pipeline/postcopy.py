@@ -50,6 +50,14 @@ def request_text(job: Job) -> str:
     return "\n\n".join(parts)
 
 
+def _items(v) -> list:
+    """A list from what the model sent: a list stays, one string is ONE item (not its letters),
+    anything else is nothing."""
+    if isinstance(v, list):
+        return [x for x in v if isinstance(x, (str, int, float))]
+    return [v] if isinstance(v, str) else []
+
+
 def parse(reply: str) -> dict:
     """{"titles": [≤3 str], "hashtags": [str]} from the model's answer; tolerant of code
     fences and chatter around the JSON. Pure."""
@@ -58,9 +66,9 @@ def parse(reply: str) -> dict:
         data = json.loads(m.group(0)) if m else {}
     except ValueError:
         data = {}
-    titles = [" ".join(str(t).split())[:120] for t in data.get("titles") or [] if str(t).strip()]
+    titles = [" ".join(str(t).split())[:120] for t in _items(data.get("titles")) if str(t).strip()]
     tags: list[str] = []
-    for t in data.get("hashtags") or []:
+    for t in _items(data.get("hashtags")):
         t = "#" + str(t).strip().lstrip("#").replace(" ", "").lower()   # "#sinhTon" → one style
         if _TAG.match(t) and t not in tags:
             tags.append(t)
