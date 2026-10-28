@@ -7,7 +7,7 @@ the cursor. The waveform comes from app.pipeline.waveform (RMS, 50 peaks/s).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QSlider, QVBoxLayout, QWidget
 
@@ -84,7 +84,8 @@ class Timeline(QWidget):
     dragStarted = Signal()     # a drag gesture BEGAN — one undo snapshot per drag
     dragFinished = Signal(int)
     zoomChanged = Signal(float)
-    marksChanged = Signal()    # cues / flags / reviewed marks / playhead / selection changed
+    marksChanged = Signal()    # cues / flags / reviewed marks / selection / length changed
+    timeChanged = Signal(float)   # the playhead moved (every tick of playback — keep listeners cheap)
     contextRequested = Signal(int, object)   # right-click on a block: (index, global QPoint)
 
     def __init__(self) -> None:
@@ -150,9 +151,20 @@ class Timeline(QWidget):
         self.marksChanged.emit()
 
     def set_time(self, t: float) -> None:
+        """The playhead. Repaints only the strip around the old and the new line (a tick of
+        playback used to repaint the whole timeline) and says so with ``timeChanged`` — NOT
+        ``marksChanged``, which makes the overview redraw every cue."""
+        old = self._t
         self._t = t
-        self.update()
-        self.marksChanged.emit()
+        if old == t:
+            return
+        x0, x1 = int(old * self._pps), int(t * self._pps)
+        if abs(x1 - x0) > 200:                     # a jump: just repaint it all
+            self.update()
+        else:
+            for x in (x0, x1):
+                self.update(QRect(x - 8, 0, 17, self.height()))
+        self.timeChanged.emit(t)
 
     def set_selected(self, idx: int) -> None:
         self._sel = idx
@@ -463,7 +475,20 @@ class OverviewStrip(QWidget):
         self._down = False
         timeline.marksChanged.connect(self.update)
         timeline.cueChanged.connect(lambda _i: self.update())
+        timeline.timeChanged.connect(self._on_time)
         self._tip_t = -1.0
+        self._px: int | None = None          # where the playhead line is drawn now
+
+    def _on_time(self, t: float) -> None:
+        """Playback tick: the strip changes only when the line moves a whole pixel, and then
+        only that sliver is repainted."""
+        px = int(round(self.x_of(t)))
+        if px == self._px:
+            return
+        old, self._px = self._px, px
+        for x in (old, px):
+            if x is not None:
+                self.update(QRect(x - 3, 0, 7, self.height()))
 
     def set_view(self, a: float, b: float) -> None:
         if (a, b) != self._view:
@@ -497,8 +522,11 @@ class OverviewStrip(QWidget):
         tl = self._tl
         sel = tl._sel
         issues = tl._issues
+        clip = ev.rect()
         base, seen, pend = [], [], []
         for i, c in enumerate(tl._cues):
+            if self.x_of(c.end) < clip.left() - 2 or self.x_of(c.start) > clip.right() + 2:
+                continue                                  # outside the part being repainted
             flagged = i < len(issues) and bool(issues[i])
             kind = ((pend if not cuemodel.is_reviewed(c) else seen) if flagged else base)
             kind.append(i)
@@ -517,7 +545,7 @@ class OverviewStrip(QWidget):
             tick(i, V2["green"], 0.65, 200)
         for i in pend:
             tick(i, V2["amber"], 1.0)
-        if 0 <= sel < len(tl._cues):
+        if 0 <= sel < len(tl._cues) and sel in (base + seen + pend):
             tick(sel, V2["purple_bright"], 1.0)
         a, b = self._view
         if b > a:
@@ -527,6 +555,7 @@ class OverviewStrip(QWidget):
             p.setPen(QPen(_c(V2["purple_bright"]), 1))
             p.drawRoundedRect(r, 3, 3)
         x = self.x_of(tl._t)
+        self._px = int(round(x))
         p.setPen(QPen(_c("#ffffff", 220), 1))
         p.drawLine(QPointF(x, top - 3), QPointF(x, bot + 3))
 
