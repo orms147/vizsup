@@ -959,18 +959,20 @@ class RenderView(QWidget):
             self.comment_lbl.setStyleSheet(f"color:{V2['amber']};")
 
     def _show_post(self) -> None:
-        from app.pipeline import disclosure
+        from app.pipeline import disclosure, postcopy
         from desktop.widgets.dialogs import PostDialog
 
         if self._job is None:
             return
+        job = self._job
         ai = self._audio_mode() != "original"
-        text = disclosure.post_description(self._job, ai_voice=ai)
-        rights = disclosure.load_rights(self._job).get("basis", "unknown")
+        text = disclosure.post_description(job, ai_voice=ai)
+        rights = disclosure.load_rights(job).get("basis", "unknown")
         credit = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         PostDialog(self, text=text, checklist=disclosure.checklist(
-            ai_voice=ai, credit=credit or bool(disclosure.credit_line(self._job)),
-            rights=rights, commentary=self._commentary_stats())).exec()
+            ai_voice=ai, credit=credit or bool(disclosure.credit_line(job)),
+            rights=rights, commentary=self._commentary_stats()),
+            suggest=lambda: postcopy.suggest(job)).exec()
 
     def _sync_audio_enabled(self) -> None:
         mode = self._audio_mode()

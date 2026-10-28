@@ -257,15 +257,43 @@ class PostDialog(VzDialog):
     """F-1/F-2/F-3: the post description (editable, one click to copy) and a short
     checklist before posting."""
 
-    def __init__(self, parent, *, text: str, checklist: list[tuple[bool, str]]) -> None:
+    def __init__(self, parent, *, text: str, checklist: list[tuple[bool, str]],
+                 suggest=None) -> None:
         from PySide6.QtWidgets import QApplication
 
         super().__init__("Mô tả đăng bài", parent, width=560)
         self.body.addWidget(label("Dán vào phần mô tả khi đăng. Sửa thoải mái — đây chỉ là bản "
                                   "nháp tự tạo từ thông tin video gốc.", "secondary", wrap=True))
+        self._base = text
         self.text = QPlainTextEdit(text)
         self.text.setMinimumHeight(150)
         self.body.addWidget(self.text)
+        self.ai_btn = None
+        self.alt_titles = label("", "small", wrap=True)
+        self.alt_titles.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.alt_titles.setVisible(False)
+        if suggest is not None:
+            # postcopy.suggest: one cheap AI call → a title on top + hashtags at the end
+            from desktop.ui_thread import BgRunner
+
+            self._bg = BgRunner(self)
+            self.ai_btn = button("Gợi ý tiêu đề + hashtag (AI)", "Sparkles", variant="ghost",
+                                 small=True)
+            self.ai_btn.setToolTip("Một lần gọi model rẻ (≈ $0.0005) từ tiêu đề gốc, ngữ cảnh và "
+                                   "lời thoại đầu video. Chỉ là bản nháp — sửa trước khi đăng.")
+
+            def ask():
+                self.ai_btn.setEnabled(False)
+                self.ai_btn.setText("Đang nghĩ…")
+                self._bg.run(suggest, self._suggested, self._suggest_failed)
+
+            self.ai_btn.clicked.connect(ask)
+            row = QHBoxLayout()
+            row.addWidget(self.ai_btn)
+            row.addStretch(1)
+            self.body.addLayout(row)
+            self.finished.connect(lambda _r: self._bg.shutdown())
+        self.body.addWidget(self.alt_titles)
         self.body.addWidget(label("Trước khi đăng", "h3"))
         for done, item in checklist:
             row = QHBoxLayout()
@@ -285,3 +313,19 @@ class PostDialog(VzDialog):
         copy.clicked.connect(do_copy)
         self._buttons.addWidget(copy)
         self.add_button("Đóng")
+
+    def _suggested(self, picked: dict) -> None:
+        from app.pipeline import postcopy
+
+        self.ai_btn.setEnabled(True)
+        self.ai_btn.setText("Gợi ý lại")
+        self.text.setPlainText(postcopy.compose(self._base, picked))
+        others = picked.get("titles", [])[1:]
+        self.alt_titles.setText("Tiêu đề khác: " + "  ·  ".join(others) if others else "")
+        self.alt_titles.setVisible(bool(others))
+        self.status.setText("Đã thêm tiêu đề + hashtag — sửa lại cho đúng ý bạn.")
+
+    def _suggest_failed(self, msg: str) -> None:
+        self.ai_btn.setEnabled(True)
+        self.ai_btn.setText("Gợi ý tiêu đề + hashtag (AI)")
+        self.status.setText(f"✗ {msg}")
