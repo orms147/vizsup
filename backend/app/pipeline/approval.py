@@ -61,6 +61,12 @@ def approve(job: Job, *, cues: int | None = None) -> str:
     atomic_write_text((job.work_dir / _FILE), json.dumps(
         {"revision": rev, "approved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "cues": cues},
         ensure_ascii=False, indent=1), encoding="utf-8")
+    try:                                   # Bộ phim: what the user kept becomes the series'
+        from app.pipeline import series
+
+        series.learn(job)
+    except Exception:  # noqa: BLE001 - learning never blocks approving
+        pass
     return rev
 
 
