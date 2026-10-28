@@ -48,7 +48,7 @@ def save_ui_state(opts: dict) -> None:
 # Preferences of other screens (render page): merged in, never cleared by the start screen.
 _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "render_res",
                   "render_quality", "render_split", "recent_colors", "watermark", "render_fill",
-                  "episode_card", "voice_by_gender")
+                  "episode_card", "voice_by_gender", "cue_density")
 
 
 def update_ui_state(**kv) -> None:
@@ -579,21 +579,23 @@ def heavy_paths(item: dict) -> list[Path]:
 
 def library_details(items: list[dict]) -> dict[str, dict]:
     """Per item: ``size`` (bytes on disk), ``heavy`` (what "Chỉ xóa file nặng" frees),
-    ``approved``. Blocking (walks folders) — call off the GUI thread."""
-    from app.pipeline import approval
+    ``approved``, ``stale`` (approved again after the last render: "Cần dựng lại"). Blocking
+    (walks folders) — call off the GUI thread."""
+    from app.pipeline import approval, batch
 
     out: dict[str, dict] = {}
     for it in items:
         size = sum(dir_size(Path(d)) for d in it.get("dirs") or [])
         heavy = sum(dir_size(p) for p in heavy_paths(it))
-        approved = False
+        approved = stale = False
         if it.get("kind") == "job" and it.get("has_vi"):
             try:
                 d = Path(it["dirs"][0])
                 approved = approval.is_approved(Job(id=d.name, work_dir=d))
+                stale = batch.render_state(d) == "stale"
             except Exception:  # noqa: BLE001 - a status must never break the list
-                approved = False
-        out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved,
+                approved = stale = False
+        out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved, "stale": stale,
                          "duration": None if it.get("duration") else _probe_length(it)}
     return out
 

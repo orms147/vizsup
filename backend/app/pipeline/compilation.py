@@ -157,6 +157,24 @@ def _numbers(episodes) -> list[int]:
     return out
 
 
+def series_key(title: str | None) -> str:
+    """What the episodes of one series share, for sorting a list "by series, then episode":
+    the 《name》 when the title has one, else the title with its episode markers (第3集, EP12,
+    Tập 5, a leading "12.", …) and hashtags taken out — lower-cased, accents and punctuation
+    dropped. "" when nothing is left. Pure."""
+    t = unicodedata.normalize("NFKC", title or "")
+    m = re.search(r"《([^》]+)》", t)
+    if m:
+        t = m.group(1)
+    else:
+        for pat in _PATTERNS:
+            t = pat.sub(" ", t)
+        t = re.sub(r"[#＃@][^\s#＃@]+", " ", t)
+    t = unicodedata.normalize("NFD", t.replace("đ", "d").replace("Đ", "D"))
+    t = "".join(ch for ch in t if not unicodedata.combining(ch)).lower()
+    return re.sub(r"[\W_]+", " ", t).strip()
+
+
 def clean_title(title: str, limit: int = 60) -> str:
     """A title without hashtags / @mentions and extra spaces, cut at ``limit``."""
     t = re.sub(r"[#＃@][^\s#＃@]+", " ", title or "")

@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.pipeline import review
-from desktop import cuemodel
+from desktop import cuemodel, store
 from desktop.cuemodel import EditorCue, fmt_time
 from desktop.icons import pixmap
 from desktop.theme import V2, cjk_font, fonts
@@ -40,6 +40,10 @@ from desktop.widgets.chrome import badge, button, icon_button, label
 PAD_X, PAD_Y = 12, 10
 IDX_W = 34          # index column
 GAP = 4
+# compact rows ("Gọn", the default): index | VI over a one-line CN | start time over duration
+C_PAD_X, C_PAD_Y = 10, 4
+C_IDX_W = 30
+C_TIME_W = 66
 
 
 class CueListModel(QAbstractListModel):
@@ -87,8 +91,16 @@ class CueDelegate(QStyledItemDelegate):
         self.f_vi.setPixelSize(13)
         self.f_zh = QFont(cjk_font())
         self.f_zh.setPixelSize(12)
+        self.f_zh_c = QFont(cjk_font())
+        self.f_zh_c.setPixelSize(11)
+        self.compact = True
+
+    def set_compact(self, on: bool) -> None:
+        self.compact = bool(on)
 
     def _text_w(self) -> int:
+        if self.compact:
+            return max(80, self._view.viewport().width() - C_PAD_X * 2 - C_IDX_W - C_TIME_W - 8)
         return max(80, self._view.viewport().width() - PAD_X * 2 - IDX_W)
 
     def _wrap_h(self, font: QFont, text: str, w: int) -> int:
@@ -100,15 +112,104 @@ class CueDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         c = index.model().cues[index.row()]
         w = self._text_w()
+        if self.compact:
+            vh = max(QFontMetrics(self.f_vi).height(), self._wrap_h(self.f_vi, c.vi, w))
+            h = vh + (GAP // 2 + QFontMetrics(self.f_zh_c).height() if c.zh else 0)
+            side = 2 * QFontMetrics(self.f_time).height() + 2       # time over duration
+            return QSize(w, max(h, side) + 2 * C_PAD_Y + 1)
         h = PAD_Y + QFontMetrics(self.f_time).height() + GAP + 2
         h += max(QFontMetrics(self.f_vi).height(), self._wrap_h(self.f_vi, c.vi, w))
         if c.zh:
             h += GAP + self._wrap_h(self.f_zh, c.zh, w)
         return QSize(w, h + PAD_Y + 1)
 
+    def _paint_compact(self, p: QPainter, option, model, row: int) -> None:
+        c = model.cues[row]
+        r = option.rect
+        sel = bool(option.state & QStyle.State_Selected)
+        iss = model.issues_at(row)
+        reviewed = cuemodel.is_reviewed(c)
+        pending = bool(iss) and not reviewed
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        if sel:
+            p.fillRect(r, QColor(V2["purple_soft"]))
+            p.fillRect(QRect(r.left(), r.top(), 2, r.height()), QColor(V2["purple"]))
+        else:
+            if option.state & QStyle.State_MouseOver:
+                p.fillRect(r, QColor(V2["raised"]))
+            if pending:      # the amber edge says "still to look at" without taking a line
+                p.fillRect(QRect(r.left(), r.top(), 3, r.height()), QColor(V2["amber"]))
+        p.setPen(QPen(QColor(V2["line_soft"]), 1))
+        p.drawLine(r.left(), r.bottom(), r.right(), r.bottom())
+
+        fm_t = QFontMetrics(self.f_time)
+        x0 = r.left() + C_PAD_X
+        tx = x0 + C_IDX_W
+        right = r.right() - C_PAD_X
+        cx = right - C_TIME_W + 8                      # the time column
+        tw = cx - 8 - tx
+        y = r.top() + C_PAD_Y
+
+        p.setFont(self.f_idx)
+        p.setPen(QColor(V2["purple_bright"] if sel else V2["muted"]))
+        p.drawText(QRect(x0, y, C_IDX_W - 4, fm_t.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                   f"{row + 1:02d}")
+
+        p.setFont(self.f_vi)
+        vh = max(QFontMetrics(self.f_vi).height(), self._wrap_h(self.f_vi, c.vi, tw))
+        if c.vi:
+            p.setPen(QColor(V2["text"]))
+            p.drawText(QRect(tx, y, tw, vh), Qt.TextWordWrap | Qt.AlignLeft, c.vi)
+        else:
+            p.setPen(QColor(V2["dim"]))
+            p.drawText(QRect(tx, y, tw, vh), Qt.AlignLeft, "(trống)")
+
+        # one line under the VI: the Chinese (elided) and, right-aligned, why it is flagged
+        zy = y + vh + GAP // 2
+        label_txt, iw = "", 0
+        if iss:
+            ifm = QFontMetrics(self.f_issue)
+            label_txt = review.LABELS.get(iss[0], iss[0]) + (
+                f" +{len(iss) - 1}" if len(iss) > 1 else "")
+            label_txt = ifm.elidedText(label_txt, Qt.ElideRight, max(40, tw // 2))
+            iw = ifm.horizontalAdvance(label_txt) + 10
+        zh_h = QFontMetrics(self.f_zh_c).height()
+        if label_txt:
+            p.setFont(self.f_issue)
+            p.setPen(QColor(V2["muted"] if reviewed else V2["amber"]))
+            p.drawText(QRect(tx + tw - iw, zy, iw, zh_h), Qt.AlignRight | Qt.AlignVCenter,
+                       label_txt)
+        if c.zh:
+            p.setFont(self.f_zh_c)
+            p.setPen(QColor(V2["muted"]))
+            room = max(20, tw - iw)
+            p.drawText(QRect(tx, zy, room, zh_h), Qt.AlignLeft | Qt.AlignVCenter,
+                       QFontMetrics(self.f_zh_c).elidedText(c.zh, Qt.ElideRight, room))
+
+        # right column: start time over duration (+ seen / lock marks)
+        p.setFont(self.f_time)
+        p.setPen(QColor(V2["secondary"]))
+        p.drawText(QRect(cx, y, C_TIME_W - 8, fm_t.height()), Qt.AlignRight | Qt.AlignVCenter,
+                   fmt_time(c.start, 2))
+        y2 = y + fm_t.height() + 2
+        p.setPen(QColor(V2["muted"]))
+        dur = f"{max(0.0, c.end - c.start):.1f}s"
+        p.drawText(QRect(cx, y2, C_TIME_W - 8, fm_t.height()), Qt.AlignRight | Qt.AlignVCenter, dur)
+        ix = cx + C_TIME_W - 8 - fm_t.horizontalAdvance(dur) - 6
+        for on, name, colour in ((reviewed, "Check", V2["green"]),
+                                 (c.locked, "LockKeyhole", V2["muted"])):
+            if on:
+                p.drawPixmap(ix - 12, y2 + (fm_t.height() - 12) // 2, pixmap(name, colour, 12))
+                ix -= 15
+        p.restore()
+
     def paint(self, p: QPainter, option, index) -> None:
         model: CueListModel = index.model()
         row = index.row()
+        if self.compact:
+            self._paint_compact(p, option, model, row)
+            return
         c = model.cues[row]
         r = option.rect
         sel = bool(option.state & QStyle.State_Selected)
@@ -289,6 +390,10 @@ class CueList(QFrame):
         self.follow.setChecked(True)
         self.follow.toggled.connect(self.followToggled)
         frow.addWidget(self.follow)
+        self.density_btn = icon_button("Rows3", "Hàng gọn (bật) / hàng rộng (tắt)", checkable=True)
+        self.density_btn.setChecked(store.load_ui_state().get("cue_density") != "wide")
+        self.density_btn.toggled.connect(self._on_density)
+        frow.addWidget(self.density_btn)
         self.f_all.clicked.connect(lambda: self.set_review_only(False))
         self.f_review.clicked.connect(lambda: self.set_review_only(True))
         v.addLayout(frow)
@@ -299,7 +404,9 @@ class CueList(QFrame):
         self.model = CueListModel()
         self.view = _ListView()
         self.view.setModel(self.model)
-        self.view.setItemDelegate(CueDelegate(self.view))
+        self._delegate = CueDelegate(self.view)
+        self._delegate.set_compact(self.density_btn.isChecked())
+        self.view.setItemDelegate(self._delegate)
         self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Shift/Ctrl-click → style scope
         self.view.setUniformItemSizes(False)
         self.view.setResizeMode(QListView.Adjust)
@@ -347,6 +454,21 @@ class CueList(QFrame):
         fh.addWidget(nxt)
         fh.addWidget(label("F8", "small"))
         v.addWidget(foot)
+
+    def compact(self) -> bool:
+        return self._delegate.compact
+
+    def set_compact(self, on: bool) -> None:
+        self.density_btn.setChecked(on)
+
+    def _on_density(self, on: bool) -> None:
+        self._delegate.set_compact(on)
+        store.update_ui_state(cue_density="compact" if on else "wide")
+        cur = self.currentRow()
+        self.view.doItemsLayout()
+        self.view.viewport().update()
+        if cur >= 0:
+            self.view.scrollTo(self.model.index(cur), QAbstractItemView.PositionAtCenter)
 
     def _on_context(self, pos) -> None:
         """Right-click: the row under the pointer becomes the current one (unless it is
