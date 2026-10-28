@@ -121,3 +121,19 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   han/num/latin/pron/term, worker step + editor action, option in input) → 0f95ee3; 1343 passed.
   Dry run on 750 real lines: 5 fixes, all correct; "latin" over-flags English present in the source
   → sesion 1 fixing, then investigating "Timing đoán" causes.
+- 01:28 — merged fix/project-bar-width (sesion 2: a long title + DPI-scaled window made the
+  editor wider than the window; root cause = ProjectBar label min width, not the columns) → e9a3072.
+- 01:28 — merged feat/timing-guess (sesion 1: guessed lines placed on VAD voice islands by DP;
+  copies: ep 1–5 guessed 8 → 2, voice coverage 0.70 → 0.98; sung ad 13 → 11, worst silence inside a
+  line 7.6 s → 0.9 s; "latin" lint skips English present in the source) → 9eeb997. 1370 passed.
+- 01:28 — sesion 1 evaluated pinyin/homophone anchoring: NEGATIVE (false anchors on repeated
+  sung couplets / Whisper loops) → not shipped; eval doc only. pypinyin installed only in its scratch
+  dir, NOT in backend/.venv (no new library in the project tonight).
+- 01:28 — FRESH full run on the new code (copy, CLI, ep 7 URL): download → OCR → snap (73/82) →
+  timing pass → Bộ phim 《末日校车》 auto-linked → brief → translate (2 batches, 14 auto-shortened) →
+  vi-lint (1 fix) → AI review (9 flagged) → voice guess → gate. Translation spot-check good (xưng hô
+  per brief). Voice guess implausible (2 male / 30 female for a male-led episode, OCR job without
+  vocals.wav) → sesion 1 investigating; the render option stays default OFF.
+- 01:28 — merged feat/ux-wave3 (sesion 2: safe-zone overlay TikTok/Reels/Shorts/YouTube in
+  editor + render preview, CSV export/import, timeline edge snapping, library "Sửa", window clamped to
+  screen) → cd6b461. sesion 2 next: render page sticky actions + collapsible "Đăng tải & thương hiệu".
