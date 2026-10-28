@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,7 +28,7 @@ from app.pipeline import review
 from desktop import cuemodel, store
 from desktop.audio import follow_default_output
 from desktop.cuemodel import EditorCue, fmt_time
-from desktop.ui_thread import connect_on_ui
+from desktop.ui_thread import connect_on_ui, emit_quietly, guarded, spawn
 from desktop.widgets.chrome import ProjectBar, badge, button, icon_button, label
 from desktop.widgets.commentary_panel import CommentaryPanel
 from desktop.widgets.music_panel import MusicPanel
@@ -112,9 +112,11 @@ class _Task(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            self.done.emit(self._fn())
+            result = self._fn()
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            emit_quietly(self.failed, f"{type(exc).__name__}: {exc}")
+            return
+        emit_quietly(self.done, result)
 
 
 SEEK_STEP = 10.0       # ← / → jump, seconds (YouTube's)
@@ -1373,31 +1375,17 @@ class EditorView(QWidget):
         self._run_async(work, done, fail)
 
     def shutdown(self) -> None:
-        """Join any short-lived task threads so closing the window never tears down
-        a running QThread (hard crash)."""
-        for thread, _task in list(self._tasks):
-            try:
-                thread.quit()
-                thread.wait(2000)
-            except RuntimeError:
-                pass
+        """Closing the window: results of calls still running (AI, dub preview) are dropped.
+        The calls run on daemon threads, so nothing is joined and the exit is immediate."""
+        self._closing_tasks = True
 
     def _run_async(self, fn, on_done, on_fail=None) -> None:
-        thread = QThread()
         task = _Task(fn)
-        pair = (thread, task)
-        self._tasks.append(pair)
-        task.moveToThread(thread)
-        thread.started.connect(task.run)
-        connect_on_ui(task.done, on_done, self)     # closures touch widgets → GUI thread
+        alive = lambda: not getattr(self, "_closing_tasks", False)   # noqa: E731
+        connect_on_ui(task.done, guarded(on_done, alive), self)     # closures touch widgets → GUI thread
         if on_fail:
-            connect_on_ui(task.failed, on_fail, self)
-        task.done.connect(thread.quit)
-        task.failed.connect(thread.quit)
-        thread.finished.connect(task.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._tasks.remove(pair) if pair in self._tasks else None)
-        thread.start()
+            connect_on_ui(task.failed, guarded(on_fail, alive), self)
+        spawn(task.run, self._tasks, task)
 
     # --- load / save ---------------------------------------------------------
     def load(self, job) -> None:
