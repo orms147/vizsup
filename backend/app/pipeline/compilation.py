@@ -108,17 +108,53 @@ def _cn_number(text: str) -> int | None:
     return total + cur or None
 
 
-def episode_number(title: str | None) -> int | None:
-    """The episode number in a title: 第173集 / 第十二话 / EP12 / Tập 5 / P3 / "12. …" /
-    "(12)". None when there is none."""
+# "第3集 | 《末日校车》1-5 …" / "第4集 | 《末日校车》06 …": 第N集 counts the uploader's POSTS;
+# the number (or range) right after the series name in 《》 is the story's episode —
+# post 3 holds episodes 1–5, post 4 episode 6 (real titles, 2026-10-28). It wins.
+_AFTER_SERIES = re.compile(r"》\s*[:：]?\s*([0-9]{1,4})(?:\s*[-–~～至到]\s*([0-9]{1,4}))?(?![0-9])")
+
+
+def episode_range(title: str | None) -> tuple[int, int] | None:
+    """(first, last) episode in a title — a single episode gives (n, n). None when
+    there is no number. Pure."""
     t = unicodedata.normalize("NFKC", title or "")
+    m = _AFTER_SERIES.search(t)
+    if m:
+        a = int(m.group(1))
+        b = int(m.group(2)) if m.group(2) else a
+        return (a, b) if b >= a else (a, a)
     for pat in _PATTERNS:
         m = pat.search(t)
         if m:
             n = _cn_number(m.group(1))
             if n is not None:
-                return n
+                return n, n
     return None
+
+
+def episode_number(title: str | None) -> int | None:
+    """The (first) episode number in a title: 《剧名》06 / 《剧名》1-5 / 第173集 / 第十二话 /
+    EP12 / Tập 5 / P3 / "12. …" / "(12)". None when there is none."""
+    r = episode_range(title)
+    return r[0] if r else None
+
+
+def _episode_entry(item_id: str, title: str) -> dict:
+    r = episode_range(title)
+    return {"id": item_id, "number": r[0] if r else None, "last": r[1] if r else None,
+            "title": title}
+
+
+def _numbers(episodes) -> list[int]:
+    """Every episode number the entries cover (a range 1–5 counts 1, 2, 3, 4, 5). Pure."""
+    out: list[int] = []
+    for e in episodes:
+        lo = e.get("number")
+        if lo is None:
+            continue
+        hi = e.get("last") or lo
+        out += list(range(int(lo), int(max(hi, lo)) + 1))
+    return out
 
 
 def clean_title(title: str, limit: int = 60) -> str:
@@ -128,8 +164,10 @@ def clean_title(title: str, limit: int = 60) -> str:
     return t if len(t) <= limit else t[: limit - 1].rstrip() + "…"
 
 
-def chapter_name(title: str, number: int | None) -> str:
-    return f"Tập {number}" if number is not None else clean_title(title)
+def chapter_name(title: str, number: int | None, last: int | None = None) -> str:
+    if number is None:
+        return clean_title(title)
+    return f"Tập {number}–{last}" if last and last > number else f"Tập {number}"
 
 
 def order(sources: list[Source]) -> list[Source]:
@@ -140,7 +178,7 @@ def order(sources: list[Source]) -> list[Source]:
 
 
 def default_title(sources: list[Source]) -> str:
-    nums = sorted({e["number"] for s in sources for e in s.episodes if e.get("number") is not None})
+    nums = sorted(set(_numbers(e for s in sources for e in s.episodes)))
     if len(nums) >= 2:
         return f"Tổng hợp tập {nums[0]}–{nums[-1]}"
     count = sum(max(1, len(s.episodes)) for s in sources)
@@ -159,10 +197,11 @@ def warnings(sources: list[Source]) -> list[str]:
         for e in s.episodes:
             key = e.get("id") or ""
             if key and key in seen and seen[key] != s.id:
-                out.append(f"{chapter_name(e.get('title') or '', e.get('number'))} có hai lần "
+                out.append(f"{chapter_name(e.get('title') or '', e.get('number'), e.get('last'))}"
+                           f" có hai lần "
                            f"(trong “{clean_title(s.title, 30)}” và một mục khác)")
             seen.setdefault(key, s.id)
-    nums = [e["number"] for s in sources for e in s.episodes if e.get("number") is not None]
+    nums = _numbers(e for s in sources for e in s.episodes)
     dup = sorted({n for n in nums if nums.count(n) > 1})
     if dup:
         out.append("Trùng số tập: " + ", ".join(str(n) for n in dup[:10]))
@@ -280,9 +319,8 @@ def source_from_dir(storage: Path, item_id: str) -> Source | None:
     group = split.load_group(d)
     if group is not None:
         title = str(group.get("title") or item_id)
-        num = episode_number(title)
-        eps = [{"id": item_id, "number": num, "title": title}]
-        chapters = [(0.0, chapter_name(title, num))]
+        eps = [_episode_entry(item_id, title)]
+        chapters = [(0.0, chapter_name(title, eps[0]["number"], eps[0]["last"]))]
         dur = _seconds(group.get("duration"))
         if split.joined_is_current(d, storage):
             return Source(item_id, "group", title,
@@ -302,13 +340,13 @@ def source_from_dir(storage: Path, item_id: str) -> Source | None:
         return Source(item_id, "group", title, [], chapters, eps, "missing",
                       f"còn {left}/{len(parts)} phần chưa dựng", dur)
     title = _job_title(d)
-    num = episode_number(title)
+    ep = _episode_entry(item_id, title)
     state, note = _job_state(d)
     clips = [Clip(d / "output.mp4", _rendered_srt(d), _encode_of(d))] if state != "missing" else []
     dur = _seconds(_read_json(d / "render.json").get("duration")) or \
         _seconds(_read_json(d / "metadata.json").get("duration"))
-    return Source(item_id, "job", title, clips, [(0.0, chapter_name(title, num))],
-                  [{"id": item_id, "number": num, "title": title}], state, note, dur)
+    return Source(item_id, "job", title, clips,
+                  [(0.0, chapter_name(title, ep["number"], ep["last"]))], [ep], state, note, dur)
 
 
 # --- probing / normalising ------------------------------------------------------------

@@ -305,6 +305,17 @@ def _http_args(ua: str) -> list[str]:
     return ["-user_agent", ua, "-headers", f"Referer: {_REFERER}\r\n"]
 
 
+# A CDN stream that stops sending kept ffmpeg waiting for good (2026-10-28: 6 MB in, then
+# nothing for minutes): give up after STALL_S without data — reconnecting first — so the
+# run fails with a network error and is retried with a fresh link.
+STALL_S = 20
+
+
+def _stream_input_args(ua: str) -> list[str]:
+    return [*_http_args(ua), "-rw_timeout", str(STALL_S * 1_000_000), "-reconnect", "1",
+            "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10"]
+
+
 def _streams_of(url: str, ua: str) -> dict:
     """{'video': height or 0, 'audio': bool, 'duration': s} of one media URL (ffprobe, HTTP)."""
     from app.ffmpegutil import ffprobe_bin
@@ -349,14 +360,28 @@ def _douyin_web(job: Job, url: str) -> Job:
     if pick is None:
         raise RuntimeError("Không tìm thấy luồng video trong các yêu cầu của trang.")
     video, audio = pick
-    cmd = [ffmpeg_bin(), "-y", "-v", "error", *_http_args(ua), "-i", video]
+    # into a temp name: a stopped / failed download must never pass for source.mp4
+    part = job.work_dir / "source.downloading.mp4"
+    cmd = [ffmpeg_bin(), "-y", "-v", "error", *_stream_input_args(ua), "-i", video]
     if audio:
-        cmd += [*_http_args(ua), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
-    cmd += ["-c", "copy", "-movflags", "+faststart", str(job.source_video)]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    if r.returncode != 0 or not job.source_video.exists():
+        cmd += [*_stream_input_args(ua), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
+    cmd += ["-c", "copy", "-movflags", "+faststart", str(part)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
+                           encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired as exc:
+        part.unlink(missing_ok=True)
+        raise RuntimeError("Tải luồng video quá lâu — connection timed out") from exc
+    if r.returncode != 0 or not part.exists():
+        part.unlink(missing_ok=True)
         tail = (r.stderr or "").strip().splitlines()[-1:] or ["ffmpeg lỗi"]
-        raise RuntimeError(f"Tải luồng video thất bại: {tail[0]}")
+        stalled = any(w in tail[0].lower() for w in ("timed out", "i/o error", "connection",
+                                                     "end of file", "reset"))
+        raise RuntimeError(("Tải luồng video bị đứng (mạng chậm hoặc ngắt) — connection timed "
+                            "out: " if stalled else "Tải luồng video thất bại: ") + tail[0])
+    from app import fsutil
+
+    fsutil.replace(part, job.source_video)
     job.metadata = {
         "title": data.get("title") or f"Douyin {vid}",
         "duration": data.get("duration") or max(v.get("duration", 0) for v in info.values()) or None,

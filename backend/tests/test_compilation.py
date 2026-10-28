@@ -39,6 +39,30 @@ def test_episode_number(title, n):
     assert comp.episode_number(title) == n
 
 
+@pytest.mark.parametrize("title, rng", [
+    # real Douyin posts: 第N集 counts the POSTS, the number after 《series》 is the episode
+    ("第3集 | 《末日校车》1-5 我一个普通大巴司机#ai动漫", (1, 5)),
+    ("第4集 | 《末日校车》06 我一个普通大巴司机", (6, 6)),
+    ("《末日校车》 7～8 下集", (7, 8)),
+    ("第173集 | 《你和那个女孩怎么样了》", (173, 173)),
+    ("Không có số", None),
+])
+def test_episode_range(title, rng):
+    assert comp.episode_range(title) == rng
+
+
+def test_ranges_count_in_titles_and_gaps():
+    a = Source("a", "job", "p3", [Clip(comp.Path("a.mp4"))], [(0.0, "Tập 1–5")],
+               [{"id": "a", "number": 1, "last": 5, "title": ""}])
+    b = Source("b", "job", "p4", [Clip(comp.Path("b.mp4"))], [(0.0, "Tập 6")],
+               [{"id": "b", "number": 6, "last": 6, "title": ""}])
+    d = Source("d", "job", "p6", [Clip(comp.Path("d.mp4"))], [(0.0, "Tập 8")],
+               [{"id": "d", "number": 8, "last": 8, "title": ""}])
+    assert comp.default_title([a, b, d]) == "Tổng hợp tập 1–8"
+    assert comp.warnings([a, b, d]) == ["Thiếu tập 7"]           # 2–4 are inside 1–5
+    assert comp.chapter_name("", 1, 5) == "Tập 1–5"
+
+
 def _src(sid: str, number: int | None, *, kind: str = "job", state: str = "ok",
          eps: list[dict] | None = None, dur_chapters=None) -> Source:
     eps = eps if eps is not None else [{"id": sid, "number": number, "title": f"t{sid}"}]

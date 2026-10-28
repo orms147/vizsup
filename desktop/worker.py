@@ -253,6 +253,10 @@ class PipelineWorker(QObject):
         # 1) source — skip when the artifact already exists (resume-friendly)
         self._check()
         self.stage_started.emit("download")
+        if job.source_video.exists() and not _playable(job.source_video):
+            # a download cut off by an older version / a crash: never build on half a file
+            self.log.emit("⚠ Video nguồn tải dở (không đọc được) — tải lại")
+            job.source_video.unlink(missing_ok=True)
         if job.source_video.exists():
             self.log.emit("↷ Đã có video nguồn — dùng lại, không tải lại")
         elif o.get("file"):
@@ -614,6 +618,16 @@ class PipelineWorker(QObject):
             self.failed.emit(_user_message(exc))
         finally:
             self.finished.emit()
+
+
+def _playable(path: Path) -> bool:
+    """A complete media file: ffprobe reads a duration (a cut-off MP4 has no index)."""
+    from app.pipeline.assemble import probe_duration
+
+    try:
+        return probe_duration(path) > 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _user_message(exc: Exception) -> str:
