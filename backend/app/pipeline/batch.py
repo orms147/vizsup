@@ -127,4 +127,7 @@ def describe(opts: dict | None) -> str:
     bits.append(_PRESETS.get(opts.get("preset") or "sharp", "Nét"))
     if (opts.get("frame") or "source") == "tiktok":
         bits.append("khung 9:16")
+    wm = opts.get("watermark") or {}
+    if wm.get("on") and str(wm.get("text") or "").strip():
+        bits.append(f"watermark “{str(wm['text']).strip()[:24]}”")
     return " · ".join(bits)

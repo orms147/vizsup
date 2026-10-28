@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QListWidget, QListWidgetItem
 
 from app.pipeline import batch
-from app.pipeline.compilation import clean_title, episode_number
+from app.pipeline.compilation import chapter_name, clean_title, episode_number, episode_range
 from desktop.widgets.chrome import button, label
 from desktop.widgets.dialogs import VzDialog
 from desktop.widgets.recent_projects import duration_label
@@ -39,12 +39,17 @@ class BatchDialog(VzDialog):
         self.list = QListWidget()
         self.list.setMinimumHeight(260)
         self.list.setStyleSheet("QListWidget::item{padding:5px 6px;}")
+        # long Douyin titles elide instead of scrolling the list sideways
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.ElideRight)
         for c in episode_order(candidates):
             note = "đã duyệt lại sau lần dựng" if c["state"] == "stale" else "chưa dựng"
             if c["id"] in queued:
                 note = "đã trong hàng dựng"
             dur = f" · {duration_label(c['duration'])}" if c.get("duration") else ""
-            it = QListWidgetItem(f"{clean_title(c['title'], 70)}{dur} · {note}")
+            rng = episode_range(c["title"])
+            head = (chapter_name("", *rng) + " · ") if rng else ""
+            it = QListWidgetItem(f"{head}{note}{dur} · {clean_title(c['title'], 60)}")
             it.setData(ROLE, c["id"])
             it.setToolTip(c["title"])
             flags = it.flags() | Qt.ItemIsUserCheckable

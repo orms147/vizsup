@@ -257,3 +257,10 @@ def test_a_project_edited_after_approval_is_skipped(qapp, storage):
     assert not j.output_video.exists()
     assert win._batch_failed and "chưa được duyệt" in win._batch_failed[0]
     win.library.shutdown()
+
+
+def test_describe_mentions_the_watermark():
+    opts = {"audio_mode": "original", "res": "720", "preset": "light",
+            "watermark": {"on": True, "text": "Vietsub: Kênh Của Tôi"}}
+    assert batch.describe(opts).endswith("watermark “Vietsub: Kênh Của Tôi”")
+    assert "watermark" not in batch.describe({**opts, "watermark": {"on": False, "text": "x"}})
