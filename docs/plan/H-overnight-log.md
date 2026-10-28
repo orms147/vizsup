@@ -171,3 +171,12 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   _run_async / Settings _bg now run on daemon threads, shutdown only marks the owner closed — closing
   the app mid-call exits 0 in < 0.6 s (was: abort after a 2 s join). Subprocess tests fail on the old
   code. Related tests 27 passed; sesion 1 reports the full suite 1446 passed on its branch.
+- 03:21 — merged feat/ux-render again (sesion 2: render page at 150 % DPI — a long status line
+  in the result button row made the page 1850 px wide; picture min heights pushed the footer down;
+  unshown audio cards had min height 0 → 6 tests at QT_SCALE_FACTOR=1.5, all failing first; + U1 CSV
+  formula guard, U4 library Delete only visible rows) → cf85a79. Re-checked on the real window: fits,
+  all cards drawn, buttons + result actions visible, no scrollbars.
+- 03:21 — merged feat/docs-night (sesion 1: docs/architecture.md rewritten to the real stage
+  order + sidecar/approval table + threads; docs/providers.md model catalog section) → c228539; applied
+  its CLAUDE.md notes (ASR constraint, model ids → roles/presets/catalog, storage dirs, CLI flags,
+  approval = revision hash) → 10e6414. sesion 1 done for the night.
