@@ -3,7 +3,7 @@ Khóa API / Tải video / AI và mô hình / Đường dẫn; its own Lưu / H�
 (the editor's "Đã lưu" never means settings were saved). Everything is written to
 the repo-root .env and applied to the live settings object.
 
-Network calls (Kiểm tra kết nối, tải danh sách model) run on a background QThread
+Network calls (Kiểm tra kết nối, tải danh sách model) run on a daemon thread
 so the UI never freezes.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from datetime import date
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from desktop import paths  # noqa: F401
 from desktop.icons import icon
 from desktop.theme import V2
-from desktop.ui_thread import connect_on_ui
+from desktop.ui_thread import connect_on_ui, emit_quietly, guarded, spawn
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from app.config import settings  # noqa: E402
 from app.doctor import run_checks  # noqa: E402
@@ -147,9 +147,10 @@ class _NetWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            self.done.emit(self._fn())
+            result = self._fn()
         except Exception as exc:  # noqa: BLE001
-            self.done.emit(exc)
+            result = exc
+        emit_quietly(self.done, result)
 
 
 def _card() -> QFrame:
@@ -182,7 +183,7 @@ class SettingsView(QWidget):
         self._status: dict[str, QLabel] = {}
         self._badges: dict[str, QLabel] = {}
         self._buttons: list[QPushButton] = []
-        self._jobs: list[tuple] = []  # (QThread, _NetWorker) — keep BOTH alive until done
+        self._jobs: list[tuple] = []  # (thread, _NetWorker) — the worker stays referenced until done
         self._dirty = False
 
         root = QVBoxLayout(self)
@@ -868,19 +869,13 @@ class SettingsView(QWidget):
 
     # --- background runner ---------------------------------------------------
     def _bg(self, fn, on_done) -> None:
-        th = QThread(self)
         wk = _NetWorker(fn)
-        wk.moveToThread(th)
-        pair = (th, wk)
-        self._jobs.append(pair)  # CRUCIAL: keep BOTH referenced or the worker is GC'd → crash
-        th.started.connect(wk.run)
-        connect_on_ui(wk.done, on_done, self)   # GUI thread — on_done touches widgets
-        wk.done.connect(th.quit)
-        th.finished.connect(wk.deleteLater)
-        th.finished.connect(th.deleteLater)
-        th.finished.connect(lambda p=pair: p in self._jobs and self._jobs.remove(p))
+        # GUI thread — on_done touches widgets; dropped once the window is closing. The call
+        # runs on a daemon thread (ui_thread.spawn), so a hanging request never delays the exit
+        connect_on_ui(wk.done, guarded(on_done, lambda: not getattr(self, "_closing_jobs", False)),
+                      self)
         self._set_busy(True)
-        th.start()
+        spawn(wk.run, self._jobs, wk)
 
     def _set_busy(self, busy: bool) -> None:
         for b in self._buttons:
@@ -969,11 +964,5 @@ class SettingsView(QWidget):
         self.state_lbl.setStyleSheet(f"color:{V2['green']};")
         self.saved.emit()
 
-    def shutdown(self) -> None:  # join any in-flight network threads
-        for th, _wk in list(self._jobs):
-            try:
-                if th.isRunning():
-                    th.quit()
-                    th.wait(3000)
-            except RuntimeError:
-                pass
+    def shutdown(self) -> None:  # in-flight network calls: results dropped, nothing joined
+        self._closing_jobs = True
