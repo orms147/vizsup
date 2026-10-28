@@ -192,3 +192,8 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   scale UI tests); to profile with --durations after this run. Both sessions done; nothing to merge.
 - 04:34 — FINAL HEAD 0b66ad2: full suite 1489 passed, 1 skipped, ruff clean. But it took 34 min
   with the machine idle (≈100 s at 00:30) → profiling tonight's new test files with --durations.
+- 05:03 — suite slowdown, cause 1 found: the voice guess (feat/voice-guess-2) starts a REAL Demucs
+  separation on the GPU in every worker / CLI test that has a source video (test_cli: 82 s → 7.4 s with
+  it off). Fix (uncommitted, verifying): VIZSUP_NO_AUTO_SEPARATE=1 switch in voices._audio_source, set
+  by conftest like VIZSUP_NO_UPDATE_CHECK; real runs unchanged. A full run with --durations is still
+  slow (> 20 min) → more causes; waiting for the durations list.
