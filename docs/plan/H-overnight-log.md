@@ -167,3 +167,7 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   one predates tonight. Offscreen tests at 100 % scale missed all of these → asked for tests at
   QT_SCALE_FACTOR=1.5.
 - 03:03 — auto-continue check: full suite on 644e7ad still running (machine shared with 2 sessions' suites); sesion 1 on U3 (bg-exit), sesion 2 on the DPI layout fixes (local commit 0c44f04, not pushed yet). Nothing to merge.
+- 03:07 — merged feat/bg-exit (sesion 1, U3) → 856236c: network calls in BgRunner / editor
+  _run_async / Settings _bg now run on daemon threads, shutdown only marks the owner closed — closing
+  the app mid-call exits 0 in < 0.6 s (was: abort after a 2 s join). Subprocess tests fail on the old
+  code. Related tests 27 passed; sesion 1 reports the full suite 1446 passed on its branch.
