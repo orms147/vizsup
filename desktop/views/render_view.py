@@ -124,6 +124,10 @@ def _voice_name(v: str) -> str:
     return known.get(core, core or v)
 
 
+RESULT_MIN_PICTURE = 140   # the preview / result picture may shrink this far on a small window
+CARD_FLOOR = 40            # two lines of text + padding: never less, even before any layout
+
+
 class ModeCard(QPushButton):
     """A checkable card: icon · title · one-line description."""
 
@@ -155,6 +159,7 @@ class ModeCard(QPushButton):
         self.toggled.connect(self._paint_state)
         self._paint_state(False)
         glow(self, corner=7)
+        self._fit_height()          # a card nobody has resized yet must still have its two lines
 
     def _apply_css(self) -> None:
         # the app stylesheet gives every QPushButton min-height 36 (it beats setMinimumHeight),
@@ -172,13 +177,17 @@ class ModeCard(QPushButton):
     def _fit_height(self) -> None:
         lay = self.layout()
         need = lay.totalHeightForWidth(self.width()) if lay is not None and self.width() else 0
-        need = max(need, lay.totalMinimumSize().height() if lay is not None else 0)
-        if need and need != self._min_h:
+        need = max(need, lay.totalMinimumSize().height() if lay is not None else 0, CARD_FLOOR)
+        if need != self._min_h:
             self._min_h = need
             self._apply_css()
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
         super().resizeEvent(ev)
+        self._fit_height()
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
         self._fit_height()
 
     def set_desc(self, text: str) -> None:
@@ -644,6 +653,7 @@ class RenderView(QWidget):
         pv.setContentsMargins(0, 0, 0, 0)
         pv.setSpacing(0)
         self.preview = VideoPanel("Video nguồn")
+        self.preview.set_min_picture_height(RESULT_MIN_PICTURE)
         if hasattr(self, "wm_cb"):
             self._on_watermark(save=False)
         self.preview.durationChanged.connect(lambda _d: self._show_commentary())
@@ -759,12 +769,16 @@ class RenderView(QWidget):
         oh.addWidget(saved)
         rv.addWidget(ok)
         self.result = VideoPanel("Bản tiếng Việt")
+        self.result.set_min_picture_height(RESULT_MIN_PICTURE)
         rv.addWidget(self.result, 1)
         acts = QFrame()
         acts.setObjectName("panel")
-        al = QHBoxLayout(acts)
-        al.setContentsMargins(14, 10, 14, 10)
+        av = QVBoxLayout(acts)
+        av.setContentsMargins(14, 10, 14, 10)
+        av.setSpacing(6)
+        al = QHBoxLayout()
         al.setSpacing(8)
+        av.addLayout(al)
         self.save_btn = button("Lưu video…", "FileVideo", variant="primary",
                                tip="Lưu một bản video, đặt tên theo tiêu đề dự án")
         self.save_btn.clicked.connect(self._save_video)
@@ -785,11 +799,17 @@ class RenderView(QWidget):
         self.post_btn.clicked.connect(self._show_post)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
-        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn, back):
+        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn):
             al.addWidget(b)
         al.addStretch(1)
-        self.res_status = label("", "small")
-        al.addWidget(self.res_status)
+        # a long "N câu lồng tiếng vào trễ…" line used to sit in the button row and made the
+        # whole pane (and the page) wider than a laptop window: it wraps on its own row now
+        sr = QHBoxLayout()
+        sr.setSpacing(8)
+        self.res_status = label("", "small", wrap=True)
+        sr.addWidget(self.res_status, 1)
+        sr.addWidget(back, 0, Qt.AlignTop)
+        av.addLayout(sr)
         rv.addSpacing(8)
         rv.addWidget(acts)
         self._right_stack.addWidget(res)
