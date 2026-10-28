@@ -150,3 +150,12 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   speaks at 170–190 Hz). Now: voicing 0.2, per-video split (widest gap 150–260 Hz), Demucs speech stem
   when there is no vocals.wav (GPU only). ep 7: 2 m / 30 f / 50 ? → 25 m / 43 f / 14 ?; text-cue check
   20 agree / 2 disagree. Render option "Giọng theo nhân vật" stays default OFF. Related tests 168 passed.
+- 02:50 — sesion 1 code review of the night's diff (files it did not write): 7 confirmed bugs
+  fixed with 17 failing-first tests → merged feat/review-fixes 4130850. Most important: a CSV whose
+  vi cells Excel turned into errors ("#NAME?") would have REPLACED the subtitles — now refused.
+  Others: catalog memo keyed by mtime only, app.url "../" escape, HTML in catalog labels, junk
+  _fetched stamp breaking Settings, postcopy.parse on a string/number, CSV index "inf".
+- 02:50 — my follow-ups 79126ed: catalog price cap (≤ $5/M in, ≤ $25/M out) + image input
+  required for vision/ocr (live records); exact downscale only when really downscaling (odd widths).
+  Remaining review items: U1 CSV formula guard, U4 library Delete with hidden checked rows, U6
+  timeline repaint throttle → sesion 2; U3 app exit during a network call → sesion 1.
