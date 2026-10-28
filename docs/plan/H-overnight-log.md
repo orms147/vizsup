@@ -159,3 +159,10 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   required for vision/ocr (live records); exact downscale only when really downscaling (odd widths).
   Remaining review items: U1 CSV formula guard, U4 library Delete with hidden checked rows, U6
   timeline repaint throttle → sesion 2; U3 app exit during a network call → sesion 1.
+- 02:59 — merged feat/ux-render (sesion 2: collapsible "Đăng tải & thương hiệu", footer summary,
+  "Xem N câu" from the speed warning → editor filtered to late lines) → 644e7ad.
+- 02:59 — real-window check (1700×1000 @150 % DPI = logical ≈1133×667) found, sent to sesion 2:
+  render page action buttons below the fold + horizontal scrollbar; audio cards 2–3 render blank;
+  editor filter chip "Cần xem lại" clipped; editor timeline shows only its header (no lanes) — the last
+  one predates tonight. Offscreen tests at 100 % scale missed all of these → asked for tests at
+  QT_SCALE_FACTOR=1.5.
