@@ -1,6 +1,6 @@
 # Tóm tắt đêm 28→29/10/2026 (đọc cái này trước, chi tiết ở H-overnight-log.md)
 
-Nhánh: `api-optimization` (đã push; **không** đụng `main`). Bộ test: 1400 qua, ruff sạch.
+Nhánh: `api-optimization` (đã push; **không** đụng `main`). Bộ test: xem dòng cuối của log, ruff sạch.
 Chi phí OpenRouter cả ngày (UTC, gồm cả phần bạn dùng ban ngày): **≈ $0.08** (trần $2–3).
 Không cài thư viện mới vào dự án. Không sửa dự án thật — mọi thử nghiệm chạy trên **bản sao**
 (`…\scratchpad\e2e_storage`). Kiểm tra chỉ-đọc: 2 dự án đã duyệt của bạn vẫn còn "đã duyệt".
@@ -40,6 +40,21 @@ Không cài thư viện mới vào dự án. Không sửa dự án thật — m�
 - Tiêu đề dài + màn hình phóng to (DPI) làm editor tràn khỏi cửa sổ → hết.
 - Video 1924×1080 ra 1282×720 khiến ghép tập phải mã hoá lại → chuẩn hoá 1280×720.
 - Chip trong thư viện bị bóp chữ ("Video ç") → hết.
+
+## Nửa sau đêm (02:00–03:40)
+- **Đoán giọng nam/nữ** sửa lại: ngưỡng riêng cho từng video + tách giọng khi video có chữ in sẵn.
+  Tập 7: trước 2 nam/30 nữ/50 không rõ → sau 25/43/14 (khớp cách xưng hô trong lời thoại 20/22).
+  Tuỳ chọn "Giọng theo nhân vật" vẫn **mặc định tắt** — bạn nghe thử rồi hãy bật.
+- **Session 1 soát lỗi toàn bộ code đêm qua**: 7 lỗi thật đã sửa (quan trọng nhất: nhập CSV mà Excel
+  đã biến ô thành "#NAME?" sẽ ghi đè phụ đề → giờ bị từ chối). Danh mục model: chặn model đắt
+  (> $25/M token) và model không đọc được ảnh cho việc OCR.
+- **Đóng app khi đang chờ mạng** (kiểm tra model, gợi ý tiêu đề) không còn treo/văng (< 0,6 s).
+- **Màn hình phóng to 150 %** (cửa sổ của bạn): màn Dựng mất nút "Dựng video", thẻ âm thanh trống,
+  editor không thấy timeline → đã sửa và **kiểm tra trên cửa sổ thật**.
+- Màn Dựng: mục "Đăng tải & thương hiệu" gấp gọn được (vẫn báo vàng khi chưa ghi quyền dùng video),
+  dòng tóm tắt cài đặt trên nút dựng, "Xem N câu" ở cảnh báo đọc nhanh → mở editor chỉ các câu đó.
+- Xuất CSV: ô bắt đầu bằng "-", "=", "+" được bảo vệ để Excel/Sheets không biến thành công thức.
+- Tài liệu `docs/architecture.md`, `docs/providers.md`, `CLAUDE.md` cập nhật theo code mới.
 
 ## Cần bạn quyết
 - Merge `api-optimization` vào `main` (để danh mục model tự cập nhật chạy được).
