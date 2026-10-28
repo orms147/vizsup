@@ -216,6 +216,7 @@ class CueList(QFrame):
     aiSuggestionsRequested = Signal()
     tidyRequested = Signal()
     clauseSplitRequested = Signal()
+    timingPassRequested = Signal()
     reviewedRequested = Signal()
     nextPendingRequested = Signal()
     followToggled = Signal(bool)
@@ -350,6 +351,7 @@ class CueList(QFrame):
         m.addAction("Xem tất cả gợi ý của AI soát…", self.aiSuggestionsRequested.emit)
         m.addAction("Gộp câu quá ngắn & gỡ chồng lấn", self.tidyRequested.emit)
         m.addAction("Tách vế theo nhịp nói (như phụ đề gốc)", self.clauseSplitRequested.emit)
+        m.addAction("Chỉnh thời gian chuẩn (khoảng cách, độ dài)", self.timingPassRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

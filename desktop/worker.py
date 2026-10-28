@@ -58,6 +58,17 @@ class PipelineWorker(QObject):
             store.debug(f"auto-snap failed: {type(exc).__name__}: {exc}")
             self.log.emit(f"⚠ Bỏ qua bước tự canh lời ({type(exc).__name__}: {exc})")
 
+    def _timing_pass(self, job: Job, o: dict) -> None:
+        """Optional aid, like the snap: a failure is logged, never fatal."""
+        from app.pipeline import timing_pass
+
+        try:
+            timing_pass.run_srt(job, job.cn_srt, scenes=bool(o.get("timing_scenes", False)),
+                                log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"timing pass failed: {type(exc).__name__}: {exc}")
+            self.log.emit(f"⚠ Bỏ qua bước chỉnh thời gian chuẩn ({type(exc).__name__}: {exc})")
+
     def _preflight_translators(self, o: dict) -> None:
         """Validate the translator choice up front so the user isn't told 'missing
         key' only after a long download/OCR/ASR run — and isn't silently handed
@@ -380,6 +391,10 @@ class PipelineWorker(QObject):
             self._check()
             self.progress.emit(0.65, "Canh lời theo giọng nói…")
             self._snap_to_voice(job)
+        # 2.35) tidy the cue times (min gap, chaining, min duration; scene cuts opt-in)
+        if src != "existing" and o.get("timing_pass", True):
+            self._check()
+            self._timing_pass(job, o)
         # 2.4) per-video brief: the AI skims the video (auto) and/or expands the
         # user's own note into a context sheet the translator reads with every
         # batch. Only when translate will actually run — a kept vi.srt needs none.
