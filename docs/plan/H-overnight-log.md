@@ -197,3 +197,8 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   it off). Fix (uncommitted, verifying): VIZSUP_NO_AUTO_SEPARATE=1 switch in voices._audio_source, set
   by conftest like VIZSUP_NO_UPDATE_CHECK; real runs unchanged. A full run with --durations is still
   slow (> 20 min) → more causes; waiting for the durations list.
+- 05:14 — commit d377afc test: full suite 34 min → 1 min 50 s (1490 passed, 1 skipped,
+  ruff clean). Causes: (1) the voice guess ran a real Demucs separation in every worker/CLI test →
+  VIZSUP_NO_AUTO_SEPARATE switch set by conftest; (2) app-wide stylesheet in the DPI layout tests
+  re-polished thousands of widgets leaked by earlier modules (~95 s per call) → conftest deletes each
+  module's leftover top-level windows. Real app behaviour unchanged.
