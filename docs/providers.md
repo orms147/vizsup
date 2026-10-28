@@ -26,8 +26,9 @@ web before relying on them — don't trust memory.
 ### OpenRouter roles and model packages
 
 Every OpenRouter call names a role; its model = the user's `MODEL_<ROLE>` → the package
-(`MODEL_PRESET`, Settings → AI và mô hình → "Gói mô hình", `app/providers/presets.py`) → the
-role default (`app/providers/roles.py`). Any OpenRouter id can be typed per role. Measured
+(`MODEL_PRESET`, Settings → AI và mô hình → "Gói mô hình", `app/providers/presets.py`, plus the
+[model catalog](#model-catalog)'s changes to it) → the role default (`app/providers/roles.py`,
+`default_for()`: the catalog's, else the table). Any OpenRouter id can be typed per role. Measured
 2026-10-27 (docs/plan/G-cost-log.md: app's own two-pass translate on 120 real lines, 3 blind
 judges); prices from https://openrouter.ai/api/v1/models on 2026-10-27, $/M tokens in/out.
 
@@ -47,10 +48,17 @@ judges); prices from https://openrouter.ai/api/v1/models on 2026-10-27, $/M toke
 
 | id | engine | key (env) | local | notes |
 |---|---|---|---|---|
-| `edge` | edge-tts vi-VN | — | | **default**, free; HoaiMy (F) / NamMinh (M); occasional 403 |
+| `edge` | edge-tts vi-VN | — | | **default**, free; HoaiMy (F) / NamMinh (M); needs edge-tts ≥ 7.3.1 (403 otherwise); also used for **per-line voice** (`voices.py` tags a line `f`/`m` from its pitch; `tts.synthesize(voice_by_gender=True)` picks the provider's female/male voice via `speakers.voice_for`; one `synthesize_many` batch per voice) |
 | `fpt` | FPT.AI | `FPT_API_KEY` | | native VI voices (stub, P5) |
 | `azure` | Azure Neural vi-VN | `AZURE_SPEECH_KEY` | | reliable + SSML rate (stub, P5) |
 | `google` | Google Cloud TTS | `GOOGLE_APPLICATION_CREDENTIALS` | | neural vi-VN (stub, P5) |
+
+The text a voice receives is `speak.spoken()` ([speak.py](../backend/app/pipeline/speak.py)), not the
+subtitle: numbers, %, times, dates, currency, units and common abbreviations are read the
+Vietnamese way, `...` becomes a pause, emoji are dropped, and the user's dictionary
+(`<storage>/pronounce.json` < the series' < `<job>/pronounce.json`) overrides. The spoken text is
+what the TTS cache key hashes (`tts._seg_hash`), so a dictionary edit re-voices only the lines it
+changes. The same applies to the commentary track.
 
 > Voice cloning (ElevenLabs / viXTTS / F5-TTS) is **out of scope for v1** — stock voice is enough.
 
@@ -62,6 +70,11 @@ judges); prices from https://openrouter.ai/api/v1/models on 2026-10-27, $/M toke
 | `whisperx_funasr` | FunASR Paraformer (CN-native) | ✓ | `.[asr-accurate]` | **accuracy option** — CER ~1.7%, CPU-viable; needs `funasr` + torch. WhisperX word-alignment is a future refinement. **Implemented.** |
 | `audio_llm` | audio LLM via chat (`input_audio`) + word timing | ✗ **uploads audio** | base deps | **default.** Text from a Chinese-native omni model (default `qwen/qwen3.8-omni-flash`), split into subtitle lines and aligned onto a Whisper **word** track (`align.align_text_to_words`): cloud `STT_TIMING_MODEL` (default `openai/whisper-large-v3`), or local faster-whisper when installed. Cloud vs local timing on the real vlog: cue start median 0.26 s vs 0.20 s. 240 s chunks cut at silences. |
 | `cloud_stt` | `/audio/transcriptions` (Whisper-family API) | ✗ **uploads audio** | base deps | Text + segment timestamps in one call (default `openai/whisper-large-v3`). Models that reject `verbose_json` (gpt-4o-transcribe) are re-asked for `json` and get local word timing like `audio_llm`. 360 s chunks. |
+
+**Timing.** When a GPU and Demucs are available the word track is measured on the separated voice
+(`separate.speech_stem` → `vocals.wav`), not on the mix; the words are saved in `asr_words.json`
+so "Đo lại thời gian" re-times without another upload. Lines Whisper could not anchor are placed
+on voice islands — see [architecture.md](architecture.md#guessed-timing-voice-islands).
 
 **Cloud ASR endpoint.** Both cloud providers default to OpenRouter and its key
 (`STT_API_BASE_URL` / `STT_API_KEY` blank). Set them to use a vendor directly (Groq,
@@ -148,10 +161,45 @@ burned white-with-outline in a fixed bottom row over real moving footage (148 s)
   max 0.8 s; vlog with short captions 97 → 82 cues. **Shipped as the opt-in "OCR nhanh: 1
   khung/giây"** (`ocr_fast`, CLI `--ocr-fps 1`) for films / series.
 
+## Model catalog
+
+`catalog/models.json` on the `main` branch of the vizsup repository lets the owner change role
+defaults and package models without a new installer ([catalog.py](../backend/app/catalog.py)).
+Every install fetches it once a day (8 s after start, `catalog.due()`; Settings → AI và mô hình →
+"Kiểm tra ngay" forces it) with a plain GET — no key, nothing about the user is sent — checks it,
+and caches it in `<storage>/_cache/model_catalog.json`. `VIZSUP_NO_UPDATE_CHECK=1` turns the
+daily check off (the test suite sets it).
+
+```json
+{"schema": 1, "updated": "…", "app": {"latest": "0.1.0", "url": "https://github.com/orms147/vizsup/releases"},
+ "role_defaults": {"draft": "<openrouter id>", …},
+ "presets": {"economy": {"overrides": {"refine": "<id>"}, "label": "…", "hint": "…",
+                         "usd_per_min": 0.0014, "usd_per_video": 0.0005}}}
+```
+
+Resolution: `MODEL_<ROLE>` (the user's own pick, always wins) → package (catalog patch over
+`presets.PRESETS`, `presets.effective()`) → role default (catalog over `roles.ROLES`). A catalog
+is used **only if all of this holds**, else the previous cache or the built-in tables stay
+(`refresh()` never raises, `current()` re-validates the cache on read):
+
+- `schema` is 1; roles are keys of `roles.ROLES` (package overrides: `presets.TEXT_ROLES`);
+  packages are keys of `presets.PRESETS`; every model id looks like `vendor/name`;
+- `usd_per_min` / `usd_per_video` are numbers in [0, 1); `label` / `hint` ≤ 400 characters and
+  free of `<` (they are shown in rich-text labels);
+- `app.latest` is a version number and `app.url` is a path under
+  `https://github.com/orms147/vizsup/` without `..` (Settings and a notification say "Có vizsup X
+  mới"; the user installs it themselves);
+- against OpenRouter's public `/api/v1/models`: every id exists, input price ≤ **$5/M** and
+  output ≤ **$25/M** tokens, and the `vision` / `ocr` roles need a model with image input.
+
+Re-measure (`backend/scripts/cost_bench.py`) before changing a model; the file's own `note` says
+so. Tests never reach the network (`refresh(get=…)` takes a fake getter).
+
 ## Connectivity (Settings dialog)
 Providers may implement `test_connection() -> (ok, msg)` and `list_models() -> [ids]`.
 Implemented for the OpenAI-compatible base (OpenRouter / DeepSeek / Qwen) and for
-Claude + Gemini. The Settings dialog runs these on a background thread (no UI freeze):
+Claude + Gemini. The Settings dialog runs these on a daemon thread (no UI freeze, and a hanging
+request never delays closing the app — `desktop/ui_thread.py`):
 **Test kết nối** per provider, and **Tải danh sách model** for OpenRouter.
 
 ## Adding a provider
