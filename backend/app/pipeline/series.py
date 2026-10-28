@@ -317,7 +317,7 @@ def inherit(job, p: Profile, *, log_fn=None) -> list[str]:
         atomic_write_text(job.work_dir / "style.json", json.dumps(p.style, ensure_ascii=False, indent=1))
         done.append("kiểu phụ đề")
     if p.render and not (job.work_dir / batch.RENDER_OPTS).exists():
-        batch.save_opts(job.work_dir, dict(p.render))
+        batch.save_opts(job.work_dir, _render_opts(p.render))
         done.append("cài đặt dựng")
     if log_fn and done:
         log_fn(f"↷ Bộ phim 《{p.name}》: dùng lại " + " + ".join(done))
@@ -373,13 +373,19 @@ def learn(job) -> dict:
     return rep
 
 
+def _render_opts(opts: dict) -> dict:
+    """Render settings without the per-run keys (a quick proof, the burned-cue snapshot)."""
+    return {k: v for k, v in opts.items()
+            if k not in ("burn_cues", "preview") and not str(k).startswith("_")}
+
+
 def learn_render(work_dir: Path, opts: dict) -> bool:
     """A real render's settings become the series' when it has none yet."""
     lk = link_of(work_dir)
     p = load(lk["slug"]) if lk else None
     if p is None or p.render:
         return False
-    p.render = dict(opts)
+    p.render = _render_opts(opts)
     save(p)
     return True
 

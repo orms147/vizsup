@@ -352,7 +352,10 @@ def global_path() -> Path:
 def load_rules(job) -> dict[str, str]:
     """``<storage>/pronounce.json`` merged with ``<job>/pronounce.json`` (project wins).
     Missing or invalid files are skipped — a hand-edited dictionary never breaks the dub."""
-    return merge_rules(_read(global_path()), _read(Path(job.work_dir) / FILE))
+    from app.pipeline import series
+
+    base = merge_rules(_read(global_path()), series.pronounce_for(job))   # global < series
+    return merge_rules(base, _read(Path(job.work_dir) / FILE))             # project wins
 
 
 def save_rules(path: Path, rules: Mapping[str, str]) -> None:

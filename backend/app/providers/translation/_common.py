@@ -83,6 +83,14 @@ LYRICS_HINT = (
 )
 
 
+_SERIES_HEADER = (
+    "\nTHIS VIDEO IS ONE EPISODE OF A SERIES. Names, xưng hô and tone are FIXED across "
+    "episodes — follow this sheet (the brief above adds what is specific to this episode):\n")
+_PREV_HEADER = (
+    "\nHOW THE PREVIOUS EPISODE ENDED (approved Vietnamese lines — for continuity of names, "
+    "pronouns and tone only; do NOT translate or repeat them):\n")
+
+
 def system_prompt_for(base: str, context: dict | None) -> str:
     """``base`` plus the per-video brief when one rides in ``context['_brief']``, plus
     the lyrics rule when ``context['_lyrics']`` (E-8: the listening model heard singing)."""
@@ -96,6 +104,11 @@ def system_prompt_for(base: str, context: dict | None) -> str:
     brief = ctx.get("_brief")
     if brief and str(brief).strip():
         out += _BRIEF_HEADER + str(brief).strip() + "\n"
+    if ctx.get("_series") and str(ctx["_series"]).strip():       # Bộ phim: fixed across episodes
+        out += _SERIES_HEADER + str(ctx["_series"]).strip() + "\n"
+    prev = [str(x).strip() for x in (ctx.get("_prev") or []) if str(x).strip()]
+    if prev:
+        out += _PREV_HEADER + "\n".join(f"- {x}" for x in prev) + "\n"
     return out
 
 PROOFREAD_SYSTEM_PROMPT = (
