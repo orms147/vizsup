@@ -383,9 +383,12 @@ def test_run_guesses_voices_after_translating_unless_told_not_to(stages, tmp_pat
     calls = []
     monkeypatch.setattr(voices, "guess_job", lambda job, **kw: calls.append(job.id))
     run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr")
-    assert len(calls) == 1
+    assert calls == []                                      # off by default (one voice)
     run("run", "https://b23.tv/y", "--workdir", str(tmp_path / "b"), "--source", "asr",
-        "--no-voice-guess")
+        "--voice-guess")
+    assert len(calls) == 1
+    run("run", "https://b23.tv/z", "--workdir", str(tmp_path / "c"), "--source", "asr",
+        "--no-voice-guess")                                 # the old flag still parses
     assert len(calls) == 1
 
 
@@ -396,7 +399,8 @@ def test_a_failing_voice_guess_does_not_stop_the_run(stages, tmp_path, monkeypat
         raise RuntimeError("no ffmpeg")
 
     monkeypatch.setattr(voices, "guess_job", boom)
-    assert run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr") == 0
+    assert run("run", "https://b23.tv/x", "--workdir", str(tmp_path / "a"), "--source", "asr",
+               "--voice-guess") == 0
     assert "voice guess skipped" in capsys.readouterr().out
 
 

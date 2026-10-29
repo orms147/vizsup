@@ -501,8 +501,9 @@ class PipelineWorker(QObject):
                           log=self.log.emit)
             # 3.6) which lines are a man's / a woman's (pitch) — used when "Giọng theo
             # nhân vật" is on; only runs right after translating, so it never revokes an
-            # approval. An aid: logged, never fatal.
-            if o.get("voice_guess", True):
+            # approval. An aid: logged, never fatal. Off by default (2026-10-29: the owner
+            # dubs with one voice; the guess may start a Demucs separation for nothing).
+            if o.get("voice_guess", False):
                 self._guess_voices(job)
         store.debug("translate ok → emit gate_reached")
 

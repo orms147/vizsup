@@ -198,7 +198,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
                       context={"_brief": brief.load_brief(job) or ""},
                       log=lambda m: print(f"[run] {m}"))
         # 3.6) which lines are a man's / a woman's (pitch) for `render --voice-by-gender`
-        if not getattr(args, "no_voice_guess", False):
+        if getattr(args, "voice_guess", False) and not getattr(args, "no_voice_guess", False):
             from app.pipeline import voices
 
             try:
@@ -395,8 +395,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "series' slug, or none")
     r.add_argument("--no-vi-lint", action="store_true",
                    help="do not auto-fix Vietnamese typography (spaces, …, quotes) after translating")
-    r.add_argument("--no-voice-guess", action="store_true",
-                   help="do not guess each line's male/female voice from the pitch")
+    r.add_argument("--voice-guess", action="store_true",
+                   help="guess each line's male/female voice from the pitch (for "
+                        "`render --voice-by-gender`; off by default)")
+    r.add_argument("--no-voice-guess", action="store_true", help=argparse.SUPPRESS)  # old flag
     r.add_argument("--no-timing-pass", action="store_true",
                    help="skip the timing tidy-up (default: 2-frame gaps, chain gaps < 0.5 s, "
                         "lines at least 20 frames long)")
