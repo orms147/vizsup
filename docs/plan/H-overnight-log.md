@@ -236,3 +236,10 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   "vieneu:<name>" routing; render page lists edge + local voices. Real dub of the ep-9 copy with Trúc Ly:
   65 lines in 52 s (incl. 9 s model load). Rejected: viet-tts presets (named after real celebrities /
   cloned commercial voices). 1504 tests pass.
+- 10:22 — episode 9 (owner's download a8fed3acf3f3, copy storage): reviewed 65 lines — good
+  (xưng hô per brief, names consistent); fixed 4 lines (line 4 a girl teasing anh Cố: "Cô" → "Anh cũng
+  khéo chọn ghê."; 45–46 comma + "vì"; 58 wording). Approved the copy at the owner's request, rendered
+  with episode 8's settings via the app's render path (NamMinh +30 %, keep music, glass, 720p,
+  watermark): 91 s; 27 lines still too long for their slot at 1.3× (fast dialogue). Joined 1–8 + 9 →
+  scratchpad/e2e_storage/56112262e1d2/output.mp4 (18:20, 5 chapters, stream copy after fix
+  67b9146 setsar=1 — the snapped size had SAR 961:960 and forced a re-encode).
