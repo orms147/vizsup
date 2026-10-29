@@ -931,7 +931,10 @@ def _build_render(
     elif scale_filter(res):
         # downscale BEFORE the burn: libass draws the text at the final size (sharp),
         # and the .ass layout (PlayRes 1920x1080) scales with the frame
-        exact = f"scale={burn_w}:{burn_h}:flags=lanczos" if burn_w else scale_filter(res)
+        # setsar=1: a snapped 1922→1280 width would otherwise carry SAR 961:960, and the
+        # episode headers no longer match for a stream-copy join (2026-10-29, ep 9)
+        exact = (f"scale={burn_w}:{burn_h}:flags=lanczos,setsar=1" if burn_w
+                 else scale_filter(res))
         parts.append(f"{vsrc}{exact}[vscl]")
         vsrc = "[vscl]"
     if cover_mode == "glass" and glass_band:

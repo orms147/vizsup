@@ -56,7 +56,7 @@ def test_720p_scales_before_the_burn_and_never_upscales(job):
     assert "[vscl]ass=subs.ass" in graph
     # with the source size known, the exact (16:9-snapped) size is used
     _cmd, graph = _build(j, segs, res="720", burn_w=1280, burn_h=720)
-    assert "[0:v]scale=1280:720:flags=lanczos[vscl]" in graph
+    assert "[0:v]scale=1280:720:flags=lanczos,setsar=1[vscl]" in graph
 
 
 def test_presets_map_to_crf_cq_and_audio():
