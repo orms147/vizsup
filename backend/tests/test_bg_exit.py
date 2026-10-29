@@ -38,17 +38,17 @@ SCRIPT = textwrap.dedent('''
         from desktop.ui_thread import BgRunner
         owner = QObject(); bg = BgRunner(owner)
         bg.run(slow, lambda r: print("DELIVERED"))
-        started.wait(5); bg.shutdown(); del bg; owner.deleteLater(); del owner
+        started.wait(5); t0 = time.time(); bg.shutdown(); del bg; owner.deleteLater(); del owner
     elif kind == "editor":
         from desktop.views.editor_view import EditorView
         v = EditorView(); v._run_async(slow, lambda r: print("DELIVERED"))
-        started.wait(5); v.shutdown(); v.deleteLater(); del v
+        started.wait(5); t0 = time.time(); v.shutdown(); v.deleteLater(); del v
     else:
         from pathlib import Path
         import desktop.settings_dialog as sd
         sd._ENV_PATH = Path(tempfile.mkdtemp()) / ".env"
         s = sd.SettingsView(); s._bg(slow, lambda r: print("DELIVERED"))
-        started.wait(5); s.shutdown(); s.deleteLater(); del s
+        started.wait(5); t0 = time.time(); s.shutdown(); s.deleteLater(); del s
     app.processEvents()
     print("closing %.2f" % (time.time() - t0), flush=True)
     sys.exit(0)

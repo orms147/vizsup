@@ -118,15 +118,9 @@ SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của b�
 
 
 def _voice_name(v: str) -> str:
-    """vi-VN-HoaiMyNeural → Hoài My, fr-FR-VivienneMultilingualNeural → Vivienne (đa ngôn
-    ngữ), vieneu:Trúc Ly → Trúc Ly · trên máy; anything else unchanged."""
-    known = {"HoaiMy": "Hoài My", "NamMinh": "Nam Minh"}
-    if v.startswith("vieneu:"):
-        return f"{v.split(':', 1)[1]} · trên máy"
-    if "MultilingualNeural" in v:
-        return f"{v.split('-')[2].replace('MultilingualNeural', '')} (đa ngôn ngữ)"
-    core = v.replace("vi-VN-", "").replace("Neural", "")
-    return known.get(core, core or v)
+    from app.providers.registry import voice_label
+
+    return voice_label(v)
 
 
 RESULT_MIN_PICTURE = 140   # the preview / result picture may shrink this far on a small window
@@ -1700,7 +1694,12 @@ class RenderView(QWidget):
         self.listen_btn.setEnabled(False)
         # feedback next to the voice: self.status sits on the progress card, hidden here
         idle = f"Tiếng Việt · {tts}"
-        self.voice_sub.setText("Đang tạo giọng mẫu…")
+        from app.providers.registry import split_voice
+        from app.providers.tts import vieneu
+
+        first_vieneu = split_voice(tts, voice)[0] == "vieneu" and not vieneu.model_cached()
+        self.voice_sub.setText("Đang tải giọng VieNeu lần đầu (~580 MB, vài phút)…"
+                               if first_vieneu else "Đang tạo giọng mẫu…")
         self.voice_sub.setStyleSheet("")
         from PySide6.QtCore import QUrl
 
@@ -1710,7 +1709,7 @@ class RenderView(QWidget):
             from app.providers.registry import split_voice
 
             prov, v = split_voice(tts, voice)          # "vieneu:Trúc Ly" → VieNeu
-            get_tts(prov).synthesize(SAMPLE, out, voice=v, rate=rate)
+            get_tts(prov).synthesize(SAMPLE, out, voice=v, rate=rate)   # 1st VieNeu use: model
             if not out.exists() or out.stat().st_size == 0:      # a dropped connection
                 raise RuntimeError("máy chủ giọng đọc không trả âm thanh — thử lại")
             return str(out)

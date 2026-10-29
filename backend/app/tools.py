@@ -108,3 +108,32 @@ def cookie_age_days(path: str | None) -> float | None:
     except OSError:
         return None
     return max(age, 0.0) / _DAY
+
+
+# Local Vietnamese voices (providers/tts/vieneu.py). vieneu pins the CPU onnxruntime,
+# which would REPLACE onnxruntime-directml (OCR on the GPU): install it --no-deps, then
+# only the libraries the ONNX/CPU engine needs. The model (~580 MB, Hugging Face cache)
+# downloads by loading the engine once, in a fresh interpreter.
+VIENEU = "vieneu==3.8.3"
+VIENEU_DEPS = ["sea-g2p>=0.9.1", "soundfile", "soxr", "kaldi-native-fbank>=1.20"]
+_LOAD_VIENEU = ("from vieneu import Vieneu; Vieneu(mode='v3turbo', backend='onnx', "
+                "device='cpu')")
+
+
+def install_vieneu() -> tuple[bool, str]:
+    """Install VieNeu + its CPU dependencies and fetch the model. (ok, message); never
+    raises; safe to run again (pip is a no-op, a cached model is not fetched twice)."""
+    py = sys.executable
+    steps = ([py, "-m", "pip", "install", "--no-deps", VIENEU],
+             [py, "-m", "pip", "install", *VIENEU_DEPS],
+             [py, "-c", _LOAD_VIENEU])
+    for cmd in steps:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=_INSTALL_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Không chạy được ({type(exc).__name__}: {exc})"
+        if r.returncode != 0:
+            what = "tải model" if cmd[1] == "-c" else "cài thư viện"
+            return False, f"VieNeu: {what} thất bại (mã {r.returncode})\n{_tail(r)}"
+    return True, f"Đã cài giọng VieNeu {_fresh_version('vieneu') or ''} — model đã tải sẵn."

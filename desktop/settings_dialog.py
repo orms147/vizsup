@@ -393,6 +393,7 @@ class SettingsView(QWidget):
             v.addWidget(self._ytdlp_card())
         if group == "paths":
             v.addWidget(self._edge_card())
+            v.addWidget(self._vieneu_card())
         if group == "ai":
             v.addWidget(self._model_card())
             v.addWidget(self._catalog_card())
@@ -614,6 +615,55 @@ class SettingsView(QWidget):
         self.edge_status.setVisible(False)
         cl.addWidget(self.edge_status)
         return card
+
+    # --- VieNeu: local Vietnamese voices (app/tools.install_vieneu) ----------------------
+    def _vieneu_state(self) -> str:
+        from app.providers.tts import vieneu
+
+        if not vieneu.VieNeuTTS().available():
+            return "Chưa cài."
+        return ("Đã cài · model sẵn sàng." if vieneu.model_cached()
+                else "Đã cài · chưa tải model (~580 MB, lần đầu dùng sẽ tự tải).")
+
+    def _vieneu_card(self) -> QFrame:
+        from app.providers.tts import vieneu
+
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(6)
+        head = QHBoxLayout()
+        head.addWidget(label("Giọng đọc trên máy (VieNeu)", "h3"), 1)
+        self.vieneu_ver = label(self._vieneu_state(), "secondary")
+        head.addWidget(self.vieneu_ver)
+        self.vieneu_btn = button("Cài / tải giọng", "Download", variant="ghost", small=True)
+        self.vieneu_btn.clicked.connect(self._install_vieneu)
+        self._buttons.append(self.vieneu_btn)
+        head.addWidget(self.vieneu_btn)
+        cl.addLayout(head)
+        cl.addWidget(label("Giọng miễn phí chạy ngay trên máy, không cần mạng khi đã tải: "
+                           + ", ".join(vieneu.VOICES) + ". Tải một lần ~600 MB, vài phút. "
+                           "Chọn giọng ở màn Dựng video (ghi “· trên máy”).", "small", wrap=True))
+        self.vieneu_status = label("", "small", wrap=True)
+        self.vieneu_status.setVisible(False)
+        cl.addWidget(self.vieneu_status)
+        return card
+
+    def _install_vieneu(self) -> None:
+        from app.tools import install_vieneu
+
+        self.vieneu_status.setVisible(True)
+        self.vieneu_status.setStyleSheet(f"color:{V2['muted']};")
+        self.vieneu_status.setText("Đang cài và tải giọng VieNeu (~600 MB)… có thể mất vài phút.")
+        self._bg(install_vieneu, self._install_vieneu_done)
+
+    def _install_vieneu_done(self, res) -> None:
+        self._set_busy(False)
+        ok, msg = (False, f"{type(res).__name__}: {res}") if isinstance(res, Exception) else res
+        self.vieneu_ver.setText(self._vieneu_state())
+        self.vieneu_status.setText(f"✓ {msg} Khởi động lại vizsup để thấy giọng mới." if ok
+                                   else f"✗ {msg}")
+        self.vieneu_status.setStyleSheet(f"color:{V2['green'] if ok else V2['red']};")
 
     def _update_edge(self) -> None:
         self.edge_status.setVisible(True)

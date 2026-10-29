@@ -1531,9 +1531,9 @@ class EditorView(QWidget):
         tts_name, dub_voice = self._ctx.get("tts", "edge"), self._ctx.get("voice")
 
         def voices():
-            from app.providers.registry import get_tts
+            from app.providers.registry import get_tts, local_voice_choices
 
-            return list(get_tts(tts_name).voices() or [])
+            return list(get_tts(tts_name).voices() or []) + local_voice_choices(tts_name)
 
         self._run_async(voices, lambda vs: self.job is job and
                         self.commentary.set_voices(vs, dub_voice), lambda _m: None)

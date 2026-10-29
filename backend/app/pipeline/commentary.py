@@ -110,7 +110,7 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
     other than the dub's by default), cached in ``commentary/`` by text+voice+rate."""
     from app.pipeline.assemble import probe_duration
     from app.pipeline.tts import _synth_retry
-    from app.providers.registry import get_tts
+    from app.providers.registry import get_tts, split_voice
 
     if not notes:
         return []
@@ -125,12 +125,13 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
         elif n.text.strip():
             tts = tts or get_tts(provider)
             voice = n.voice or pick_voice(_voices(tts), dub_voice) or dub_voice
+            prov, v = split_voice(provider, voice)    # "vieneu:Trúc Ly" → the local voice
             said = speak.spoken(n.text, rules)       # the written note stays as typed
-            key = hashlib.sha1(f"{provider}|{voice}|{rate}|{said}".encode()).hexdigest()[:16]
+            key = hashlib.sha1(f"{prov}|{v}|{rate}|{said}".encode()).hexdigest()[:16]
             path = d / f"tts_{key}.mp3"
             if not (path.exists() and path.stat().st_size > 0):
-                _synth_retry(tts, said, path, voice=voice, rate=rate,
-                             sleep=__import__("time").sleep)
+                _synth_retry(tts if prov == provider else get_tts(prov), said, path, voice=v,
+                             rate=rate, sleep=__import__("time").sleep)
         else:
             continue
         dur = probe_duration(path)

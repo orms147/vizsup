@@ -76,6 +76,21 @@ def voice_choices(provider: str) -> list[str]:
     return out + local_voice_choices(provider)
 
 
+_KNOWN_NAMES = {"HoaiMy": "Hoài My", "NamMinh": "Nam Minh"}
+
+
+def voice_label(v: str) -> str:
+    """Display name: vi-VN-HoaiMyNeural → Hoài My, fr-FR-VivienneMultilingualNeural →
+    Vivienne (đa ngôn ngữ), vieneu:Trúc Ly → Trúc Ly · trên máy; else unchanged. Pure."""
+    head, _sep, rest = v.partition(VOICE_SEP)
+    if rest and head in TTS_PROVIDERS:
+        return f"{rest} · trên máy" if getattr(TTS_PROVIDERS[head], "local_voices", False)             else f"{rest} · {head}"
+    if "MultilingualNeural" in v:
+        return f"{v.split('-')[2].replace('MultilingualNeural', '')} (đa ngôn ngữ)"
+    core = v.replace("vi-VN-", "").replace("Neural", "")
+    return _KNOWN_NAMES.get(core, core or v)
+
+
 def local_voice_choices(provider: str) -> list[str]:
     """The installed local providers' voices as "name:voice" (none for ``provider``)."""
     out: list[str] = []

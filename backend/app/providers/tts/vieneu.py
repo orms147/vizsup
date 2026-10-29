@@ -36,6 +36,19 @@ def _tempo(rate: str | None) -> float:
     return min(2.0, max(0.5, 1 + float(m.group(1)) / 100)) if m else 1.0
 
 
+REPO = "pnnbao-ump/VieNeu-TTS-v3-Turbo"
+
+
+def model_cached() -> bool:
+    """The model is already in the Hugging Face cache (no ~580 MB download on first use)."""
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except Exception:  # noqa: BLE001
+        return False
+    snap = Path(HF_HUB_CACHE) / ("models--" + REPO.replace("/", "--")) / "snapshots"
+    return snap.is_dir() and any(snap.iterdir())
+
+
 def _get_engine():
     global _engine
     with _lock:

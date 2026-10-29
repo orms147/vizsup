@@ -114,3 +114,81 @@ def test_render_page_names(qapp=None):
     assert _voice_name("vieneu:Trúc Ly") == "Trúc Ly · trên máy"
     assert _voice_name("fr-FR-VivienneMultilingualNeural") == "Vivienne (đa ngôn ngữ)"
     assert _voice_name("vi-VN-HoaiMyNeural") == "Hoài My"
+
+
+def test_voice_label_is_shared():
+    assert registry.voice_label("vieneu:Ngọc Huyền") == "Ngọc Huyền · trên máy"
+    assert registry.voice_label("pt-BR-ThalitaMultilingualNeural") == "Thalita (đa ngôn ngữ)"
+    assert registry.voice_label("vi-VN-NamMinhNeural") == "Nam Minh"
+    pytest.importorskip("PySide6.QtWidgets")
+    from desktop.widgets import commentary_panel
+
+    assert commentary_panel._voice_name("vieneu:Trúc Ly") == "Trúc Ly · trên máy"
+
+
+def test_install_vieneu_never_pulls_the_cpu_onnxruntime(monkeypatch):
+    from app import tools
+
+    cmds = []
+
+    class R:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(tools.subprocess, "run", lambda cmd, **kw: (cmds.append(cmd), R())[1])
+    monkeypatch.setattr(tools, "_fresh_version", lambda d: "3.8.3")
+    ok, msg = tools.install_vieneu()
+    assert ok and "VieNeu" in msg
+    assert cmds[0][-2:] == ["--no-deps", tools.VIENEU]                 # vieneu without its pins
+    assert not any("onnxruntime" in a for c in cmds[:2] for a in c)    # directml stays
+    assert cmds[2][1] == "-c" and "backend='onnx'" in cmds[2][2]       # the model is fetched
+
+    class Bad(R):
+        returncode, stderr = 1, "ERROR: no matching distribution"
+
+    monkeypatch.setattr(tools.subprocess, "run", lambda cmd, **kw: Bad())
+    ok, msg = tools.install_vieneu()
+    assert not ok and "cài thư viện thất bại" in msg
+
+
+def test_commentary_note_in_a_vieneu_voice_runs_vieneu(tmp_path, monkeypatch):
+    from app.models import Job
+    from app.pipeline import commentary as cm
+    from app.providers import registry as reg
+
+    made = []
+
+    class P:
+        def __init__(self, name):
+            self.name = name
+
+        def voices(self):
+            return ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"]
+
+        def synthesize(self, text, out_path, *, voice=None, rate=None):
+            made.append((self.name, voice))
+            Path(out_path).write_bytes(b"mp3")
+            return Path(out_path)
+
+    monkeypatch.setattr(reg, "get_tts", lambda name: P(name))
+    monkeypatch.setattr("app.pipeline.assemble.probe_duration", lambda p: 1.0)
+    note = cm.Note(at=1.0, text="Ý kiến của tôi", voice="vieneu:Trúc Ly", mode="over")
+    out = cm.synthesize(Job(id="c", work_dir=tmp_path), [note], provider="edge",
+                        dub_voice="vi-VN-NamMinhNeural")
+    assert made == [("vieneu", "Trúc Ly")] and len(out) == 1
+
+
+def test_settings_card_shows_the_state(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    _app = QApplication.instance() or QApplication([])
+    from app.config import settings
+    from desktop.settings_dialog import SettingsView
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    monkeypatch.setattr(vieneu.VieNeuTTS, "available", lambda self: True)
+    monkeypatch.setattr(vieneu, "model_cached", lambda: False)
+    page = SettingsView()
+    assert "chưa tải model" in page.vieneu_ver.text()
+    page._install_vieneu_done((True, "Đã cài giọng VieNeu 3.8.3 — model đã tải sẵn."))
+    assert page.vieneu_status.text().startswith("✓")

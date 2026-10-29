@@ -142,6 +142,11 @@ def synthesize(
     tts = get_tts(provider)
     if not tts.available():
         raise RuntimeError(f"TTS provider '{provider}' is not available (missing key or dependency).")
+    if log and provider == "vieneu":
+        from app.providers.tts import vieneu
+
+        if not vieneu.model_cached():
+            log("⬇ Tải giọng VieNeu lần đầu (~580 MB, vài phút) — các lần sau dùng ngay")
 
     cues = parse_srt(job.vi_srt)
     ov = load_overrides(job)

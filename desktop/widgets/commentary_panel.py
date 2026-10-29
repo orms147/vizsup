@@ -28,12 +28,10 @@ from desktop.cuemodel import fmt_time, parse_time
 from desktop.theme import V2
 from desktop.widgets.chrome import button, label
 
-_KNOWN = {"HoaiMy": "Hoài My", "NamMinh": "Nam Minh"}
-
-
 def _voice_name(v: str) -> str:
-    core = v.replace("vi-VN-", "").replace("Neural", "")
-    return _KNOWN.get(core, core or v)
+    from app.providers.registry import voice_label
+
+    return voice_label(v)
 
 
 class CommentaryPanel(QWidget):
