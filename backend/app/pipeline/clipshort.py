@@ -276,8 +276,11 @@ def _reuse_tts(parent: Job, child: Job, kept: list[int]) -> int:
     voice finds them and only differences are synthesised. Returns how many were copied."""
     from app.pipeline import tts
 
-    manifest = tts._load_manifest(parent)
-    if not manifest:
+    mf = parent.work_dir / "tts" / "manifest.json"
+    if not mf.exists():                       # (Job.tts_dir would create the folder: read only)
+        return 0
+    manifest = _read_json(mf)
+    if not isinstance(manifest, dict) or not manifest:
         return 0
     new: dict[str, str] = {}
     copied = 0

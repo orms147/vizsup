@@ -126,6 +126,8 @@ def _job_row(d: Path) -> dict:
         meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
         if isinstance(meta, dict):
             info["group"] = meta.get("group")
+            if isinstance(meta.get("short"), dict) and meta["short"].get("parent"):
+                info["short"] = meta["short"]          # a «Cắt Short» project (clipshort)
             if info["title"] == d.name and meta.get("title"):
                 info["title"] = meta["title"]      # job.json is written before the download
             try:

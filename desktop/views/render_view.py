@@ -866,6 +866,11 @@ class RenderView(QWidget):
             self._probe_source(job)
             self._on_episode_card(save=False)      # this video's "Tập N" in the hint
         self._load_posting()
+        if changed:
+            from app.pipeline import clipshort
+
+            if clipshort.info(job) and not self.short_btn.isChecked():
+                self.short_btn.setChecked(True)      # a cut Short renders as a Short
         if tts:
             self._tts = tts
             self.voice_sub.setText(f"Tiếng Việt · {tts}")
