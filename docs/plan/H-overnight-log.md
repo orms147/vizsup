@@ -243,3 +243,25 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   watermark): 91 s; 27 lines still too long for their slot at 1.3× (fast dialogue). Joined 1–8 + 9 →
   scratchpad/e2e_storage/56112262e1d2/output.mp4 (18:20, 5 chapters, stream copy after fix
   67b9146 setsar=1 — the snapped size had SAR 961:960 and forced a re-encode).
+
+## Đêm 2 (29→30/10) — Plan
+Owner (đi ngủ 23:55): "tự làm và quản session song song nếu cần, tôi đi ngủ như hôm qua"; đồng ý
+thứ tự 1–8 (xem tin nhắn sáng 29/10) + hỏi gợi ý tối ưu cost, bản dịch, và Short (màn dọc).
+Quyền như đêm 1: commit/push nhánh làm việc (api-optimization), không force; main chỉ fast-forward ở
+checkpoint khi full suite xanh (owner đã đồng ý merge sáng 29/10); cài thư viện phải ghi log; OpenRouter
+≤ $2–3 cho đêm; KHÔNG tự đánh dấu duyệt dự án thật (classifier đã chặn đúng — cổng duyệt là của owner);
+mọi thử nghiệm trên bản sao; đóng cửa sổ demo sau khi kiểm tra (memory vizsup-demo-windows).
+Auto-continue: cron 13,43 mỗi giờ.
+1. ✅ Đưa tập 1–9 + video ghép vào storage thật (chỉ thêm file thiếu; owner tự Duyệt 4 tập cũ).
+2–4. ✅ Nút cài VieNeu trong Cài đặt, báo tải model lần đầu, giọng VieNeu cho Bình luận (229f107).
+5. Kiểm tra danh sách giọng trên cửa sổ thật (coordinator, bản sao, đóng cửa sổ sau).
+6. Tập 9: 27 câu quá dài → để owner duyệt lại trong editor (sửa chữ = mất duyệt).
+7. Dọn thư mục tạm (tts_eval_venv 671 MB).
+8. Later: Inno Setup + chữ ký + tải bản mới.
+Đêm 2 — tối ưu (giao session):
+- sesion 1 (dịch/cost): T1 dịch vừa khe lồng tiếng theo tốc độ thật của bộ phim (+30 %): tập 1–5 bị
+  cắt/dời 57 s, tập 7 33 s; C2 prompt caching (tiền tố ổn định, đo cached tokens); T2 khả thi gắn nhãn
+  người nói (chỉ nghiên cứu + đo, chưa ship nếu không chắc).
+- sesion 2 (Short): S1 preset "Short" 1 chạm (9:16, phụ đề tự tránh vùng che, chữ to hơn); S2 nguồn
+  dọc; S3 "Cắt Short" từ tập đã duyệt (đoạn 30–60 s có hook, render 9:16, cần duyệt riêng).
+- coordinator: mục 5, 7; C3 hiện chi phí mỗi tập/bộ phim trong Thư viện; review + merge.
