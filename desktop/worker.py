@@ -541,7 +541,11 @@ class PipelineWorker(QObject):
         atomic_write_text((job.work_dir / "metadata.json"),
             _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         if has:
-            self.log.emit("ℹ Video có chữ Trung in sẵn — phụ đề sẽ dùng nền hộp để che")
+            # say what will really cover it (the render may use the glass, 2026-10-30)
+            how = {"glass": "kính mờ", "box": "nền hộp", "blur": "dải làm mờ"}.get(
+                str(o.get("cover_mode") or ""))
+            self.log.emit("ℹ Video có chữ Trung in sẵn — " + (f"che bằng {how}" if how else
+                          "nên che (màn Dựng → Che chữ Trung, hoặc kiểu chữ Kính mờ trắng)"))
 
     def _glass_region(self, job, o: dict) -> None:
         """The glass must sit where the burned-in Chinese is: when no band was measured
