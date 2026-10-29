@@ -264,3 +264,29 @@ def test_describe_mentions_the_watermark():
             "watermark": {"on": True, "text": "Vietsub: Kênh Của Tôi"}}
     assert batch.describe(opts).endswith("watermark “Vietsub: Kênh Của Tôi”")
     assert "watermark" not in batch.describe({**opts, "watermark": {"on": False, "text": "x"}})
+
+
+def test_render_state_compares_the_rendered_revision_not_file_times(tmp_path):
+    """2026-10-29: projects copied into the library were approved AFTER their render file
+    was written — the same text, yet "Cần dựng lại". A render.json that names its revision
+    decides; older renders keep the time rule."""
+    import json
+    import os
+
+    from app.models import Job
+    from app.pipeline import approval, batch
+
+    d = tmp_path / "p"
+    d.mkdir()
+    (d / "vi.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
+    job = Job(id="p", work_dir=d)
+    (d / "output.mp4").write_bytes(b"x")
+    os.utime(d / "output.mp4", (1, 1))                       # rendered long ago …
+    approval.approve(job)                                    # … approved just now
+    assert batch.render_state(d) == "stale"                  # no revision on record: time rule
+    (d / "render.json").write_text(json.dumps({"revision": approval.revision(job)}),
+                                   encoding="utf-8")
+    assert batch.render_state(d) is None                     # same text → current
+    (d / "vi.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nđã sửa\n", encoding="utf-8")
+    approval.approve(job)
+    assert batch.render_state(d) == "stale"                  # new approved text → re-render

@@ -1094,8 +1094,13 @@ def assemble(
         return job.work_dir / "preview.mp4"
     # how output.mp4 was made — the soft-subtitle export repeats the cover (export.py)
     note_secs = sum(v.dur for v in voiced)
+    from app.pipeline import approval
+
     (job.work_dir / RENDER_INFO).write_text(
-        json.dumps({"cover_mode": mode, "frame": frame, "audio_mode": audio_mode,
+        # "revision": the subtitles this video was made from — "Cần dựng lại" compares it
+        # with the approved revision instead of file times (batch.render_state)
+        json.dumps({"revision": approval.revision(job),
+                    "cover_mode": mode, "frame": frame, "audio_mode": audio_mode,
                     "encoder": encoder, "duration": round(total, 3), "music": len(placed),
                     "inserts": [[round(a, 3), round(d, 3)] for a, d in ins],
                     "commentary_s": round(note_secs, 2),

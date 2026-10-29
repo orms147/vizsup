@@ -108,6 +108,11 @@ def render_state(work_dir: Path) -> str | None:
     out = d / "output.mp4"
     if not out.exists():
         return "new"
+    # a render that names its revision is current exactly when that is the approved one —
+    # approving the same text again later (e.g. a project copied in) is not "Cần dựng lại"
+    made_from = _read(d / "render.json").get("revision")
+    if made_from:
+        return None if made_from == _read(d / "approved.json").get("revision") else "stale"
     return "stale" if out.stat().st_mtime < (d / "approved.json").stat().st_mtime else None
 
 
