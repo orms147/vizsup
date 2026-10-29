@@ -35,3 +35,24 @@ def test_bad_usage_never_raises(tmp_path):
         usage.record("a/x", object())
         usage.record("a/x", None)
     assert usage.summary(tmp_path)["calls"] == 2
+
+
+def test_cached_prompt_tokens_are_recorded(tmp_path):
+    """C2: the share of the input served from the provider's prompt cache, per model."""
+    from types import SimpleNamespace as NS
+
+    from app import usage
+
+    assert usage.cached_tokens(None) == 0
+    assert usage.cached_tokens({"prompt_tokens": 100}) == 0
+    assert usage.cached_tokens(NS(prompt_tokens_details=NS(cached_tokens=64))) == 64
+    assert usage.cached_tokens({"prompt_tokens_details": {"cached_tokens": 128}}) == 128
+    assert usage.cached_tokens({"prompt_cache_hit_tokens": 32}) == 32          # DeepSeek's own field
+    with usage.track(tmp_path, phase="translate"):
+        usage.record("m/x", {"prompt_tokens": 1000, "completion_tokens": 50, "cost": 0.001,
+                             "prompt_tokens_details": {"cached_tokens": 600}})
+        usage.record("m/x", {"prompt_tokens": 500, "completion_tokens": 20, "cost": 0.0005})
+    import json
+
+    m = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))["models"]["m/x"]
+    assert (m["in"], m["cached"], m["calls"]) == (1500, 600, 2)
