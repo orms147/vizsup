@@ -291,3 +291,4 @@ Auto-continue: cron 13,43 mỗi giờ.
   Layout issue: hook / chip / "Xem full tập 9" are small text inside the picture, bars empty (text is
   burned before the 9:16 composite) → sesion 2: Short layout v2 (canvas text layer in the bars).
   Fixed a misleading "nền hộp" note (worker).
+- 00:26 — check: sesion 1 has 236a7a8 (silence trim + fit re-calibration) and 86684c4 (C2 caching) locally, report pending; sesion 2 pushed feat/shorts-layout up to 1601af5 (canvas text layer, bars options, clipshort file-copy fix), report pending. Nothing merged yet.
