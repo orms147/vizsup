@@ -485,6 +485,21 @@ class RenderView(QWidget):
             "vùng an toàn. Dùng cho video dọc (hoặc khung 9:16); video ngang giữ nguyên.")
         self.safe_cb.toggled.connect(self._on_safe)
         ll.addWidget(self.safe_cb)
+        # 9:16 with bars: the big text goes on the bars (a second layer on the whole frame)
+        self.canvas_cb = QCheckBox("Chữ lớn trên nền hai bên (tiêu đề, số tập, thẻ cuối)")
+        self.canvas_cb.setToolTip(
+            "Video ngang trong khung dọc 9:16 có hai dải nền to ở trên và dưới: tiêu đề mở đầu, "
+            "số tập và thẻ “Xem full tập N” được đặt ở đó, chữ lớn, thay vì nhỏ xíu trên hình.")
+        self.bars_cb = QCheckBox("Phụ đề ở dải nền phía dưới (to hơn, trên vùng ứng dụng che)")
+        self.bars_cb.setToolTip("Đưa phụ đề xuống dải nền dưới hình, chữ to; lớp che chữ Trung vẫn ở "
+                                "trên hình. Video dọc không có dải nền thì giữ nguyên.")
+        self.canvas_cb.toggled.connect(lambda on: (self.bars_cb.setEnabled(on),
+                                                   on or self.bars_cb.setChecked(False)))
+        self.bars_cb.setEnabled(False)
+        for cb in (self.canvas_cb, self.bars_cb):
+            ll.addWidget(cb)
+        self.frame.currentIndexChanged.connect(self._sync_canvas_opts)
+        self._sync_canvas_opts()
         self._safe_touched = False       # the user's own choice for this project beats the auto one
         self._short_applied = False
         ll.addWidget(label("Chất lượng", "h3"))
@@ -1282,6 +1297,12 @@ class RenderView(QWidget):
     def _on_safe(self, _on: bool) -> None:
         self._safe_touched = True
 
+    def _sync_canvas_opts(self, *_a) -> None:
+        """The bar-text options only mean something in the 9:16 frame."""
+        show = self.frame.currentData() == "tiktok"
+        self.canvas_cb.setVisible(show)
+        self.bars_cb.setVisible(show)
+
     def _on_short(self, on: bool) -> None:
         """"Cài sẵn Short": the series' saved Short settings (else the defaults) onto the controls."""
         if not on:
@@ -1303,6 +1324,8 @@ class RenderView(QWidget):
             self.card_end.setText(card["end"])
         self.safe_cb.setChecked(True)
         self._safe_touched = True
+        self.canvas_cb.setChecked(bool(cfg.get("canvas_text", True)))
+        self.bars_cb.setChecked(bool(cfg.get("bar_subs", True)) and self.canvas_cb.isChecked())
         plat = cfg.get("platform") or "tiktok"
         if self.preview.safe_zone() != plat:
             self.preview.set_safe_zone(plat)
@@ -1639,6 +1662,9 @@ class RenderView(QWidget):
         opts["episode_card"] = card if card["on"] else None
         opts["safe_caption"] = self.safe_platform() if self.safe_cb.isChecked() else None
         opts["short"] = self.short_btn.isChecked()
+        on_canvas = opts["frame"] == "tiktok" and self.canvas_cb.isChecked()
+        opts["canvas_text"] = on_canvas
+        opts["bar_subs"] = on_canvas and self.bars_cb.isChecked()
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         return opts
