@@ -107,6 +107,25 @@ def item_category(item: dict, details: dict | None) -> str:
     return {"review": "unapproved", "compiled": "rendered"}.get(st, st)
 
 
+def shorts_under_parents(items: list[dict]) -> list[dict]:
+    """A Short (made by «Cắt Short») listed right below its episode, whatever the sort; one whose
+    episode is not in the list keeps its place. Stable. Pure."""
+    ids = {it["id"] for it in items}
+    kids: dict[str, list[dict]] = {}
+    for it in items:
+        parent = (it.get("short") or {}).get("parent")
+        if parent and parent in ids and parent != it["id"]:
+            kids.setdefault(parent, []).append(it)
+    placed = {k["id"] for ks in kids.values() for k in ks}
+    out: list[dict] = []
+    for it in items:
+        if it["id"] in placed:
+            continue
+        out.append(it)
+        out.extend(kids.get(it["id"], []))
+    return out
+
+
 def episode_sort_key(item: dict) -> tuple:
     """By series (《name》), then episode number; unnumbered ones after the numbered of their
     series, newest first. Pure."""
@@ -171,6 +190,7 @@ class _Row(QFrame):
     cleanRequested = Signal(str)
     externalRequested = Signal(str)
     chaptersRequested = Signal(str)
+    shortRequested = Signal(str)           # «Cắt Short…» on this approved episode
 
     def __init__(self, item: dict, busy: str | None) -> None:
         super().__init__()
@@ -224,6 +244,10 @@ class _Row(QFrame):
         chips.setSpacing(5)
         if busy:
             chips.addWidget(badge(busy[:1].upper() + busy[1:], "purple"))
+        if item.get("short"):
+            sh = item["short"]
+            chips.addWidget(badge("Short" + (f" · tập {sh['episode']}" if sh.get("episode") else ""),
+                                  "purple"))
         if item.get("kind") == "group":
             chips.addWidget(badge(f"Video dài · {item.get('total') or len(item['parts'])} phần"))
         compiled = item.get("kind") == "compilation"
@@ -300,6 +324,11 @@ class _Row(QFrame):
             ch = m.addAction("Sao chép mục lục chương (dán vào mô tả YouTube)",
                              lambda: self.chaptersRequested.emit(iid))
             ch.setEnabled(bool(item.get("chapters")))
+        self.short_act = None
+        if item.get("kind") == "job":
+            self.short_act = m.addAction("Cắt Short (30–60 giây, 9:16)…",
+                                         lambda: self.shortRequested.emit(iid))
+            self._set_short_enabled(None)
         m.addSeparator()
         self.clean_act = m.addAction("Chỉ xóa file nặng…", lambda: self.cleanRequested.emit(iid))
         self.delete_act = m.addAction("Xóa dự án (vào Thùng rác)…",
@@ -314,6 +343,24 @@ class _Row(QFrame):
         al.addWidget(folder)
         al.addWidget(more)
         h.addWidget(acts)
+
+    def _set_short_enabled(self, d: dict | None) -> None:
+        """«Cắt Short» needs an APPROVED episode with its source video; a Short is not cut again."""
+        a = self.short_act
+        if a is None:
+            return
+        if self.item.get("short"):
+            why = "Đây đã là một Short — cắt từ tập gốc."
+        elif not self.item.get("has_source"):
+            why = "Đã dọn video gốc — mở tập để tải lại rồi cắt."
+        elif d is None:
+            why = "Đang kiểm tra…"
+        elif not d.get("approved"):
+            why = "Duyệt phụ đề của tập này trước (mở tập → Duyệt và dựng)."
+        else:
+            why = ""
+        a.setEnabled(not why)
+        a.setToolTip(why or "Gợi ý 1–3 đoạn 30–60 giây, bạn chọn rồi tạo dự án Short riêng")
 
     def _mark(self, on: bool) -> None:
         self.setProperty("picked", bool(on))
@@ -342,6 +389,7 @@ class _Row(QFrame):
         self.size_lbl.setToolTip(f"File nặng xóa được: {fmt_size(heavy)}" if heavy else
                              "Không còn file nặng nào để dọn")
         self.set_status(item_status(self.item, d))
+        self._set_short_enabled(d)
 
     def apply_thumb(self, path: str | None) -> None:
         pm = _thumb_pixmap(path, self._playable)
@@ -678,6 +726,7 @@ class LibraryView(QWidget):
             row.folderRequested.connect(self._folder)
             row.externalRequested.connect(self._external)
             row.chaptersRequested.connect(self._copy_chapters)
+            row.shortRequested.connect(self._cut_short)
             row.deleteRequested.connect(lambda iid: self.delete_items([self._item(iid)]))
             row.cleanRequested.connect(
                 lambda iid: self.delete_items([self._item(iid)], heavy_only=True))
@@ -743,7 +792,7 @@ class LibraryView(QWidget):
             items.sort(key=lambda it: fold(short_title(it.get("title") or it["id"])))
         elif self._sort == "ep":
             items.sort(key=episode_sort_key)
-        return items
+        return shorts_under_parents(items)
 
     def order(self) -> list[str]:
         """Item ids top to bottom as shown (filtered rows included, hidden)."""
@@ -901,6 +950,62 @@ class LibraryView(QWidget):
         fw = QApplication.focusWidget()
         if fw is None or not self.isAncestorOf(fw):
             self.setFocus(Qt.OtherFocusReason)
+
+    # --- «Cắt Short» (app/pipeline/clipshort.py) ---------------------------------------------
+    def _cut_short(self, iid: str) -> None:
+        from app.models import Job
+        from app.pipeline import clipshort
+        from app.pipeline.srt import parse_srt
+        from desktop.widgets.short_dialog import ShortDialog
+
+        it = self._item(iid)
+        work = Path(it["dirs"][0])
+        job = Job(id=work.name, work_dir=work)
+        try:
+            cues = parse_srt(job.vi_srt)
+        except OSError:
+            cues = []
+        title = it.get("title") or iid
+        dlg = ShortDialog(self.window(), short_title(title), cues, it.get("duration") or 0.0,
+                          clipshort.propose(cues))
+        dlg.aiRequested.connect(lambda: self._short_ai(dlg, cues, title))
+        if not self._run_dialog(dlg):
+            return
+        spec = dlg.spec()
+        if spec is None:
+            return
+        self.message.emit("Đang cắt Short…", "busy")
+        self._bg.run(
+            lambda: clipshort.make(job, spec["start"], spec["end"], spec["hook"], work.parent),
+            lambda child: self._short_made(child),
+            lambda msg: self._short_failed(msg))
+
+    def _short_ai(self, dlg, cues, title: str) -> None:
+        from app.pipeline import clipshort
+
+        dlg.set_busy(True, "Đang hỏi AI (một lệnh gọi rẻ)…")
+
+        def done(cands):
+            if dlg.isVisible():
+                dlg.set_busy(False, f"AI gợi ý {len(cands)} đoạn — bấm vào để xem.")
+                dlg.set_candidates(cands)
+
+        def fail(msg):
+            if dlg.isVisible():
+                dlg.set_busy(False)
+                dlg.set_note(str(msg), warn=True)
+
+        self._bg.run(lambda: clipshort.ask_ai(cues, title), done, fail)
+
+    def _short_made(self, child) -> None:
+        self.refresh()
+        self.changed.emit()
+        self.message.emit("Đã tạo Short — duyệt phụ đề rồi dựng.", "ok")
+        self.openRequested.emit(child.id)          # straight into the editor: it needs its own approval
+
+    def _short_failed(self, msg: str) -> None:
+        self.message.emit("Chưa cắt được Short.", "warn")
+        QMessageBox.warning(self.window(), "Chưa cắt được Short", str(msg))
 
     # --- actions ----------------------------------------------------------------------
     def _open(self, iid: str) -> None:

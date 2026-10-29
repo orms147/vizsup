@@ -46,6 +46,9 @@ def save_opts(work_dir: Path, opts: dict) -> None:
         from app.pipeline import series
 
         series.learn_render(Path(work_dir), clean)
+        from app.pipeline import shorts
+
+        shorts.learn(Path(work_dir), clean)        # a Short render: the series' Short settings
     except Exception:  # noqa: BLE001
         pass
 

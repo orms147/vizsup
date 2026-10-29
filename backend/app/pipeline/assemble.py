@@ -991,6 +991,7 @@ def assemble(
     commentary: list | None = None,      # F-4 commentary.Voiced — the user's own notes
     res: str = "source",                 # "source" | "1080" | "720" | "480" (short side)
     preset: str | None = None,           # "light" | "balanced" | "sharp" (default sharp)
+    safe_caption: str | None = None,     # platform key: subtitles above its bottom UI (shorts.place)
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
@@ -1021,8 +1022,21 @@ def assemble(
     out_dur = ((probe_duration(job.source_video) if job.source_video.exists() else 0.0)
                + sum(d for _a, d in ins))
     marks = disclosure.watermark_events(watermark, out_dur)
+    if safe_caption:
+        from app.pipeline import shorts
+
+        style, size = shorts.place(
+            style, size, safe_caption,
+            probe_size(job.source_video) if job.source_video.exists() else None, frame,
+            "source" if preview else res)
+    from app.pipeline import clipshort
+
+    is_short = clipshort.info(job) is not None
+    if is_short and episode_card:        # a cut Short ends with "Xem full tập N", not "Còn tiếp"
+        episode_card = {**episode_card, "end": ""}
     tags = [*(overlays or []), *disclosure.episode_events(
-        episode_card, compilation._job_title(job.work_dir) if episode_card else "", out_dur)]
+        episode_card, compilation._job_title(job.work_dir) if episode_card else "", out_dur),
+        *clipshort.events(job, out_dur)]
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark)

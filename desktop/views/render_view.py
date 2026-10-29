@@ -446,6 +446,14 @@ class RenderView(QWidget):
         self._glass_style = False
         self._sync_cover()
         ll.addWidget(self.cover)
+        # one click: 9:16 + blurred bars + the episode chip + subtitles above the platform's UI,
+        # remembered per series (shorts.learn after a real render)
+        self.short_btn = button("Cài sẵn Short (9:16)", "Smartphone", variant="ghost", checkable=True,
+                                tip="Khung dọc 9:16, nền mờ, thẻ tập, phụ đề đặt TRÊN vùng ứng dụng "
+                                    "che (TikTok / Reels / Shorts) và chữ to hơn cho điện thoại. "
+                                    "Lần dựng Short sau được nhớ cho cả bộ phim.")
+        self.short_btn.toggled.connect(self._on_short)
+        ll.addWidget(self.short_btn)
         ll.addWidget(label("Khung hình", "h3"))
         self.frame = QComboBox()
         for text, key in FRAMES:
@@ -471,6 +479,14 @@ class RenderView(QWidget):
             lambda _i: self.fill.setVisible(self.frame.currentData() == "tiktok"))
         self.fill.setVisible(self.frame.currentData() == "tiktok")
         ll.addWidget(self.fill)
+        self.safe_cb = QCheckBox("Phụ đề nằm trên vùng ứng dụng che (TikTok / Reels / Shorts)")
+        self.safe_cb.setToolTip(
+            "Đặt phụ đề phía trên dải tên + mô tả ở đáy và tránh cột nút bên phải, theo bảng "
+            "vùng an toàn. Dùng cho video dọc (hoặc khung 9:16); video ngang giữ nguyên.")
+        self.safe_cb.toggled.connect(self._on_safe)
+        ll.addWidget(self.safe_cb)
+        self._safe_touched = False       # the user's own choice for this project beats the auto one
+        self._short_applied = False
         ll.addWidget(label("Chất lượng", "h3"))
         st = store.load_ui_state()
         qrow = QHBoxLayout()
@@ -840,9 +856,21 @@ class RenderView(QWidget):
         self._restore_audio_mode()
         self._show_music()
         if changed:
+            self._safe_touched = False
+            self.safe_cb.blockSignals(True)
+            self.safe_cb.setChecked(False)
+            self.safe_cb.blockSignals(False)
+            self.short_btn.blockSignals(True)
+            self.short_btn.setChecked(False)
+            self.short_btn.blockSignals(False)
             self._probe_source(job)
             self._on_episode_card(save=False)      # this video's "Tập N" in the hint
         self._load_posting()
+        if changed:
+            from app.pipeline import clipshort
+
+            if clipshort.info(job) and not self.short_btn.isChecked():
+                self.short_btn.setChecked(True)      # a cut Short renders as a Short
         if tts:
             self._tts = tts
             self.voice_sub.setText(f"Tiếng Việt · {tts}")
@@ -1243,6 +1271,49 @@ class RenderView(QWidget):
         self.fit_hint.setText(msg)
         self.fit_hint.setStyleSheet(f"color:{V2['amber']};")
 
+    def safe_platform(self) -> str:
+        """Which platform's strips the subtitles avoid: the overlay's choice when it is a vertical
+        one, else TikTok (the strictest of the three)."""
+        from app.pipeline import safezones
+
+        z = self.preview.safe_zone()
+        return z if z and safezones.SAFE_ZONES[z].portrait else "tiktok"
+
+    def _on_safe(self, _on: bool) -> None:
+        self._safe_touched = True
+
+    def _on_short(self, on: bool) -> None:
+        """"Cài sẵn Short": the series' saved Short settings (else the defaults) onto the controls."""
+        if not on:
+            return
+        from app.pipeline import shorts
+
+        cfg = shorts.settings_for(self._job.work_dir) if self._job is not None else \
+            dict(shorts.DEFAULT_SHORT)
+        for combo, key in ((self.frame, "frame"), (self.fill, "tiktok_fill"), (self.res, "res"),
+                           (self.preset, "preset")):
+            i = combo.findData(cfg.get(key))
+            if i >= 0:
+                combo.setCurrentIndex(i)
+        card = {**self.episode_card_defaults(), **(cfg.get("episode_card") or {}), "on": True}
+        self.card_cb.setChecked(True)
+        if card.get("chip") and card["chip"] != self.card_chip.text():
+            self.card_chip.setText(card["chip"])
+        if card.get("end") and card["end"] != self.card_end.text():
+            self.card_end.setText(card["end"])
+        self.safe_cb.setChecked(True)
+        self._safe_touched = True
+        plat = cfg.get("platform") or "tiktok"
+        if self.preview.safe_zone() != plat:
+            self.preview.set_safe_zone(plat)
+        self._short_applied = True
+
+    @staticmethod
+    def episode_card_defaults() -> dict:
+        from app.pipeline import disclosure
+
+        return dict(disclosure.CARD_DEFAULT)
+
     def _on_fit_lines(self) -> None:
         if self._fit_rows:
             self.showLinesRequested.emit(list(self._fit_rows),
@@ -1494,6 +1565,14 @@ class RenderView(QWidget):
             if self._job is job:
                 self._src_size, self._src_dur = r
                 self._sync_quality()
+                from app.pipeline import shorts
+
+                # a native vertical source goes to TikTok / Reels as it is: keep its subtitles
+                # above the platform's caption strip unless the user decided otherwise
+                if shorts.is_vertical_source(self._src_size) and not self._safe_touched:
+                    self.safe_cb.blockSignals(True)
+                    self.safe_cb.setChecked(True)
+                    self.safe_cb.blockSignals(False)
 
         self._bg.run(work, done, lambda _m: None)
 
@@ -1558,6 +1637,8 @@ class RenderView(QWidget):
         opts["watermark"] = wm if wm["on"] and wm["text"] else None
         card = self.episode_card()
         opts["episode_card"] = card if card["on"] else None
+        opts["safe_caption"] = self.safe_platform() if self.safe_cb.isChecked() else None
+        opts["short"] = self.short_btn.isChecked()
         if preview:
             opts["preview"] = True                 # E-15: fast 640p check, same audio
         return opts
