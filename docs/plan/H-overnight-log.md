@@ -284,3 +284,10 @@ Auto-continue: cron 13,43 mỗi giờ.
   eps 1–5/6/7/8/9 if the silence is cut. Approved: trim lead/tail silence per segment in tts.py (+
   registry for cached segments) and re-calibrate fit_estimate to speech-only; asked to cover the dub-
   window cache key, never-eat-speech guards, batch/VieNeu/commentary paths, and before/after mp4s.
+- 00:18 — merged feat/shorts (sesion 2: "Cài sẵn Short (9:16)" preset learned per series,
+  captions placed above the platform's bottom strip, vertical sources, «Cắt Short» from an approved
+  episode → new unapproved project reusing its TTS) → 85d498c, 1539 passed. Eyeball on copies: one live
+  AI proposal (3.8 s, < $0.001) picked the confrontation scene; Short render OK, 32/32 voices reused.
+  Layout issue: hook / chip / "Xem full tập 9" are small text inside the picture, bars empty (text is
+  burned before the 9:16 composite) → sesion 2: Short layout v2 (canvas text layer in the bars).
+  Fixed a misleading "nền hộp" note (worker).
