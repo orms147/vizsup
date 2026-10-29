@@ -56,7 +56,8 @@ def main(video_id: str, out: Path, profile_dir: Path) -> int:
           "|| document.title, "
           "author: ((document.querySelector('[data-e2e=\"video-author\"], "
           "[data-e2e=\"user-info\"]')||{}).innerText || '').split('\\n')[0], "
-          "duration: (document.querySelector('video')||{}).duration || 0})")
+          "duration: (document.querySelector('video')||{}).duration || 0, "
+          "href: location.href})")
 
     def done(result):
         print(f"meta after {time.time() - t0:.1f}s: {str(result)[:200]}", file=sys.stderr, flush=True)
@@ -84,7 +85,8 @@ def main(video_id: str, out: Path, profile_dir: Path) -> int:
     title = str(meta.get("title") or "").removesuffix(" - 抖音").strip()
     out.write_text(json.dumps({"urls": seen, "user_agent": profile.httpUserAgent(),
                                "title": title, "uploader": str(meta.get("author") or "").strip(),
-                               "duration": meta.get("duration") or 0},
+                               "duration": meta.get("duration") or 0,
+                               "href": str(meta.get("href") or "")},
                               ensure_ascii=False), encoding="utf-8")
     return 0 if seen else 2
 

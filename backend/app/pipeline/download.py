@@ -134,10 +134,14 @@ def download(job: Job, *, log=None) -> Job:
             if log:
                 log("yt-dlp bị Douyin chặn — tải qua trình duyệt nhúng…")
             try:
-                return _douyin_web(job, url)
+                job = _douyin_web(job, url)
             except Exception as exc2:  # noqa: BLE001 - report BOTH failures
                 raise RuntimeError(f"yt-dlp thất bại ({exc}) và trình duyệt nhúng cũng không "
                                    f"tải được ({exc2}).") from exc2
+            if log and job.metadata.get("suspect"):
+                log(f"⚠ Kiểm tra lại video vừa tải: {job.metadata['suspect']} "
+                    f"(“{job.metadata.get('title', '')[:40]}”).")
+            return job
         if platform_of(job.url) == "bilibili" and settings.bbdown_path:
             try:
                 return _bbdown(job, url)
@@ -301,6 +305,35 @@ def _capture(video_id: str) -> dict:
     return data
 
 
+def capture_problem(data: dict, video_id: str) -> str | None:
+    """Why a capture may not be the video asked for (None = looks right). 2026-10-28: the
+    page played a 剑网3 ad instead of 《末日校车》09 — the ad had no author, and the next
+    morning the same id gave the real episode. Pure."""
+    href = str(data.get("href") or "")
+    if href and video_id and video_id not in href:
+        return "trang Douyin đã chuyển sang một video khác"
+    if not str(data.get("uploader") or "").strip():
+        return "không thấy người đăng — có thể Douyin phát quảng cáo thay cho video"
+    return None
+
+
+def _capture_checked(video_id: str) -> dict:
+    """``_capture`` + one fresh retry when the page looks like another video. A page that
+    moved to another video stops the run; a missing author only marks it ``suspect``."""
+    data = _capture(video_id)
+    if capture_problem(data, video_id) is None:
+        return data
+    (_browser_dir() / f"{video_id}.json").unlink(missing_ok=True)   # never reuse it
+    data = _capture(video_id)
+    problem = capture_problem(data, video_id)
+    if problem and "chuyển" in problem:
+        raise RuntimeError(f"Douyin mở một video khác thay vì {video_id} ({problem}) — "
+                           "thử lại sau ít phút.")
+    if problem:
+        data["suspect"] = problem
+    return data
+
+
 def _http_args(ua: str) -> list[str]:
     return ["-user_agent", ua, "-headers", f"Referer: {_REFERER}\r\n"]
 
@@ -353,7 +386,7 @@ def _douyin_web(job: Job, url: str) -> Job:
     from app.ffmpegutil import ffmpeg_bin
 
     vid = douyin_id(url)
-    data = _capture(vid or "")
+    data = _capture_checked(vid or "")
     ua = data.get("user_agent") or "Mozilla/5.0"
     info = {u: _streams_of(u, ua) for u in data["urls"]}
     pick = pick_streams(info)
@@ -392,4 +425,6 @@ def _douyin_web(job: Job, url: str) -> Job:
         "webpage_url": url,
         "video_id": vid,
     }
+    if data.get("suspect"):
+        job.metadata["suspect"] = data["suspect"]
     return job

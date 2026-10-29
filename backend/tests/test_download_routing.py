@@ -398,3 +398,50 @@ def test_the_friendly_message_reaches_the_caller(tmp_path, monkeypatch):
     job = Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/1")
     with pytest.raises(RuntimeError, match="cookies.txt"):
         download._ytdlp(job, job.url)
+
+
+def test_capture_problem_spots_another_video_or_a_missing_author():
+    ok = {"href": "https://www.douyin.com/video/7699919754521283890", "uploader": "阿熊动漫"}
+    assert download.capture_problem(ok, "7699919754521283890") is None
+    assert "khác" in download.capture_problem({**ok, "href": "https://www.douyin.com/jingxuan"},
+                                              "7699919754521283890")
+    # 2026-10-28: the page played a 剑网3 ad — no author on it
+    assert "quảng cáo" in download.capture_problem({**ok, "uploader": ""}, "7699919754521283890")
+    assert download.capture_problem({"uploader": "x"}, "1") is None      # older captures: no href
+
+
+def test_a_suspicious_capture_is_retried_fresh_then_marked_or_refused(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(download, "_browser_dir", lambda: tmp_path)
+    vid = "7699919754521283890"
+    good = {"urls": ["u"], "href": f"https://www.douyin.com/video/{vid}", "uploader": "阿熊动漫"}
+    ad = {**good, "uploader": ""}
+    answers = [ad, good]
+    monkeypatch.setattr(download, "_capture", lambda v: answers.pop(0))
+    (tmp_path / f"{vid}.json").write_text(json.dumps(ad), encoding="utf-8")
+    assert download._capture_checked(vid) == good                  # retried …
+    assert not (tmp_path / f"{vid}.json").exists()                  # … without the cached ad
+    answers[:] = [ad, ad]
+    assert download._capture_checked(vid)["suspect"].startswith("không thấy người đăng")
+    moved = {**good, "href": "https://www.douyin.com/jingxuan"}
+    answers[:] = [moved, moved]
+    with pytest.raises(RuntimeError, match="video khác"):
+        download._capture_checked(vid)
+
+
+def test_download_warns_when_the_video_may_be_an_ad(tmp_path, monkeypatch):
+    def no_ytdlp(job, url):
+        raise RuntimeError("HTTP 403")
+
+    def web(job, url):
+        job.metadata = {"title": "50级新世代！", "suspect": "không thấy người đăng — quảng cáo?"}
+        return job
+
+    monkeypatch.setattr(download, "_ytdlp", no_ytdlp)
+    monkeypatch.setattr(download, "web_available", lambda: True)
+    monkeypatch.setattr(download, "_douyin_web", web)
+    logs = []
+    download.download(Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/1"),
+                      log=logs.append)
+    assert any(m.startswith("⚠ Kiểm tra lại video vừa tải") for m in logs)
