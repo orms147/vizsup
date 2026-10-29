@@ -493,7 +493,9 @@ class MainWindow(QMainWindow):
             self.editor.save_now()
             tts_name = self.opts.get("tts") or settings.vizsup_default_tts
             try:
-                voices = get_tts(tts_name).voices()
+                from app.providers.registry import local_voice_choices
+
+                voices = list(get_tts(tts_name).voices()) + local_voice_choices(tts_name)
             except Exception:  # noqa: BLE001
                 voices = []
             if not approval.is_approved(self.job):

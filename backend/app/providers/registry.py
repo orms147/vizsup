@@ -24,6 +24,7 @@ from app.providers.tts.azure import AzureTTS
 from app.providers.tts.edge import EdgeTTS
 from app.providers.tts.fpt import FptTTS
 from app.providers.tts.google import GoogleTTS
+from app.providers.tts.vieneu import VieNeuTTS
 
 TRANSLATORS = {
     p.name: p
@@ -48,8 +49,40 @@ TTS_PROVIDERS = {
         FptTTS(),
         AzureTTS(),
         GoogleTTS(),
+        VieNeuTTS(),
     )
 }
+
+VOICE_SEP = ":"          # "vieneu:Trúc Ly" — a voice that names its own provider
+
+
+def split_voice(provider: str, voice: str | None) -> tuple[str, str | None]:
+    """(provider, voice) for a voice from voice_choices(): "vieneu:Trúc Ly" → ("vieneu",
+    "Trúc Ly"); anything else keeps ``provider``. Pure."""
+    if voice and VOICE_SEP in voice:
+        head, rest = voice.split(VOICE_SEP, 1)
+        if head in TTS_PROVIDERS:
+            return head, rest
+    return provider, voice
+
+
+def voice_choices(provider: str) -> list[str]:
+    """The render page's voice list: ``provider``'s voices, then the voices of every
+    installed local provider (``local_voices``, free) as "name:voice"."""
+    try:
+        out = list(get_tts(provider).voices() or [])
+    except Exception:  # noqa: BLE001 - an unknown provider lists nothing of its own
+        out = []
+    return out + local_voice_choices(provider)
+
+
+def local_voice_choices(provider: str) -> list[str]:
+    """The installed local providers' voices as "name:voice" (none for ``provider``)."""
+    out: list[str] = []
+    for name, p in TTS_PROVIDERS.items():
+        if name != provider and getattr(p, "local_voices", False) and p.available():
+            out += [f"{name}{VOICE_SEP}{v}" for v in p.voices()]
+    return out
 
 ASR_PROVIDERS = {
     p.name: p

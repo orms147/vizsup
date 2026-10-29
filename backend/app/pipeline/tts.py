@@ -136,6 +136,9 @@ def synthesize(
     ``voice_by_gender``: a line tagged "f" / "m" in overrides.json (pipeline/voices.py)
     is read by the provider's female / male voice; untagged lines (and providers without
     such voices) keep ``voice``. The line's voice is part of its cache key."""
+    from app.providers.registry import split_voice
+
+    provider, voice = split_voice(provider, voice)     # "vieneu:Trúc Ly" runs VieNeu
     tts = get_tts(provider)
     if not tts.available():
         raise RuntimeError(f"TTS provider '{provider}' is not available (missing key or dependency).")

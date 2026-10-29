@@ -118,8 +118,13 @@ SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của b�
 
 
 def _voice_name(v: str) -> str:
-    """vi-VN-HoaiMyNeural → Hoài My (edge ids), anything else unchanged."""
+    """vi-VN-HoaiMyNeural → Hoài My, fr-FR-VivienneMultilingualNeural → Vivienne (đa ngôn
+    ngữ), vieneu:Trúc Ly → Trúc Ly · trên máy; anything else unchanged."""
     known = {"HoaiMy": "Hoài My", "NamMinh": "Nam Minh"}
+    if v.startswith("vieneu:"):
+        return f"{v.split(':', 1)[1]} · trên máy"
+    if "MultilingualNeural" in v:
+        return f"{v.split('-')[2].replace('MultilingualNeural', '')} (đa ngôn ngữ)"
     core = v.replace("vi-VN-", "").replace("Neural", "")
     return known.get(core, core or v)
 
@@ -1702,7 +1707,10 @@ class RenderView(QWidget):
         self._player.setSource(QUrl())         # Windows: the player locks the old sample file
 
         def work():
-            get_tts(tts).synthesize(SAMPLE, out, voice=voice, rate=rate)
+            from app.providers.registry import split_voice
+
+            prov, v = split_voice(tts, voice)          # "vieneu:Trúc Ly" → VieNeu
+            get_tts(prov).synthesize(SAMPLE, out, voice=v, rate=rate)
             if not out.exists() or out.stat().st_size == 0:      # a dropped connection
                 raise RuntimeError("máy chủ giọng đọc không trả âm thanh — thử lại")
             return str(out)

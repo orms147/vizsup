@@ -237,7 +237,10 @@ def observe(job: Job, *, frames: bool = False, log=None) -> str | None:
 
 
 # voice-name hints → the pitch class of the voice (first match wins: "female" ⊃ "male")
-_VOICE_HINTS = (("hoaimy", "high"), ("namminh", "low"), ("female", "high"), ("male", "low"),
+_VOICE_HINTS = (("hoaimy", "high"), ("namminh", "low"), ("vivienne", "high"),
+                ("thalita", "high"), ("emma", "high"), ("seraphina", "high"),
+                ("trúc ly", "high"), ("ngọc huyền", "high"), ("quốc tuấn", "low"),
+                ("adam", "low"), ("female", "high"), ("male", "low"),
                 ("nữ", "high"), ("nam", "low"))
 
 

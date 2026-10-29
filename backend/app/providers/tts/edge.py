@@ -11,7 +11,12 @@ from pathlib import Path
 from app.providers.base import TTSProvider, _installed, has_speakable
 
 DEFAULT_VOICE = "vi-VN-HoaiMyNeural"
-VOICES = ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"]
+# + Microsoft's multilingual female voices that read Vietnamese clearly (2026-10-29 test:
+# Whisper re-read CER on 6 real lines — Vivienne / Thalita 0 %, Emma / Seraphina 0.9 %;
+# Ava 49 %, left out). They may sound slightly foreign: the owner picks by ear.
+VOICES = ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural", "fr-FR-VivienneMultilingualNeural",
+          "pt-BR-ThalitaMultilingualNeural", "en-US-EmmaMultilingualNeural",
+          "de-DE-SeraphinaMultilingualNeural"]
 
 
 def _no_audio(exc: Exception) -> bool:

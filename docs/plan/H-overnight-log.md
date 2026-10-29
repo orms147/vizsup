@@ -224,3 +224,15 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
   6 real lines: edge HoaiMy 0.9 %, NamMinh 0.0 %; best VieNeu Thiền Tâm Đức 0 %, Đức Trí / Kim Thanh
   0.9 %, Mai Anh / Minh Đức / Quỳnh Anh / Quốc Tuấn 1.8 %; worst Thái Sơn 40 %; Piper 6.1 %.
   Listening page: scratchpad/tts_eval/nghe_thu.html. Spend: Whisper ≈ $0.02.
+- 10:09 — owner: the "ad" link downloaded fine this morning — the SAME id gave 剑网3 last night
+  and 《末日校车》09 today: Douyin's page played an ad first and the capture took it. Fixed: the capture
+  records the page address; capture_problem() + one fresh retry; a moved page stops the run, a
+  missing author logs ⚠ (e54d7bc, main updated).
+- 10:09 — voices: owner keeps VieNeu Quốc Tuấn, Trúc Ly, Adam bựa, Ngọc Huyền; asked for more
+  female voices → edge multilingual females read Vietnamese clearly (Vivienne / Thalita 0 %, Emma /
+  Seraphina 0.9 % CER; Ava 49 % — left out). INSTALLED into backend/.venv (logged): vieneu 3.8.3
+  (--no-deps), sea-g2p 0.10.0, soundfile 0.14.0, soxr 1.1.0, kaldi-native-fbank 1.22.4 — NOT vieneu's
+  onnxruntime pin (would replace onnxruntime-directml) and not gradio. VieNeu provider (ONNX/CPU) +
+  "vieneu:<name>" routing; render page lists edge + local voices. Real dub of the ep-9 copy with Trúc Ly:
+  65 lines in 52 s (incl. 9 s model load). Rejected: viet-tts presets (named after real celebrities /
+  cloned commercial voices). 1504 tests pass.
