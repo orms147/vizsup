@@ -1029,8 +1029,14 @@ def assemble(
             style, size, safe_caption,
             probe_size(job.source_video) if job.source_video.exists() else None, frame,
             "source" if preview else res)
+    from app.pipeline import clipshort
+
+    is_short = clipshort.info(job) is not None
+    if is_short and episode_card:        # a cut Short ends with "Xem full tập N", not "Còn tiếp"
+        episode_card = {**episode_card, "end": ""}
     tags = [*(overlays or []), *disclosure.episode_events(
-        episode_card, compilation._job_title(job.work_dir) if episode_card else "", out_dur)]
+        episode_card, compilation._job_title(job.work_dir) if episode_card else "", out_dur),
+        *clipshort.events(job, out_dur)]
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark)
