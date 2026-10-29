@@ -210,3 +210,5 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 08:03 — idle check.
 - 08:29 — idle check.
 - 09:03 — idle check.
+- 09:20 — owner (morning): approved merging into main; one voice is enough → voice guess
+  made opt-in (950704c); auto-continue cron 9e08612f deleted. Full suite 1490 passed.
