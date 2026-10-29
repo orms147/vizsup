@@ -265,3 +265,22 @@ Auto-continue: cron 13,43 mỗi giờ.
 - sesion 2 (Short): S1 preset "Short" 1 chạm (9:16, phụ đề tự tránh vùng che, chữ to hơn); S2 nguồn
   dọc; S3 "Cắt Short" từ tập đã duyệt (đoạn 30–60 s có hook, render 9:16, cần duyệt riêng).
 - coordinator: mục 5, 7; C3 hiện chi phí mỗi tập/bộ phim trong Thư viện; review + merge.
+- 23:57 — night 2 started. Item 1: copied into the REAL storage only missing files (615) for eps
+  1–5/6/7/8 (their revision files are identical to the copies; never overwrote the owner's files; ep 8's
+  bug-made style.json left out) + ep 9 + compilations 1–8, 1–9 + series profile. Writing approval
+  markers for the 4 old projects was BLOCKED by the auto-mode classifier (right call — the gate is the
+  owner's): they show rendered but "Chưa duyệt" until the owner approves. Fix so that re-approving the
+  same text is not "Cần dựng lại": render.json records the rendered revision (4a3bf22).
+- 23:57 — items 2–4 done (229f107): Settings "Giọng đọc trên máy (VieNeu)" install/download
+  button (vieneu --no-deps + CPU deps, never CPU onnxruntime), first-use download notice, VieNeu voices
+  for commentary, shared voice labels; flaky test_bg_exit timing fixed. 1509 passed.
+- 23:57 — item 5: voice list checked at 150 % scale (offscreen grab, no demo window left open):
+  10 voices with Vietnamese labels. Item 7: removed scratch tts_eval_venv (671 MB) + small test dirs.
+- 23:57 — sessions restarted by the owner; sent full briefs: sesion 1 → feat/dub-fit (T1, C2,
+  T2 study); sesion 2 → feat/shorts (S1, S2, S3). Cron da9b70b1 at :13/:43.
+- 00:01 — sesion 1 (T1) root cause: the "too long" lines are mostly SILENCE — every edge-tts
+  segment carries ~0.21 s lead + ~0.66 s tail; assemble speeds up / shifts by it. Replaying the real
+  durations: flagged 167/25/68/40/27 → 2/0/2/0/0 and trim 57/5.3/33/12/10 s → 5.5/0.5/2.5/0.7/1.8 s on
+  eps 1–5/6/7/8/9 if the silence is cut. Approved: trim lead/tail silence per segment in tts.py (+
+  registry for cached segments) and re-calibrate fit_estimate to speech-only; asked to cover the dub-
+  window cache key, never-eat-speech guards, batch/VieNeu/commentary paths, and before/after mp4s.
