@@ -78,8 +78,8 @@ def test_render_page_warns_a_fast_talker_and_offers_a_speed(tmp_path):
     rv = render_view.RenderView()
     job = Job(id="j", work_dir=tmp_path)
     rv.set_job(job, cues=10)
-    fast = [EditorCue(start=i * 1.6, end=i * 1.6 + 1.5, vi="một hai ba bốn năm sáu bảy tám",
-                      zh="") for i in range(10)]
+    fast = [EditorCue(start=i * 1.6, end=i * 1.6 + 1.5, vi="một hai ba bốn năm sáu bảy tám chín mười",
+                      zh="") for i in range(10)]   # speech-only model: 2.5 s at 1.0×, 1.96 s at 1.3×
     rv.set_preview(tmp_path / "missing.mp4", fast)
     assert not rv.fit_hint.isHidden() and "trễ" in rv.fit_hint.text()
     assert not rv.fit_btn.isHidden() and "1.30×" in rv.fit_btn.text()

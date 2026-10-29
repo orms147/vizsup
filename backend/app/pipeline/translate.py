@@ -253,9 +253,13 @@ def translate_cues(
     work_dir: Path | None = None,
     log: Callable[[str], None] | None = None,
     auto_shorten: bool = True,
+    rate: float | None = None,
     cancel: Callable[[], bool] | None = None,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[Cue]:
+    from app.pipeline.fit_estimate import PREGATE_RATE
+
+    rate = rate or PREGATE_RATE         # the voice speed lines are budgeted for (job_rate)
     cn = [c.text for c in cues]
     ckpt = (work_dir / "translate.checkpoint.json") if work_dir else None
     ckpt_refine = (work_dir / "translate.refine.checkpoint.json") if work_dir else None
@@ -308,14 +312,13 @@ def translate_cues(
         # refine prompt so the refiner shortens WHILE polishing (kills the
         # draft → refine-the-long-version → autoshorten triple-pay). Fitting lines
         # get None so their prompt block stays byte-identical to before.
-        from app.pipeline.fit_estimate import (MAX_TEMPO, PREGATE_RATE, SYL_PER_SEC, fits,
-                                               slot_seconds)
+        from app.pipeline.fit_estimate import fits, slot_seconds, word_budget
 
         budgets: list[int | None] = []
         for j in range(len(vi_draft)):
             slot = slot_seconds(cues, j)
-            budgets.append(int(slot * MAX_TEMPO * SYL_PER_SEC * PREGATE_RATE)
-                           if slot > 0 and not fits(vi_draft[j], slot, PREGATE_RATE) else None)
+            budgets.append(word_budget(slot, rate)
+                           if slot > 0 and not fits(vi_draft[j], slot, rate) else None)
         return budgets
 
     def refine_pass(provider_name: str, cn_src: list[str], vi_draft: list[str]) -> list[str]:
@@ -375,7 +378,7 @@ def translate_cues(
         vi = refine_pass(refine, cn, vi)
         _check_count(vi, "tinh chỉnh", refine)
     if auto_shorten:
-        vi = _autoshorten(cues, vi, refine or draft, log=log)
+        vi = _autoshorten(cues, vi, refine or draft, log=log, rate=rate)
 
     return [Cue(index=c.index, start=c.start, end=c.end, text=clean_vi(t))
             for c, t in zip(cues, vi)]
@@ -390,15 +393,17 @@ SHORTEN_BATCH_INSTRUCTION = (
 
 
 def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
-                 *, log: Callable[[str], None] | None = None) -> list[str]:
+                 *, log: Callable[[str], None] | None = None,
+                 rate: float | None = None) -> list[str]:
     """N-6 light + API-5: shorten every line that can't be spoken inside its slot
     even at the 1.30× cap — in ONE batched rewrite() call per BATCH-sized chunk,
     BEFORE the gate (so the user reviews already-fitting lines). Skips silently when
     the provider can't rewrite; a rewrite that fails or doesn't shorten a line keeps
     the original. shorten_line (per-line, GUI editor) stays untouched."""
-    from app.pipeline.fit_estimate import (MAX_TEMPO, PREGATE_RATE, fits, slot_seconds,
+    from app.pipeline.fit_estimate import (MAX_TEMPO, PREGATE_RATE, SEG_PAD, fits, slot_seconds,
                                            speech_seconds)
 
+    rate = rate or PREGATE_RATE
     prov = get_translator(provider_name)
     if not hasattr(prov, "rewrite") or not prov.available():
         return vi
@@ -408,9 +413,10 @@ def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
     todo: list[tuple[int, int]] = []
     for i in range(len(cues)):
         slot = slot_seconds(cues, i)
-        if slot <= 0 or fits(out[i], slot, PREGATE_RATE):
+        if slot <= 0 or fits(out[i], slot, rate):
             continue
-        ratio = (slot * MAX_TEMPO) / max(0.1, speech_seconds(out[i], PREGATE_RATE))
+        # the words must shrink; the fixed per-segment pad cannot
+        ratio = max(0.0, slot * MAX_TEMPO - SEG_PAD) / max(0.1, speech_seconds(out[i], rate) - SEG_PAD)
         pct = max(50, min(90, round(ratio * 10) * 10))
         todo.append((i, pct))
     if not todo:
@@ -644,8 +650,14 @@ def translate(
             log("ℹ Dịch theo bộ phim của video này" + (" + vài câu cuối tập trước" if "_prev" in ser else ""))
     if glossary is None:
         glossary = load_glossary(job) or None
+    from app.pipeline.fit_estimate import job_rate
+
+    rate = job_rate(job)                 # the speed this project / series is dubbed at
+    if log:
+        log(f"ℹ Ngân sách độ dài câu tính theo tốc độ đọc ×{rate:.2f}")
     vi = translate_cues(cues, draft=draft, refine=refine, context=context,
-                        glossary=glossary, work_dir=job.work_dir, log=log, cancel=cancel)
+                        glossary=glossary, work_dir=job.work_dir, log=log, cancel=cancel,
+                        rate=rate)
     # E-7: lines you already approved in another video keep your approved wording
     texts, reused = memory.apply_tm([c.text for c in cues], [c.text for c in vi])
     if reused:

@@ -57,6 +57,21 @@ def _usage_fields(usage) -> tuple[int, int, float | None]:
     return int(pin or 0), int(pout or 0), (None if cost is None else float(cost))
 
 
+def cached_tokens(usage) -> int:
+    """Input tokens the provider served from its prompt cache (OpenAI-style
+    ``prompt_tokens_details.cached_tokens``; DeepSeek's ``prompt_cache_hit_tokens``). 0 when the
+    response says nothing."""
+    if usage is None:
+        return 0
+    get = _getter(usage)
+    det = get("prompt_tokens_details", None)
+    if det is not None:
+        n = det.get("cached_tokens") if isinstance(det, dict) else getattr(det, "cached_tokens", None)
+        if n:
+            return int(n)
+    return int(get("prompt_cache_hit_tokens", 0) or 0)
+
+
 def record(model: str, usage) -> None:
     """Add one AI call (its response's ``usage``) to the job being tracked."""
     sink = _sink
@@ -64,7 +79,7 @@ def record(model: str, usage) -> None:
         return
     try:
         pin, pout, cost = _usage_fields(usage)
-        _add(sink, model=model, pin=pin, pout=pout, cost=cost or 0.0)
+        _add(sink, model=model, pin=pin, pout=pout, cost=cost or 0.0, cached=cached_tokens(usage))
     except Exception:  # noqa: BLE001 - accounting never breaks a call
         pass
 
@@ -87,7 +102,7 @@ def record_audio(model: str, usage, seconds: float, price_per_min: float) -> Non
 
 
 def _add(job_dir: Path, *, model: str | None = None, pin: int = 0, pout: int = 0,
-         cost: float = 0.0, seconds: dict | None = None) -> None:
+         cost: float = 0.0, seconds: dict | None = None, cached: int = 0) -> None:
     path = job_dir / _FILE
     with _lock:
         try:
@@ -101,6 +116,8 @@ def _add(job_dir: Path, *, model: str | None = None, pin: int = 0, pout: int = 0
             m["in"] += pin
             m["out"] += pout
             m["cost"] = round(m["cost"] + cost, 6)
+            if cached:                       # prompt-cache hits (a subset of "in")
+                m["cached"] = m.get("cached", 0) + cached
         for phase, sec in (seconds or {}).items():
             data.setdefault("seconds", {})[phase] = round(
                 data.get("seconds", {}).get(phase, 0.0) + sec, 1)
