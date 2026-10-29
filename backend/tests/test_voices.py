@@ -428,3 +428,20 @@ def test_the_switch_skips_the_automatic_speech_stem(storage, monkeypatch):
     monkeypatch.setattr(separate, "speech_stem", lambda *a, **k: called.append(1))
     voices._audio_source(job)
     assert called == []
+
+
+def test_start_screen_switch_is_off_by_default_and_reaches_the_run(storage):
+    """2026-10-29 owner: one voice is enough → the guess is a setting, off by default."""
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    _app = QApplication.instance() or QApplication([])
+    from app.providers.registry import list_providers
+    from desktop import store
+    from desktop.views import input_view
+
+    assert "voice_guess" in store._UI_KEYS
+    v = input_view.InputView(list_providers())
+    assert not v.voice_guess.isChecked() and v._collect_opts()["voice_guess"] is False
+    v.voice_guess.setChecked(True)
+    assert v._collect_opts()["voice_guess"] is True

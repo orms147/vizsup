@@ -564,6 +564,12 @@ class InputView(QWidget):
             "từ chức năng bị lặp như “là là”) và đánh dấu câu còn chữ Trung, lệch số, từ chưa "
             "dịch. Chạy trên máy, không tốn API.")
         g.addWidget(self.vi_lint, 12, 0)
+        self.voice_guess = QCheckBox("Đoán giọng nam/nữ")
+        self.voice_guess.setToolTip(
+            "Sau khi dịch, đoán câu nào giọng nam, câu nào giọng nữ (theo cao độ giọng gốc) để "
+            "lồng tiếng mỗi câu bằng giọng hợp — dùng khi bật “Giọng theo nhân vật” ở màn Dựng. "
+            "Tắt nếu bạn chỉ dùng một giọng: đỡ tốn thời gian. Chạy trên máy, không tốn API.")
+        g.addWidget(self.voice_guess, 12, 1)
         self.ai_review = QCheckBox("AI soát bản dịch")
         self.ai_review.setToolTip(
             "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
@@ -648,6 +654,7 @@ class InputView(QWidget):
         self.clause_split.setChecked(bool(st.get("clause_split", True)))
         self.timing_pass.setChecked(bool(st.get("timing_pass", True)))
         self.vi_lint.setChecked(bool(st.get("vi_lint", True)))
+        self.voice_guess.setChecked(bool(st.get("voice_guess", False)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
@@ -756,6 +763,7 @@ class InputView(QWidget):
             "clause_split": self.clause_split.isChecked(),
             "timing_pass": self.timing_pass.isChecked(),
             "vi_lint": self.vi_lint.isChecked(),
+            "voice_guess": self.voice_guess.isChecked(),
             "ai_review": self.ai_review.isChecked(),
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),

@@ -1441,6 +1441,9 @@ def _default_voice(job, voices: list[str], opts: dict) -> str | None:
 
 
 def main() -> int:
+    from app.winproc import hide_child_consoles
+
+    hide_child_consoles()                     # pythonw / packaged: no black ffmpeg windows
     _install_qt_log_filter()
     app = QApplication(sys.argv)
     app.setApplicationName("vizsup")
