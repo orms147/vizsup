@@ -109,7 +109,7 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
     """Audio for every note: the user's recording, or TTS in the note's voice (a voice
     other than the dub's by default), cached in ``commentary/`` by text+voice+rate."""
     from app.pipeline.assemble import probe_duration
-    from app.pipeline.tts import _synth_retry
+    from app.pipeline.tts import _synth_retry, trim_files
     from app.providers.registry import get_tts, split_voice
 
     if not notes:
@@ -132,6 +132,7 @@ def synthesize(job: Job, notes: list[Note], *, provider: str, dub_voice: str | N
             if not (path.exists() and path.stat().st_size > 0):
                 _synth_retry(tts if prov == provider else get_tts(prov), said, path, voice=v,
                              rate=rate, sleep=__import__("time").sleep)
+            trim_files([path], d / "trimmed.json")    # a "pause" note must not freeze for 0.9 s of silence
         else:
             continue
         dur = probe_duration(path)

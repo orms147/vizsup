@@ -16,6 +16,14 @@ Resilience (N-10):
   user's ``pronounce.json`` read the Vietnamese way); the subtitle keeps the written form.
   The SPOKEN text is what the cache key hashes, so editing a rule re-voices only the lines
   it changes.
+- Trimmed silence — every provider's segment carries ~0.2 s of leading and ~0.65 s of trailing
+  silence (edge-tts measured 2026-10-30; 3-5 word lines are padded to 1.87 s). The assembler
+  plans on file durations, so that silence was sped up, pushed the next line and was flagged
+  "QUÁ DÀI" (a 5-episode series: 167 flagged lines, 57 s trimmed, none really too long). Each
+  segment is cut to its speech (+0.05 s before, +0.12 s after) once, in place; ``tts/trimmed.json``
+  remembers which files (size + mtime) are done, so segments cached by an older run are
+  trimmed too, without a new synthesis. Never fatal: a file that cannot be analysed or would
+  shrink under 0.15 s stays as it is.
 - Cancel — an optional callback is checked between cues; cancelling returns the
   partial list (the worker's between-stage check then aborts the render).
 """
@@ -34,6 +42,123 @@ from app.providers.registry import get_tts
 from app.fsutil import atomic_write_text
 
 _RETRY_DELAYS = (1.0, 4.0)   # 3 attempts: try, wait 1s, try, wait 4s, final try
+
+# --- trimming the silence around the speech --------------------------------------------------
+TRIM_FILE = "trimmed.json"
+TRIM_LEAD, TRIM_TAIL = 0.05, 0.12   # s of silence kept before / after the speech
+TRIM_MIN = 0.15                     # a segment is never cut shorter than this
+_ENV_HOP = 0.01                     # envelope frame, s
+_ABS_FLOOR = 0.003                  # ≈ −50 dBFS: below this is silence whatever the level
+_REL_FLOOR = 0.012                  # ≈ −38 dB under the segment's own peak
+_PCM_RATE = 16000
+
+
+def speech_window(env, dur: float, *, hop: float = _ENV_HOP) -> tuple[float, float] | None:
+    """(start, end) in seconds to keep from a segment: the first / last frame of the peak
+    envelope ``env`` above max(absolute floor, 1.2 % of the segment's own peak), widened by
+    TRIM_LEAD / TRIM_TAIL. None when nothing is above it (silence) or the result would be
+    shorter than TRIM_MIN. Pure."""
+    import numpy as np
+
+    env = np.asarray(env, dtype=float)
+    if env.size == 0:
+        return None
+    peak = float(env.max())
+    thr = max(_ABS_FLOOR, _REL_FLOOR * peak)
+    loud = np.nonzero(env > thr)[0]
+    if loud.size == 0:
+        return None
+    start = max(0.0, loud[0] * hop - TRIM_LEAD)
+    end = min(dur, (loud[-1] + 1) * hop + TRIM_TAIL)
+    return (start, end) if end - start >= TRIM_MIN else None
+
+
+def trim_silence(path: Path, *, min_gain: float = 0.08) -> bool:
+    """Cut the silence off both ends of one audio file, in place (temp + replace).
+    True when the file now holds only its speech (cut, or nothing worth cutting); False when it
+    could not be analysed / the cut would be unsafe (the file is left untouched). Never raises."""
+    import subprocess
+
+    import numpy as np
+
+    from app.ffmpegutil import ffmpeg_bin
+    from app.fsutil import replace
+
+    path = Path(path)
+    tmp = path.with_name(f".{path.stem}.trim{path.suffix}")
+    try:
+        raw = subprocess.run([ffmpeg_bin(), "-v", "error", "-i", str(path), "-vn", "-ac", "1",
+                              "-ar", str(_PCM_RATE), "-f", "s16le", "-"],
+                             capture_output=True, check=True, timeout=60).stdout
+        x = np.abs(np.frombuffer(raw[:len(raw) // 2 * 2], dtype=np.int16)).astype(np.float32) / 32768.0
+        step = int(_PCM_RATE * _ENV_HOP)
+        n = len(x) // step
+        if n < 2:
+            return False
+        env = x[:n * step].reshape(n, step).max(axis=1)
+        dur = len(x) / _PCM_RATE
+        win = speech_window(env, dur)
+        if win is None:
+            return False
+        start, end = win
+        if (start + (dur - end)) < min_gain:                   # nothing worth cutting
+            return True
+        subprocess.run([ffmpeg_bin(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-t",
+                        f"{end - start:.3f}", "-i", str(path), "-vn", "-c:a", "libmp3lame",
+                        "-q:a", "2", str(tmp)], capture_output=True, check=True, timeout=60)
+        if not tmp.exists() or tmp.stat().st_size < 300:
+            return False
+        replace(tmp, path)
+        return True
+    except Exception:  # noqa: BLE001 - trimming is an aid; the untrimmed file is still valid
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _stamp(p: Path) -> list | None:
+    try:
+        st = p.stat()
+        return [st.st_size, st.st_mtime_ns]
+    except OSError:
+        return None
+
+
+def trim_files(paths, registry: Path, *, workers: int = 4,
+               cancel: Callable[[], bool] | None = None) -> int:
+    """Trim every file in ``paths`` not yet recorded in ``registry`` (name → [size, mtime_ns]
+    AFTER trimming); records the ones done. Returns how many were cut/checked this call.
+    Off with VIZSUP_TRIM_TTS=0."""
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    if os.environ.get("VIZSUP_TRIM_TTS", "1") == "0":
+        return 0
+    try:
+        done = json.loads(registry.read_text(encoding="utf-8"))
+        done = done if isinstance(done, dict) else {}
+    except (OSError, ValueError):
+        done = {}
+    todo = [p for p in map(Path, paths) if p.exists() and done.get(p.name) != _stamp(p)]
+    if not todo:
+        return 0
+
+    def one(p: Path):
+        if cancel and cancel():
+            return p, False
+        return p, trim_silence(p)
+
+    n = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        for p, ok in ex.map(one, todo):
+            if ok:
+                done[p.name] = _stamp(p)
+                n += 1
+    try:
+        atomic_write_text(registry, json.dumps(done), encoding="utf-8")
+    except OSError:
+        pass
+    return n
 
 
 def load_overrides(job: Job) -> list[dict]:
@@ -119,6 +244,31 @@ def _line_voices(tts, ov: list[dict], n: int, voice: str | None, by_gender: bool
 
 
 def synthesize(
+    job: Job,
+    *,
+    provider: str = "edge",
+    voice: str | None = None,
+    rate: str | None = None,
+    log: Callable[[str], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
+    progress: Callable[[int, int], None] | None = None,
+    voice_by_gender: bool = False,
+    trim: bool = True,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> list[tuple[Cue, Path]]:
+    """One segment per dubbed line (see ``_synthesize``), then the silence around each one's
+    speech is cut (``trim``; the module docstring says why) — cached segments of older runs
+    included. ``progress(done, total)``: lines ready so far (cache hits included)."""
+    segments = _synthesize(job, provider=provider, voice=voice, rate=rate, log=log, cancel=cancel,
+                           progress=progress, voice_by_gender=voice_by_gender, _sleep=_sleep)
+    if trim and segments:                 # (not cancel-aware on purpose: it takes seconds)
+        n = trim_files([seg for _c, seg in segments], job.tts_dir / TRIM_FILE)
+        if log and n:
+            log(f"✂ Cắt khoảng lặng đầu / cuối của {n} đoạn giọng đọc")
+    return segments
+
+
+def _synthesize(
     job: Job,
     *,
     provider: str = "edge",
