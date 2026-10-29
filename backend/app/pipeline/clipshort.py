@@ -353,7 +353,7 @@ def make(parent: Job, start: float, end: float, hook: str, storage: Path, *,
             {"id": child.id, "url": child.url, "opts": {}, "stage": "await_edit",
              "title": md["title"], "platform": md.get("platform")}, ensure_ascii=False, indent=2),
             encoding="utf-8")
-        for name in ("style.json", "region.json", "brief.json", "series_link.json"):
+        for name in ("style.json", "hardsub_region.json", "context_brief.json", "series_link.json"):
             if (parent.work_dir / name).exists():
                 shutil.copy2(parent.work_dir / name, child.work_dir / name)
         reused = _reuse_tts(parent, child, kept)
