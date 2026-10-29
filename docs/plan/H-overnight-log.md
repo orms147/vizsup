@@ -208,3 +208,4 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 07:03 — idle check.
 - 07:29 — idle check (07:03 push failed: no network; retried here).
 - 08:03 — idle check.
+- 08:29 — idle check.
