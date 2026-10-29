@@ -278,3 +278,9 @@ Auto-continue: cron 13,43 mỗi giờ.
   10 voices with Vietnamese labels. Item 7: removed scratch tts_eval_venv (671 MB) + small test dirs.
 - 23:57 — sessions restarted by the owner; sent full briefs: sesion 1 → feat/dub-fit (T1, C2,
   T2 study); sesion 2 → feat/shorts (S1, S2, S3). Cron da9b70b1 at :13/:43.
+- 00:01 — sesion 1 (T1) root cause: the "too long" lines are mostly SILENCE — every edge-tts
+  segment carries ~0.21 s lead + ~0.66 s tail; assemble speeds up / shifts by it. Replaying the real
+  durations: flagged 167/25/68/40/27 → 2/0/2/0/0 and trim 57/5.3/33/12/10 s → 5.5/0.5/2.5/0.7/1.8 s on
+  eps 1–5/6/7/8/9 if the silence is cut. Approved: trim lead/tail silence per segment in tts.py (+
+  registry for cached segments) and re-calibrate fit_estimate to speech-only; asked to cover the dub-
+  window cache key, never-eat-speech guards, batch/VieNeu/commentary paths, and before/after mp4s.
