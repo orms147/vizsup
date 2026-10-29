@@ -56,11 +56,12 @@ class Profile:
     style: dict = field(default_factory=dict)
     render: dict = field(default_factory=dict)
     pronounce: dict[str, str] = field(default_factory=dict)
+    short: dict = field(default_factory=dict)       # the "Short" preset's settings (shorts.learn)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "match": self.match, "glossary": self.glossary,
                 "characters": self.characters, "brief": self.brief, "style": self.style,
-                "render": self.render, "pronounce": self.pronounce}
+                "render": self.render, "pronounce": self.pronounce, "short": self.short}
 
     @property
     def terms(self) -> int:
@@ -99,7 +100,8 @@ def _from_dict(slug: str, d: dict) -> Profile:
                    brief=str(d.get("brief") or ""),
                    style=d["style"] if isinstance(d.get("style"), dict) else {},
                    render=d["render"] if isinstance(d.get("render"), dict) else {},
-                   pronounce=_clean_map(d.get("pronounce")))
+                   pronounce=_clean_map(d.get("pronounce")),
+                   short=d["short"] if isinstance(d.get("short"), dict) else {})
 
 
 def load(slug: str) -> Profile | None:
