@@ -212,3 +212,15 @@ the running app). Branch: `api-optimization` (push allowed, never `main`, never 
 - 09:03 — idle check.
 - 09:20 — owner (morning): approved merging into main; one voice is enough → voice guess
   made opt-in (950704c); auto-continue cron 9e08612f deleted. Full suite 1490 passed.
+- 09:49 — owner: black windows flashing during a download. Cause: the owner used MY demo window
+  (left open, started with pythonw.exe → no console) — every ffmpeg / Demucs call opened a console
+  window; the app itself kept running (minimised). Fixed for real (a packaged build has no console
+  either): app/winproc.py adds CREATE_NO_WINDOW to every child process when the app has no console
+  → f367353 (+ "Đoán giọng nam/nữ" switch in Tùy chọn, off by default). main fast-forwarded too.
+- 09:49 — voice test (owner asked): installed **vieneu 3.8.3** and **piper-tts 1.8.0** into a
+  SEPARATE scratch venv (scratchpad/tts_eval_venv) — NOT into backend/.venv; models in the HF cache
+  (VieNeu v3 Turbo ONNX + MOSS tokenizer) and piper vi_VN-vais1000-medium.onnx (63 MB) in scratch.
+  VieNeu has 25 preset voices (m/f, Bắc/Trung/Nam), CPU 0.3–1.5 s per line. Whisper re-read CER on
+  6 real lines: edge HoaiMy 0.9 %, NamMinh 0.0 %; best VieNeu Thiền Tâm Đức 0 %, Đức Trí / Kim Thanh
+  0.9 %, Mai Anh / Minh Đức / Quỳnh Anh / Quốc Tuấn 1.8 %; worst Thái Sơn 40 %; Piper 6.1 %.
+  Listening page: scratchpad/tts_eval/nghe_thu.html. Spend: Whisper ≈ $0.02.
