@@ -33,7 +33,7 @@ LETTERBOX_BELOW = 0.6           # picture height / canvas height under which the
 SIZE_MAX = 120                  # .ass font units (1080 canvas)
 
 DEFAULT_SHORT = {"platform": "tiktok", "frame": "tiktok", "tiktok_fill": "blur",
-                 "episode_card": {"on": True}}
+                 "episode_card": {"on": True}, "canvas_text": True, "bar_subs": True}
 
 
 def _canvas(frame: str, pic: tuple[int, int] | None, res: str) -> tuple[int, int] | None:
@@ -106,7 +106,7 @@ def learn(work_dir: Path, opts: dict) -> bool:
         return False
     keep = ("platform", "frame", "tiktok_fill", "res", "preset", "episode_card", "cover_mode",
             "credit_overlay", "ai_label", "audio_mode", "orig_volume", "dub_volume", "voice", "rate",
-            "watermark")
+            "watermark", "canvas_text", "bar_subs")
     p.short = {"platform": opts.get("safe_caption") or "tiktok",
                **{k: opts[k] for k in keep if k in opts and k != "platform"}}
     series.save(p)
