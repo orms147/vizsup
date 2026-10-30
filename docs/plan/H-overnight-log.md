@@ -292,3 +292,23 @@ Auto-continue: cron 13,43 mỗi giờ.
   burned before the 9:16 composite) → sesion 2: Short layout v2 (canvas text layer in the bars).
   Fixed a misleading "nền hộp" note (worker).
 - 00:26 — check: sesion 1 has 236a7a8 (silence trim + fit re-calibration) and 86684c4 (C2 caching) locally, report pending; sesion 2 pushed feat/shorts-layout up to 1601af5 (canvas text layer, bars options, clipshort file-copy fix), report pending. Nothing merged yet.
+- ~00:30–08:16 — this coordinator session was cut off (the machine/app restarted overnight); the
+  session-only cron died with it, and both worker sessions ended. Nothing ran in that window.
+- 08:25 — resumed. Merged feat/dub-fit (sesion 1, reported before the cut) → 5937bc0, 1564 passed:
+  * T1: TTS segments carry ~0.21 s lead + ~0.65 s tail silence → trimmed per segment (relative threshold,
+    ±0.05/0.12 s, never < 0.15 s, soft-fail, cached segments trimmed once via tts/trimmed.json); fit model
+    re-calibrated to speech-only at the project's real speed. Eps 6/7/8/9 "QUÁ DÀI" 25/68/40/27 → 0/0/0/1,
+    cut/shift 5.5/34/12/10 s → 0.4/1.6/0.1/0.8 s; eps 1–5 167 → 2, 57 s → 5.5 s. Re-translation A/B: auto-
+    shortened lines 32 → 11, 18/20 sampled lines keep content the old budget dropped. The dub now starts
+    on the cue (~0.2 s earlier than older renders).
+  * C2: prompts already cache-friendly (stable prefix; test added); usage.json records cached tokens.
+    Saving ≈ $0.0003/episode — nothing more to gain.
+  * T2 (study, not shipped): audio-LLM speaker labels agree 94 % with pitch, find the system voice, but
+    fail on short turn-change replies (ep 9 line 4) — not worth the call.
+  * sesion 1 spend ≈ $0.022.
+- 08:25 — merged feat/shorts-layout (sesion 2; its report was lost in the cut — reviewed myself)
+  → 1506a50, 1578 passed: canvas.ass on the composed 9:16 frame (hook + bigger chip in the top bar, "Xem
+  full tập N · <watermark>" in the bottom bar, dialogue in the bottom bar above TikTok's strip), options
+  "Chữ lớn trên nền hai bên" / "Phụ đề ở dải nền phía dưới" (Short preset turns them on); clipshort now
+  copies hardsub_region.json + context_brief.json. Re-rendered the ep-9 Short copy: layout right (frames
+  scratchpad/ui/short_hook2/mid2/end2.png); with the silence trim its "QUÁ DÀI" lines 19 → 1, sped 20 → 5.
