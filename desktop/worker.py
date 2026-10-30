@@ -673,6 +673,8 @@ class PipelineWorker(QObject):
             fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
             episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card
             safe_caption=o.get("safe_caption"),    # Short: subtitles above the platform's UI
+            canvas_text=bool(o.get("canvas_text")),   # 9:16: chip / hook / end card in the bars
+            bar_subs=bool(o.get("bar_subs")),         # … and the dialogue in the bottom bar
         )
         review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
         self.progress.emit(1.0, "Hoàn tất")

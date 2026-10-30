@@ -181,3 +181,29 @@ def test_a_native_vertical_source_gets_safe_captions_by_itself(qapp, storage):
         time.sleep(0.02)
     assert not v.safe_cb.isChecked()                          # landscape: nothing automatic
     v.close()
+
+
+def test_short_preset_turns_on_the_bar_text_and_it_only_shows_in_the_9_16_frame(qapp, storage):
+    v = _view(qapp)
+    assert not v.canvas_cb.isVisibleTo(v) and v.collect_opts()["canvas_text"] is False
+    v.short_btn.click()
+    assert v.canvas_cb.isVisibleTo(v) and v.bars_cb.isVisibleTo(v)
+    o = v.collect_opts()
+    assert o["canvas_text"] is True and o["bar_subs"] is True
+    v.bars_cb.setChecked(False)
+    assert v.collect_opts()["bar_subs"] is False and v.collect_opts()["canvas_text"] is True
+    v.canvas_cb.setChecked(False)                          # no canvas layer → no bar dialogue either
+    assert not v.bars_cb.isEnabled() and v.collect_opts()["bar_subs"] is False
+    v.frame.setCurrentIndex(v.frame.findData("source"))     # back to the source frame: both off
+    o = v.collect_opts()
+    assert not v.canvas_cb.isVisibleTo(v) and o["canvas_text"] is False and o["bar_subs"] is False
+    v.close()
+
+
+def test_the_series_remembers_the_bar_text_choice(storage):
+    ep = _job(storage, "e1", "第1集 | 《末日校车》01 开头")
+    series.resolve(ep)
+    batch.save_opts(ep.work_dir, {"short": True, "frame": "tiktok", "canvas_text": True,
+                                  "bar_subs": False, "safe_caption": "tiktok"})
+    cfg = shorts.settings_for(ep.work_dir)
+    assert cfg["canvas_text"] is True and cfg["bar_subs"] is False

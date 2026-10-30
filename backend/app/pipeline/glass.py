@@ -217,8 +217,10 @@ def _cn_chars(cn: list[Cue], start: float, end: float) -> int:
 
 def plan(cues: list[Cue], *, W: float, H: float, font: str, size: int, style: dict | None,
          cue_styles: dict[int, dict] | None = None, cn_cues: list[Cue] | None = None,
-         region: dict | None = None, hardsubs: bool = True) -> list[dict]:
-    """One glass event per subtitle: ``{start, end, rects: [[x, y, w, h, r], …]}``
+         region: dict | None = None, hardsubs: bool = True,
+         with_text: bool = True) -> list[dict]:
+    """One glass event per subtitle (``with_text=False``: the Vietnamese is drawn elsewhere — in the
+    9:16 bars — so only the Chinese band is glassed): ``{start, end, rects: [[x, y, w, h, r], …]}``
     normalized to the W×H picture (r = corner radius / H). The Vietnamese pill and
     the Chinese band merge into one rounded rect when they touch; a subtitle moved
     away from the hardsubs gets two. Short gaps are bridged. Pure."""
@@ -235,15 +237,19 @@ def plan(cues: list[Cue], *, W: float, H: float, font: str, size: int, style: di
         st = {**base, **ov} if ov else base
         tx, ty, tw, th = text_rect(text, st, W=W, H=H, font=font, size=size)
         vi = (tx - pad_x, ty - pad_y, tw + 2 * pad_x, th + 2 * pad_y)
-        rects = [vi]
+        rects = [vi] if with_text else []
         if hardsubs or region:
             cr = cn_rect(_cn_chars(cn, c.start, c.end), W=W, H=H, region=region)
             cr = (cr[0] - pad_x / 2, cr[1] - pad_y / 2, cr[2] + pad_x, cr[3] + pad_y)
             gap = max(cr[1] - (vi[1] + vi[3]), vi[1] - (cr[1] + cr[3]))
-            if gap < 0.35 * px:
+            if not with_text:
+                rects = [cr]
+            elif gap < 0.35 * px:
                 rects = [_union(vi, cr)]
             else:
                 rects = [vi, cr]
+        if not rects:
+            continue
         out = []
         for r in rects:
             x, y, w, h = _clamp(r, W, H)

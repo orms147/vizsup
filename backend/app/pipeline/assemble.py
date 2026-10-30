@@ -738,6 +738,7 @@ def _build_render(
     glass_look: dict | None = None,  # glass.look(style): white tint + blur strength
     fill: str = "blur",        # 9:16 bars: "blur" (the picture, blurred, behind) | "black"
     loudness: bool = True,     # the final mix at FINAL_LUFS — episodes join without jumps
+    canvas_ass: str | None = None,   # 9:16: a second .ass (PlayRes = canvas) burned AFTER the bars
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -951,6 +952,9 @@ def _build_render(
         else:
             parts.append(f"[v]pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color=black[vt]")
         vmap = "[vt]"
+        if canvas_ass:      # text in the bars (hook, chip, end card, dialogue): on the whole frame
+            parts.append(f"[vt]ass={canvas_ass}{_ass_fonts(wd)}[vc]")
+            vmap = "[vc]"
     if preview:                     # same graph, scaled down after the subs are burned
         parts.append(f"{vmap}scale=-2:640[vp]")
         vmap = "[vp]"
@@ -992,6 +996,8 @@ def assemble(
     res: str = "source",                 # "source" | "1080" | "720" | "480" (short side)
     preset: str | None = None,           # "light" | "balanced" | "sharp" (default sharp)
     safe_caption: str | None = None,     # platform key: subtitles above its bottom UI (shorts.place)
+    canvas_text: bool = False,           # 9:16 + bars: chip / hook / end card on the CANVAS (canvas_text.py)
+    bar_subs: bool = False,              # … and the dialogue in the bottom bar (needs canvas_text)
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
@@ -1034,15 +1040,48 @@ def assemble(
     is_short = clipshort.info(job) is not None
     if is_short and episode_card:        # a cut Short ends with "Xem full tập N", not "Còn tiếp"
         episode_card = {**episode_card, "end": ""}
-    tags = [*(overlays or []), *disclosure.episode_events(
-        episode_card, compilation._job_title(job.work_dir) if episode_card else "", out_dur),
-        *clipshort.events(job, out_dur)]
+    src_size = probe_size(job.source_video) if job.source_video.exists() else None
+    burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
+    # 9:16 with bars: a second layer on the canvas carries the big text (chip, hook, end card and,
+    # if asked, the dialogue); without bars — or without the option — nothing here changes
+    clay = canvas_layer = None
+    if canvas_text and frame == "tiktok" and src_size:
+        from app.pipeline import canvas_text as ct
+
+        clay = ct.layout(tiktok_canvas("source" if preview else res), burn, safe_caption or "tiktok")
+    title = compilation._job_title(job.work_dir) if (episode_card or is_short) else ""
+    if clay is not None:
+        chip, card_end = (disclosure.card_texts(episode_card, title) if episode_card else ("", ""))
+        sinfo = clipshort.info(job)
+        end_txt = clipshort.end_text(sinfo) if sinfo else card_end
+        if sinfo and watermark and watermark.get("on") and str(watermark.get("text") or "").strip():
+            end_txt += " · " + str(watermark["text"]).strip()
+        use_bar = bool(bar_subs and clay.bottom)
+        canvas_layer = dict(chip=chip, hook=(sinfo or {}).get("hook", ""), end=end_txt,
+                            duration=out_dur, cues=cues_for_subs if use_bar else None,
+                            style=style, end_seconds=(ct.END_SECONDS if sinfo else 4.0))
+        tags = list(overlays or [])
+        if use_bar and mode == "box":        # the opaque box lived under the dialogue: use the band
+            mode = "blur"
+        bar_cues = cues_for_subs if use_bar else None
+        if use_bar:
+            cues_for_subs = []
+    else:
+        bar_cues = None
+        tags = [*(overlays or []), *disclosure.episode_events(
+            episode_card, title if episode_card else "", out_dur),
+            *clipshort.events(job, out_dur)]
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark)
     _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
-    src_size = probe_size(job.source_video) if job.source_video.exists() else None
-    burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
+    canvas_name = None
+    if clay is not None and canvas_layer is not None:
+        from app.pipeline import canvas_text as ct
+
+        name = "preview_canvas.ass" if preview else "canvas.ass"
+        if ct.write(job.work_dir / name, clay, font=font, **canvas_layer):
+            canvas_name = name
     glass_band = None
     mask_name = "preview_glass.ass" if preview else glass.MASK_FILE
     if mode == "glass":
@@ -1050,9 +1089,11 @@ def assemble(
         # normalized, so it fits whatever size the picture is scaled to)
         W, H = 1080.0 * burn[0] / burn[1], 1080.0
         region, hardsubs, cn = glass.job_context(job)
-        events = glass.plan([*cues_for_subs, *note_subs], W=W, H=H, font=font, size=size,
+        events = glass.plan([*(bar_cues if bar_cues is not None else cues_for_subs), *note_subs],
+                            W=W, H=H, font=font, size=size,
                             style=style, cue_styles=cue_styles, cn_cues=cm.shift_cues(cn, ins),
-                            region=region, hardsubs=hardsubs)
+                            region=region, hardsubs=hardsubs,
+                            with_text=bar_cues is None)   # dialogue in the bar: glass the Chinese only
         glass_band = glass.band(events)
         if glass_band:
             glass.write_mask(events, job.work_dir / mask_name, glass_band, W=W, H=H)
@@ -1081,7 +1122,7 @@ def assemble(
                             # the exact size only for a real downscale: a source kept at its
                             # own (maybe odd, VP9) size keeps the even-rounding scale=-2
                             burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
-                            glass_look=glass.look(style), fill=fill)
+                            glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]

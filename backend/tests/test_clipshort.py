@@ -137,6 +137,8 @@ def _parent(base: Path, *, approved=True, source=True, title="第8集 | 《末�
     write_srt(cs, j.vi_srt)
     write_srt([Cue(c.index, c.start, c.end, f"中文{c.index}") for c in cs], j.cn_srt)
     (j.work_dir / "style.json").write_text('{"font": "Be Vietnam Pro"}', encoding="utf-8")
+    (j.work_dir / "hardsub_region.json").write_text('{"x": 0, "y": 0.8, "w": 1, "h": 0.15}', encoding="utf-8")
+    (j.work_dir / "context_brief.json").write_text('{"brief": "x"}', encoding="utf-8")
     if source:
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                         "color=c=blue:s=320x180:r=5:d=100", "-f", "lavfi", "-i",
@@ -182,7 +184,8 @@ def test_make_cuts_the_video_shifts_the_lines_and_reuses_tts(tmp_path):
     assert md["title"].endswith("· Short 1") and "末日校车" in md["title"] and "group" not in md
     assert md["uploader"] == "某人"
     assert json.loads((child.work_dir / "job.json").read_text(encoding="utf-8"))["id"] == child.id
-    assert (child.work_dir / "style.json").exists()
+    for name in ("style.json", "hardsub_region.json", "context_brief.json"):   # the cover needs the band
+        assert (child.work_dir / name).exists(), name
     # TTS reuse: parent lines 5, 6, 7 that fall inside → new indexes, same hash
     new_idx = {k: v for k, v in json.loads(
         (child.tts_dir / "manifest.json").read_text(encoding="utf-8")).items()}
