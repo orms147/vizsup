@@ -312,3 +312,4 @@ Auto-continue: cron 13,43 mỗi giờ.
   "Chữ lớn trên nền hai bên" / "Phụ đề ở dải nền phía dưới" (Short preset turns them on); clipshort now
   copies hardsub_region.json + context_brief.json. Re-rendered the ep-9 Short copy: layout right (frames
   scratchpad/ui/short_hook2/mid2/end2.png); with the silence trim its "QUÁ DÀI" lines 19 → 1, sped 20 → 5.
+- 08:55 — idle check: night-2 plan done (all merged, main = api-optimization, 1578 passed); waiting for the owner (approve eps 1–8, re-render 1–9).
