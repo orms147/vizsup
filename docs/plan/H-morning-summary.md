@@ -60,3 +60,46 @@ Không cài thư viện mới vào dự án. Không sửa dự án thật — m�
 - Merge `api-optimization` vào `main` (để danh mục model tự cập nhật chạy được).
 - Gửi lại link tập 9 thật nếu muốn thử lại "thêm tập".
 - "Giọng theo nhân vật": để mặc định tắt cho tới khi đo xong độ chính xác (đang làm).
+
+---
+
+# Tóm tắt đêm 29→30/10 (đêm 2)
+
+Nhánh `api-optimization` = `main` (eb34a4b+). Bộ test: **1578 qua**, ruff sạch. Chi phí OpenRouter từ
+sáng 29/10 tới sáng 30/10: **≈ $0.03** (trần $2–3). Thư viện mới cài vào app: `vieneu 3.8.3` (cài
+`--no-deps`), `sea-g2p`, `soundfile`, `soxr`, `kaldi-native-fbank` — ghi trong log.
+⚠ Khoảng 00:30–08:16 phiên điều phối bị ngắt (máy/ứng dụng khởi động lại) nên đêm qua dừng sớm;
+sáng nay tôi đã nối lại, duyệt và merge nốt phần 2 session đã làm xong.
+
+## Cần bạn làm khi dậy
+1. **Duyệt 4 tập 1–5, 6, 7, 8 trong Thư viện** (đã có video dựng sẵn; hệ thống không cho tôi tự duyệt
+   hộ — đúng). Tập 9 + video ghép 1–8, 1–9 đã ở Thư viện.
+2. **Nên dựng lại tập 1–9 rồi ghép lại** (giọng đã có sẵn nên nhanh): bản dựng mới cắt khoảng lặng của
+   giọng đọc → tập 1–5 từ 167 câu "quá dài" còn 2, nội dung không còn bị cắt (57 s → 5 s). Nghe so sánh
+   trước/sau (20 câu đầu tập 9) — file trong thư mục tạm của session 1:
+   `C:\Users\Admin\AppData\Local\Temp\claude\c--Work-AI-vizsup\93824f1b-178d-4cf8-ad43-854a972619b1\scratchpad\fit\listen\`
+   (`ep9_first20_before_padded.mp4` / `ep9_first20_after_trimmed.mp4`). Giọng giờ vào đúng lúc phụ đề
+   hiện (sớm hơn ~0,2 s so với bản cũ).
+3. Thử **Cài đặt → "Giọng đọc trên máy (VieNeu)"** (đã cài sẵn) và **màn Dựng → danh sách giọng**.
+
+## Đã làm
+- **Dịch / lồng tiếng vừa khe:** nguyên nhân chính của câu "quá dài" là ~0,9 s im lặng edge-tts chèn
+  quanh mỗi câu, không phải bản dịch. Đã cắt + tính lại độ dài theo đúng tốc độ bộ phim. Bản dịch cũng
+  ít bị rút gọn oan hơn (32 → 11 câu), giữ đủ ý hơn.
+- **Chi phí:** prompt đã xếp đúng để được tính rẻ phần lặp; mỗi tập dịch chỉ ~$0.0026 — không còn gì đáng
+  tối ưu. Nhãn người nói bằng AI: đã thử, không đáng thêm (sai đúng chỗ cần nhất).
+- **Short (màn dọc):**
+  - Màn Dựng → **"Cài sẵn Short (9:16)"**: nền mờ hai bên, phụ đề tránh vùng nút/caption của
+    TikTok/Reels/Shorts, **câu hook to ở dải trên**, **phụ đề to ở dải dưới**, "Xem full tập N" ở cuối.
+    Cài đặt nhớ theo bộ phim.
+  - Video gốc dọc: phụ đề tự tránh vùng che.
+  - Thư viện → ⋯ → **"Cắt Short (30–60 giây)"** từ tập đã duyệt: gợi ý đoạn có hook (tự động hoặc AI),
+    tạo dự án Short mới dùng lại giọng đã đọc, **cần bạn duyệt riêng**.
+  - Ảnh thử (bản sao tập 9): `…\8f845e3a-…\scratchpad\ui\short_hook2.png`, `short_mid2.png`, `short_end2.png`.
+- **VieNeu:** nút cài trong Cài đặt, báo khi tải model lần đầu, dùng được cho Bình luận.
+- **"Cần dựng lại"** giờ so nội dung phụ đề đã dựng, không so giờ file.
+
+## Gợi ý tiếp theo
+- Phụ đề Short nhảy theo từng chữ (karaoke) — rất hợp TikTok.
+- Câu hook nên là câu "nhử" khác câu thoại đầu (hiện có thể trùng); sửa được trong hộp thoại Cắt Short.
+- Bản cài đặt (Inno Setup) có chữ ký + tự tải bản mới.
