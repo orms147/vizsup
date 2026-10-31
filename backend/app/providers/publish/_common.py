@@ -22,6 +22,7 @@ import base64
 import hashlib
 import html
 import json
+import logging
 import secrets
 import threading
 import time
@@ -38,6 +39,20 @@ from app.fsutil import atomic_write_text
 
 TIMEOUT = httpx.Timeout(60.0, connect=20.0)
 _sleep = time.sleep            # tests patch this to a no-op (retry back-off)
+
+
+class _NoQueryInLogs(logging.Filter):
+    """httpx logs every request URL at INFO; some documented calls carry a secret in the
+    query (Facebook's token exchange). Should anyone turn INFO logging on, the query is cut."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(str(a).split("?", 1)[0] if isinstance(a, httpx.URL) else a
+                                for a in record.args)
+        return True
+
+
+logging.getLogger("httpx").addFilter(_NoQueryInLogs())
 
 
 class PublishError(Exception):

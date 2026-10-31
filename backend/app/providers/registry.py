@@ -25,6 +25,7 @@ from app.providers.tts.edge import EdgeTTS
 from app.providers.tts.fpt import FptTTS
 from app.providers.tts.google import GoogleTTS
 from app.providers.tts.vieneu import VieNeuTTS
+from app.providers.publish.facebook import FacebookPublisher
 from app.providers.publish.folder import FolderPublisher
 from app.providers.publish.youtube import YouTubePublisher
 
@@ -60,6 +61,7 @@ PUBLISHERS = {
     for p in (
         FolderPublisher(),      # always there: export a post package, post by hand
         YouTubePublisher(),
+        FacebookPublisher(),
     )
 }
 
