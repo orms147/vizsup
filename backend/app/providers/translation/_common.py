@@ -25,6 +25,11 @@ _FORMAT_RULES = (
     "  before the speaker says it), and never push a line's content into the next one.\n"
     "- Inside a line keep the Chinese clause order: where the Chinese line has clauses separated\n"
     "  by ，/。/？/！, write the Vietnamese clauses in the same order, separated the same way.\n"
+    "- Never fall behind or run ahead: the names, numbers and key nouns of line n's Vietnamese\n"
+    "  come from Chinese line n. A line may repeat the tail of the previous one — that part was\n"
+    "  already rendered there; translate only what is new in this line.\n"
+    "- A line whose Chinese is \"—\", empty, or exactly the previous line again: output `n| …`\n"
+    "  and fill it with nothing from other lines.\n"
 )
 
 _TRANSLATION_RULES = (
@@ -48,6 +53,18 @@ _TRANSLATION_RULES = (
     "- Keep numbers, prices and units accurate (元 → tệ). Keep English words from the source.\n"
     "- Laughter / onomatopoeia → natural Vietnamese (哈哈哈 → Haha).\n"
     "- Keep proper nouns / brand names consistent across all lines.\n"
+    "- Speaker first: decide who speaks to whom before choosing pronouns; choose by the\n"
+    "  listener's gender and relation — never \"anh\"/\"chú\" for a woman or girl. Use matching\n"
+    "  pairs only (tao–mày, tôi–cô/cậu/anh, em–anh, tớ–cậu); never mix them (tao–cô). Never add\n"
+    "  kinship words (con/chú/cháu/bác) the Chinese does not imply.\n"
+    "- The Chinese comes from OCR / speech recognition and can be wrong: a line that reverses\n"
+    "  what the speaker plainly means (我同意 in the middle of an objection — a dropped 不), or a\n"
+    "  name written with a homophone, is translated the way the surrounding lines and the\n"
+    "  glossary make it right.\n"
+    "- The voice-over reads every character: never write abbreviations it cannot say (ĐM, vcl,\n"
+    "  vl …) — use the spoken words (Mẹ kiếp, Chết tiệt …). A known pop-culture nickname keeps\n"
+    "  its known name (祖国人 → Homelander).\n"
+    "- A sentence that continues from the previous line starts in lowercase.\n"
 )
 
 SYSTEM_PROMPT = (
@@ -62,7 +79,12 @@ REFINE_SYSTEM_PROMPT = (
     "first-pass Vietnamese draft. Rewrite each draft into the best natural spoken Vietnamese,\n"
     "faithful to the Chinese meaning: fix mistranslations, wrong or inconsistent xưng hô, and\n"
     "stiff phrasing. If a draft line is already good, keep it. If a draft line is annotated\n"
-    "with a word budget, also shorten it to fit while keeping the meaning.\n\n"
+    "with a word budget, also shorten it to fit while keeping the meaning.\n"
+    "VERIFY BEFORE POLISHING: check that the draft's names, numbers and key nouns belong to\n"
+    "THIS line's Chinese. A draft that belongs to a neighbouring line (it lags or runs ahead)\n"
+    "is discarded and the Chinese line translated afresh — never polish a mismatched draft.\n"
+    "Do not add jokes, emphasis or details the Chinese lacks; keep a joke's target (whose\n"
+    "sausage, whose brain) when the Chinese has one.\n\n"
     + _FORMAT_RULES + "\n" + _TRANSLATION_RULES
 )
 

@@ -46,7 +46,7 @@ FILE = "series.json"
 LINK = "series_link.json"
 LEARNED = "series_learned.json"
 PREV_LINES = 8
-SHEET_CHARS = 1500
+SHEET_CHARS = 3000          # room for a brief + ~12 characters with their xưng hô
 
 _TITLE_NAME = re.compile(r"《([^《》]{1,40})》")
 
