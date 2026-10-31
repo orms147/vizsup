@@ -1,13 +1,15 @@
 """Cài đặt (v2, appdesign/v2 "v2 — Cài đặt"): a full page, not a dialog. Left nav
-Khóa API / Tải video / AI và mô hình / Đường dẫn; its own Lưu / Hủy thay đổi
-(the editor's "Đã lưu" never means settings were saved). Everything is written to
-the repo-root .env and applied to the live settings object.
+Khóa API / Tải video / AI và mô hình / Đường dẫn / Đăng video / Kiểm tra; its own Lưu /
+Hủy thay đổi (the editor's "Đã lưu" never means settings were saved). Everything is written
+to the repo-root .env and applied to the live settings object.
 
-Network calls (Kiểm tra kết nối, tải danh sách model) run on a daemon thread
-so the UI never freezes.
+Network calls (Kiểm tra kết nối, tải danh sách model, Kết nối tài khoản đăng video) run on
+a daemon thread so the UI never freezes.
 """
 from __future__ import annotations
 
+import threading
+import webbrowser
 from datetime import date
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -36,7 +39,7 @@ from desktop.ui_thread import connect_on_ui, emit_quietly, guarded, spawn
 from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
 from app.config import settings  # noqa: E402
 from app.doctor import run_checks  # noqa: E402
-from app.providers.registry import find_provider  # noqa: E402
+from app.providers.registry import find_provider, get_publisher  # noqa: E402
 from app.tools import cookie_age_days, update_edge_tts, update_ytdlp  # noqa: E402
 from app.fsutil import atomic_write_text
 
@@ -53,7 +56,32 @@ KEYS = [
     ("AZURE_SPEECH_KEY", "Azure Speech", "azure_speech_key", "azure"),
     ("STT_API_KEY", "Máy chủ STT riêng", "stt_api_key", "cloud_stt"),
 ]
-ATTR_BY_ENV = {env: attr for env, _n, attr, _p in KEYS}
+# The owner's OWN app credentials for posting (page "Đăng video"); the account tokens are
+# not here — "Kết nối" stores them in storage/_accounts/<platform>.json.
+# (env var, label, settings attr, publisher name, secret?)
+PUBLISH_KEYS = [
+    ("YOUTUBE_CLIENT_ID", "Client ID", "youtube_client_id", "youtube", False),
+    ("YOUTUBE_CLIENT_SECRET", "Client secret", "youtube_client_secret", "youtube", True),
+    ("FACEBOOK_APP_ID", "App ID", "facebook_app_id", "facebook", False),
+    ("FACEBOOK_APP_SECRET", "App secret", "facebook_app_secret", "facebook", True),
+    ("TIKTOK_CLIENT_KEY", "Client key", "tiktok_client_key", "tiktok", False),
+    ("TIKTOK_CLIENT_SECRET", "Client secret", "tiktok_client_secret", "tiktok", True),
+]
+PUBLISH_PLATFORMS = ("youtube", "facebook", "tiktok")
+# one line per platform: what an unaudited / test-mode app can do (J-publish-setup.md)
+PLATFORM_NOTES = {
+    "youtube": "Google Cloud ở chế độ Testing chỉ giữ kết nối 7 ngày — bấm “Publish app” (không "
+               "cần xác minh cho riêng bạn). Hạn mức ~100 video/ngày.",
+    "facebook": "App Meta ở chế độ Development thì bài đăng chỉ người có vai trò trong app thấy — "
+                "chuyển app sang Live. Reels 3–90 giây, tối đa 30 Reels/24 giờ.",
+    "tiktok": "App chưa audit: chỉ đăng “Chỉ mình tôi” lên tài khoản riêng tư, tài khoản công khai "
+              "thì vizsup gửi bản nháp vào hộp thư TikTok để bạn tự đăng.",
+}
+PASTE_PROMPT = ("Trình duyệt vừa mở trang đăng nhập Facebook. Đăng nhập, chọn Trang và bấm Tiếp tục —\n"
+                "Facebook chuyển tới trang “Success”. Chép TOÀN BỘ địa chỉ trên thanh địa chỉ\n"
+                "(có #access_token=…) rồi dán vào đây. Hoặc dán mã truy cập từ Graph API Explorer:")
+ATTR_BY_ENV = ({env: attr for env, _n, attr, _p in KEYS}
+               | {env: attr for env, _n, attr, _p, _s in PUBLISH_KEYS})
 KEY_ROLES = {
     "DEEPSEEK_API_KEY": "Bản nháp và tinh chỉnh", "ANTHROPIC_API_KEY": "Tinh chỉnh câu tiếng Việt",
     "ZHIPU_API_KEY": "Dịch bản nháp", "GEMINI_API_KEY": "Đọc ngữ cảnh và dịch",
@@ -111,7 +139,7 @@ OPTIONS = [
 OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 GROUPS = (("keys", "Khóa API", "KeyRound"), ("download", "Tải video", "Download"),
           ("ai", "AI và mô hình", "Sparkles"), ("paths", "Đường dẫn", "HardDrive"),
-          ("check", "Kiểm tra", "ShieldCheck"))
+          ("accounts", "Đăng video", "Upload"), ("check", "Kiểm tra", "ShieldCheck"))
 # doctor status → (icon, theme colour) for the Kiểm tra rows
 _CHECK_STYLE = {"ok": ("CircleCheck", "green"), "warn": ("TriangleAlert", "amber"),
                 "fail": ("X", "red"), "info": ("CircleHelp", "muted")}
@@ -184,6 +212,8 @@ class SettingsView(QWidget):
         self._badges: dict[str, QLabel] = {}
         self._buttons: list[QPushButton] = []
         self._jobs: list[tuple] = []  # (thread, _NetWorker) — the worker stays referenced until done
+        self._acct: dict[str, dict] = {}            # publisher name → its card's widgets
+        self._acct_cancel: threading.Event | None = None   # the browser sign-in being waited on
         self._dirty = False
 
         root = QVBoxLayout(self)
@@ -240,7 +270,8 @@ class SettingsView(QWidget):
         self._stack = QStackedLayout(stack_host)
         self._stack.addWidget(self._scroll(self._keys_page()))
         for key, _t, _i in GROUPS[1:]:
-            page = self._check_page() if key == "check" else self._options_page(key)
+            page = {"check": self._check_page,
+                    "accounts": self._accounts_page}.get(key, lambda k=key: self._options_page(k))()
             self._stack.addWidget(self._scroll(page))
         right.addWidget(stack_host, 1)
         foot = QFrame()
@@ -716,6 +747,215 @@ class SettingsView(QWidget):
             lbl.setText(f"Tệp cookie: {days} ngày tuổi.")
             lbl.setStyleSheet(f"color:{V2['muted']};")
 
+    # --- Đăng video: link YouTube / Facebook / TikTok accounts (providers/publish) -------
+    def _accounts_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 4, 12, 12)
+        v.setSpacing(12)
+        v.addWidget(label("Tài khoản đăng video", "h1"))
+        v.addWidget(label("Nối kênh YouTube, Trang Facebook và TikTok một lần để vizsup tự đăng "
+                          "video đã dựng — qua API chính thức, bằng ứng dụng do chính bạn tạo; "
+                          "vizsup không bao giờ hỏi mật khẩu. Hướng dẫn từng bước: "
+                          "docs/plan/J-publish-setup.md.", "secondary", wrap=True))
+        for name in PUBLISH_PLATFORMS:
+            v.addWidget(self._account_card(name))
+        lock = QHBoxLayout()
+        lock.addWidget(icon_label("LockKeyhole", V2["muted"], 14))
+        lock.addWidget(label("Mã ứng dụng lưu trong .env; mã truy cập tài khoản lưu trong "
+                             "storage/_accounts trên máy này — không gửi đi đâu khác.", "small",
+                             wrap=True), 1)
+        v.addLayout(lock)
+        v.addStretch(1)
+        return page
+
+    def _account_card(self, name: str) -> QFrame:
+        pub = get_publisher(name)
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(8)
+        top = QHBoxLayout()
+        top.addWidget(label(pub.display_name, "h2"))
+        badge_w = badge("Chưa nối")
+        top.addWidget(badge_w, 0, Qt.AlignVCenter)
+        top.addStretch(1)
+        cancel = button("Hủy", "X", variant="ghost", small=True)
+        cancel.setVisible(False)
+        cancel.clicked.connect(self._cancel_account)
+        connect = button("Kết nối", "Link", variant="primary", small=True)
+        connect.clicked.connect(lambda _=False, n=name: self._connect_account(n))
+        drop = button("Ngắt kết nối", "Trash2", variant="ghost", small=True)
+        drop.clicked.connect(lambda _=False, n=name: self._disconnect_account(n))
+        self._buttons += [connect, drop]
+        for b in (cancel, connect, drop):
+            top.addWidget(b)
+        cl.addLayout(top)
+        status = label("", "small", wrap=True)
+        cl.addWidget(status)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        row = 0
+        for env, text, _attr, plat, secret in PUBLISH_KEYS:
+            if plat != name:
+                continue
+            edit = QLineEdit()
+            edit.setObjectName("mono")
+            edit.setPlaceholderText(f"Dán {text}…")
+            edit.textEdited.connect(self._mark_dirty)
+            if secret:
+                edit.setEchoMode(QLineEdit.Password)
+            name_lbl = label(text, "secondary")
+            name_lbl.setFixedWidth(96)              # the three cards' fields line up
+            grid.addWidget(name_lbl, row, 0)
+            grid.addWidget(edit, row, 1)
+            if secret:
+                reveal = icon_button("Eye", "Hiện / ẩn", checkable=True)
+                reveal.toggled.connect(
+                    lambda on, e=edit: e.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
+                grid.addWidget(reveal, row, 2)
+            self._fields[env] = edit
+            row += 1
+        grid.setColumnStretch(1, 1)
+        cl.addLayout(grid)
+        cl.addWidget(label(PLATFORM_NOTES[name], "small", wrap=True))
+        self._acct[name] = {"badge": badge_w, "status": status, "connect": connect,
+                            "drop": drop, "cancel": cancel}
+        return card
+
+    def _publish_creds(self, name: str) -> dict[str, str]:
+        return {env: self._fields[env].text().strip()
+                for env, _t, _a, plat, _s in PUBLISH_KEYS if plat == name}
+
+    def _account_status(self, name: str, text: str, color: str = "muted") -> None:
+        lbl = self._acct[name]["status"]
+        lbl.setText(text)
+        lbl.setStyleSheet(f"color:{V2[color]};")
+
+    def _refresh_accounts(self) -> None:
+        """Badge / status / buttons of every platform card from the stored accounts (local
+        files only — no network on the GUI thread)."""
+        for name, w in self._acct.items():
+            pub = get_publisher(name)
+            linked = pub.connected()
+            has_app = pub.available() or all(self._publish_creds(name).values())
+            hint = getattr(pub, "account_hint", lambda: "")()
+            b = w["badge"]
+            if linked:
+                b.setText("Đã nối")
+                b.setObjectName("badgeOk")
+                self._account_status(name, f"Đã nối: {pub.account_label() or '—'}"
+                                     + (f"\n{hint}" if hint else ""), "green")
+            elif not has_app:
+                b.setText("Chưa có mã ứng dụng")
+                b.setObjectName("badge")
+                self._account_status(name, "Nhập mã ứng dụng của bạn (xem hướng dẫn) rồi bấm "
+                                           "Kết nối.")
+            else:
+                b.setText("Chưa nối")
+                b.setObjectName("badgeWarn" if hint else "badge")
+                self._account_status(name, hint or "Chưa nối — bấm Kết nối để đăng nhập trong "
+                                                   "trình duyệt.", "amber" if hint else "muted")
+            b.style().unpolish(b)
+            b.style().polish(b)
+            w["connect"].setText("Kết nối lại" if linked else "Kết nối")
+            w["drop"].setVisible(linked)
+
+    def _connect_account(self, name: str) -> None:
+        pub = get_publisher(name)
+        creds = self._publish_creds(name)
+        if not all(creds.values()):
+            self._account_status(name, "Nhập đủ mã ứng dụng trước khi Kết nối.", "red")
+            return
+        # every later upload / token refresh needs them: keep them now (only these keys)
+        _write_env(creds)
+        for env, value in creds.items():
+            setattr(settings, ATTR_BY_ENV[env], value)
+        if getattr(pub, "auth_kind", "") == "paste":
+            self._connect_by_paste(name, pub)
+            return
+        self._acct_cancel = cancel = threading.Event()
+        self._acct[name]["cancel"].setVisible(True)
+        self._account_status(name, "Đang chờ bạn đăng nhập và cho phép trong trình duyệt… "
+                                   "(tối đa 5 phút)")
+        self._bg(lambda: pub.connect(cancel=cancel.is_set),
+                 lambda res, n=name: self._account_done(n, res))
+
+    def _connect_by_paste(self, name: str, pub) -> None:
+        webbrowser.open(pub.login_url())
+        text, ok = QInputDialog.getText(self, f"Kết nối {pub.display_name}", PASTE_PROMPT)
+        if not ok or not text.strip():
+            self._account_status(name, "Chưa kết nối.")
+            return
+        self._account_status(name, "Đang lấy danh sách Trang…")
+        self._bg(lambda t=text: pub.fetch_pages(t),
+                 lambda res, n=name: self._pages_done(n, res))
+
+    def _pages_done(self, name: str, res) -> None:
+        self._set_busy(False)
+        if isinstance(res, Exception):
+            self._account_status(name, f"✗ {self._why(res)}", "red")
+            return
+        pages = [p for p in res if p.get("can_post")]
+        if not pages:
+            self._account_status(name, "✗ Không thấy Trang nào bạn có quyền đăng bài (cần quyền "
+                                       "tạo nội dung trên Trang).", "red")
+            return
+        names = [p["name"] for p in pages]
+        if len(set(names)) < len(names):
+            names = [f"{p['name']} · {p['id']}" for p in pages]
+        pick = pages[0]
+        if len(pages) > 1:
+            item, ok = QInputDialog.getItem(self, "Chọn Trang", "Đăng video lên Trang:", names,
+                                            0, False)
+            if not ok:
+                self._account_status(name, "Chưa chọn Trang — chưa kết nối.")
+                return
+            pick = pages[names.index(item)]
+        try:
+            res = get_publisher(name).choose_page(pick["id"])
+        except Exception as exc:  # noqa: BLE001 - shown to the owner
+            res = exc
+        self._account_done(name, res, busy=False)
+
+    def _account_done(self, name: str, res, *, busy: bool = True) -> None:
+        if busy:
+            self._set_busy(False)
+        self._acct[name]["cancel"].setVisible(False)
+        self._acct_cancel = None
+        self._refresh_accounts()
+        if isinstance(res, Exception):
+            self._account_status(name, f"✗ {self._why(res)}", "red")
+        else:
+            self._account_status(name, f"✓ Đã nối: {res}", "green")
+
+    def _cancel_account(self) -> None:
+        if self._acct_cancel is not None:
+            self._acct_cancel.set()
+
+    def _disconnect_account(self, name: str) -> None:
+        pub = get_publisher(name)
+        r = QMessageBox.question(self, "Ngắt kết nối",
+                                 f"Ngắt kết nối {pub.display_name} ({pub.account_label()})? vizsup "
+                                 "sẽ không đăng lên đó nữa cho tới khi Kết nối lại.")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self._account_status(name, "Đang ngắt kết nối…")
+        self._bg(pub.disconnect, lambda res, n=name: self._disconnected(n, res))
+
+    def _disconnected(self, name: str, res) -> None:
+        self._set_busy(False)
+        self._refresh_accounts()
+        if isinstance(res, Exception):
+            self._account_status(name, f"✗ {self._why(res)}", "red")
+
+    @staticmethod
+    def _why(exc: Exception) -> str:
+        from app.providers.publish._common import PublishError
+
+        return str(exc) if isinstance(exc, PublishError) else f"{type(exc).__name__}: {exc}"
+
     # --- Kiểm tra: doctor checks, run off the GUI thread ----------------------------
     def _check_page(self) -> QWidget:
         page = QWidget()
@@ -842,6 +1082,12 @@ class SettingsView(QWidget):
                 b.setObjectName("badgeOk" if has else "badge")
                 b.style().unpolish(b)
                 b.style().polish(b)
+        for env, _n, attr, _p, _s in PUBLISH_KEYS:
+            f = self._fields[env]
+            f.blockSignals(True)
+            f.setText(getattr(settings, attr, "") or "")
+            f.blockSignals(False)
+        self._refresh_accounts()
         for env, _n, attr, _k, _h, _c in OPTIONS:
             w = self._opts[env]
             w.blockSignals(True)
@@ -1016,3 +1262,4 @@ class SettingsView(QWidget):
 
     def shutdown(self) -> None:  # in-flight network calls: results dropped, nothing joined
         self._closing_jobs = True
+        self._cancel_account()            # a browser sign-in still waited on: free its port

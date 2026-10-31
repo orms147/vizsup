@@ -97,19 +97,19 @@ def qapp():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-def test_settings_page_has_five_groups_ending_in_the_check_page(qapp):
+def test_settings_page_has_six_groups_ending_in_the_check_page(qapp):
     sd = pytest.importorskip("desktop.settings_dialog")
     view = sd.SettingsView()
-    assert len(view._nav_btns) == 5
-    assert sd.GROUPS[-1][0] == "check"
+    assert len(view._nav_btns) == 6
+    assert sd.GROUPS[-1][0] == "check" and sd.GROUPS[-2][0] == "accounts"
 
 
 def test_check_group_can_be_shown_by_key(qapp):
     sd = pytest.importorskip("desktop.settings_dialog")
     view = sd.SettingsView()
     view.show_group("check")
-    assert view._stack.currentIndex() == 4
-    assert view._nav_btns[4].isChecked()
+    assert view._stack.currentIndex() == 5
+    assert view._nav_btns[5].isChecked()
 
 
 def test_update_edge_tts_runs_pip_for_edge_tts(monkeypatch):

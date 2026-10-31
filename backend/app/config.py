@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     # that). Set STT_PRICE_PER_MIN when STT_* points at another vendor or model.
     stt_price_per_min: float = 0.00045
 
+    # posting (autopilot, docs/plan/J-publish-setup.md): the owner's OWN app credentials for
+    # each platform's official API. The account tokens are NOT here — "Kết nối" in Settings
+    # stores them in <storage>/_accounts/<platform>.json.
+    youtube_client_id: str = ""        # Google Cloud → OAuth client of type "Desktop app"
+    youtube_client_secret: str = ""
+    facebook_app_id: str = ""          # Meta for Developers app
+    facebook_app_secret: str = ""
+    tiktok_client_key: str = ""        # TikTok for Developers app (Login Kit + Content Posting)
+    tiktok_client_secret: str = ""
+
     # download
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_from_browser: str = ""
