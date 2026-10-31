@@ -27,6 +27,7 @@ from app.providers.tts.google import GoogleTTS
 from app.providers.tts.vieneu import VieNeuTTS
 from app.providers.publish.facebook import FacebookPublisher
 from app.providers.publish.folder import FolderPublisher
+from app.providers.publish.tiktok import TikTokPublisher
 from app.providers.publish.youtube import YouTubePublisher
 
 TRANSLATORS = {
@@ -62,6 +63,7 @@ PUBLISHERS = {
         FolderPublisher(),      # always there: export a post package, post by hand
         YouTubePublisher(),
         FacebookPublisher(),
+        TikTokPublisher(),
     )
 }
 
