@@ -494,7 +494,8 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     kept = group_frames(per_frame, sim=sim, fps=fps, min_dur=min_dur)
     # 2b) E-0: static banners / watermarks / one-frame Latin junk are not subtitles
-    survivors, dropped = drop_overlays([c for c, _cf, _rf in kept])
+    survivors, dropped = drop_overlays([c for c, _cf, _rf in kept],
+                                       uploader=(job.metadata or {}).get("uploader"))
     alive = {id(c) for c in survivors}
     kept = [t for t in kept if id(t[0]) in alive]
     (job.work_dir / "ocr_dropped.json").write_text(
@@ -593,23 +594,49 @@ def proofread_srt(job: Job, *, provider: str, context: dict | None = None, log=N
 # (job bb15cbcac86c, 2026-10-13: the first 40 lines). Real subtitles last seconds and
 # repeat a handful of times at most (a sung chorus: ~4 × 3–5 s).
 OVERLAY_MIN_REPEATS = 6       # similar reads at least this many times…
-OVERLAY_MAX_MEDIAN = 1.0      # …each flickering for about a frame or two
+OVERLAY_MAX_MEDIAN = 1.0      # …each flickering for about a frame or two…
+OVERLAY_MAX_GAP = 1.0         # …back to back (a banner never leaves the screen). Dialogue said
+# again and again ("谁是老大" ×7 in 《末日校车》03, 2026-11-01) comes back seconds apart.
 _WATERMARK = re.compile(r"AI\s*生成|抖音号|抖音[iI][dD]|快手号|小红书号|^@\S+|^\s*@")
+# the watermark part of a read, to cut out of a line that also holds dialogue
+_WM_PART = re.compile(r"[一-鿿]{0,4}\s*AI\s*生成|(?:抖音号|抖音[iI][dD]|快手号|小红书号)\s*[:：]?\s*\S*|@\S*")
 _BLIP_LETTERS = 6             # one-frame Latin junk off the background ("CAS", "STIE")
 
 
-def drop_overlays(cues: list[Cue], *, sim: float = 0.6) -> tuple[list[Cue], list[dict]]:
+def strip_watermark(text: str, uploader: str | None = None) -> str:
+    """The read without the watermark: platform marks, an @handle (a creator's moving
+    watermark often enters the subtitle band — "@阿熊动漫 多给他一条吧") and the uploader's
+    name or an OCR-clipped start of it ("阿熊动 你是老大"). "" when nothing else is left. Pure."""
+    t = _WM_PART.sub(" ", text or "")
+    name = re.sub(r"\s+", "", uploader or "")
+    if len(name) >= 2:
+        t = t.replace(name, " ")
+        for k in range(len(name) - 1, 1, -1):            # "阿熊动" / "阿熊" at a word start
+            t = re.sub(rf"(?:^|\s){re.escape(name[:k])}(?=\s)", " ", t)
+    return " ".join(t.split())
+
+
+def drop_overlays(cues: list[Cue], *, sim: float = 0.6,
+                  uploader: str | None = None) -> tuple[list[Cue], list[dict]]:
     """Split OCR cues into (kept, dropped-with-reason). Pure. Drops:
-    - ``overlay``   — a text that keeps re-appearing as short flickers (static banner)
-    - ``watermark`` — platform / AI watermarks (豆包AI生成, 抖音号…, @handle)
+    - ``overlay``   — a text that keeps re-appearing as short back-to-back flickers (static
+                      banner); dialogue repeated seconds apart stays
+    - ``watermark`` — a read that is only a platform / AI watermark (豆包AI生成, 抖音号…,
+                      @handle, the uploader's name); a watermark read together with dialogue
+                      loses the watermark and keeps the dialogue
     - ``blip``      — a single-frame Latin fragment with no Chinese
     Kept cues are re-indexed 1..n."""
     import statistics
 
     drop: dict[int, str] = {}
     for i, c in enumerate(cues):
-        if _WATERMARK.search(c.text):
-            drop[i] = "watermark"
+        name = re.sub(r"\s+", "", uploader or "")
+        if _WATERMARK.search(c.text) or (len(name) >= 2 and name[:2] in c.text):
+            rest = strip_watermark(c.text, uploader)
+            if _CJK.search(rest) or len(_LATIN.findall(rest)) > _BLIP_LETTERS:
+                c.text = rest                   # the dialogue under the watermark
+            elif rest != c.text.strip():
+                drop[i] = "watermark"
         elif (not _CJK.search(c.text) and not _NUMERIC.match(c.text) and c.duration <= 0.5
               and len(_LATIN.findall(c.text)) <= _BLIP_LETTERS):
             drop[i] = "blip"
@@ -617,8 +644,12 @@ def drop_overlays(cues: list[Cue], *, sim: float = 0.6) -> tuple[list[Cue], list
         if i in drop:
             continue
         group = [j for j, d in enumerate(cues) if _similar(c.text, d.text, sim)]
-        if (len(group) >= OVERLAY_MIN_REPEATS
-                and statistics.median(cues[j].duration for j in group) <= OVERLAY_MAX_MEDIAN):
+        if len(group) < OVERLAY_MIN_REPEATS:
+            continue
+        ordered = sorted(group, key=lambda j: cues[j].start)
+        gaps = [cues[b].start - cues[a].end for a, b in zip(ordered, ordered[1:])]
+        if (statistics.median(cues[j].duration for j in group) <= OVERLAY_MAX_MEDIAN
+                and statistics.median(gaps) <= OVERLAY_MAX_GAP):
             for j in group:
                 drop.setdefault(j, "overlay")
     kept = [c for i, c in enumerate(cues) if i not in drop]

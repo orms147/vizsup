@@ -128,3 +128,22 @@ def test_watermarks_and_single_frame_latin_blips_are_dropped():
     kept, dropped = drop_overlays(cues)
     assert [c.text for c in kept] == ["2900元", "Good morning everyone", "早上新学期过了两个月"]
     assert sorted(d["why"] for d in dropped) == ["blip", "watermark", "watermark"]
+
+
+def test_a_creator_watermark_inside_the_band_keeps_the_dialogue():
+    """《末日校车》03 (2026-11-01): the creator's moving "@阿熊动漫" entered the subtitle band
+    and the whole line was dropped — 31–48 s of dialogue lost."""
+    cues = [_c(1, 31.0, 32.0, "@阿熊动漫 多给他一条吧"), _c(2, 33.5, 34.0, "@阿熊动"),
+            _c(3, 39.5, 40.5, "@阿熊动 我真的知道错了"), _c(4, 27.5, 29.9, "阿熊动漫 你是老大"),
+            _c(5, 41.0, 42.0, "阿熊动 求求你开开门")]
+    kept, dropped = drop_overlays(cues, uploader="阿熊动漫")
+    assert [c.text for c in kept] == ["多给他一条吧", "我真的知道错了", "你是老大", "求求你开开门"]
+    assert [d["why"] for d in dropped] == ["watermark"]           # only the bare "@阿熊动"
+
+
+def test_dialogue_said_again_seconds_apart_is_not_a_banner():
+    lines = ["我才是老大", "谁是老大", "你是老大", "你是老大", "谁是老大", "你是老大", "你是老大"]
+    starts = [18.5, 21.0, 24.0, 27.5, 34.0, 36.0, 96.5]
+    cues = [_c(k + 1, s, s + 1.0, t) for k, (s, t) in enumerate(zip(starts, lines))]
+    kept, dropped = drop_overlays(cues)
+    assert len(kept) == 7 and dropped == []
