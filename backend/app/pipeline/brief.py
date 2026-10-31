@@ -74,6 +74,8 @@ BRIEF_INSTRUCTION = (
     "  makes the translator pick differently from batch to batch.\n"
     "- Under notes, name slang, puns or recurring jokes that need care. Do not restate\n"
     "  numbers or facts from the transcript — give guidance, not a summary.\n"
+    "- The Uploader is the channel that posted the video, not a person in it: never list the\n"
+    "  uploader's name (or a watermark like @name) as a character, a name or a term.\n"
     "- If something cannot be told from the material, say so in a few words; never invent.\n"
     "- Output only the brief — no preamble, no closing remarks."
 )

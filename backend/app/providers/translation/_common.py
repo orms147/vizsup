@@ -28,8 +28,9 @@ _FORMAT_RULES = (
     "- Never fall behind or run ahead: the names, numbers and key nouns of line n's Vietnamese\n"
     "  come from Chinese line n. A line may repeat the tail of the previous one — that part was\n"
     "  already rendered there; translate only what is new in this line.\n"
-    "- A line whose Chinese is \"—\", empty, or exactly the previous line again: output `n| …`\n"
-    "  and fill it with nothing from other lines.\n"
+    "- A line whose Chinese is \"—\", empty, exactly the previous line again, or unreadable\n"
+    "  noise (stray characters read off the picture, not a sentence): output `n| …` and fill it\n"
+    "  with nothing — never invent a sentence from noise.\n"
 )
 
 _TRANSLATION_RULES = (

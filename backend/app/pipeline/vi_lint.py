@@ -21,8 +21,10 @@ is deliberately NOT touched: per-clause subtitles end on commas all the time.
 - ``term``  — a glossary term is in the Chinese line but its Vietnamese rendering is not in the
               Vietnamese one (live; the translate-time report goes stale after edits);
 - ``pron``  — the line uses a pronoun the series sheet explicitly forbids ("không dùng: tao,
-              mày" in the brief or a character's note). Who is speaking is unknown, so nothing
-              is inferred from the series' xưng hô notes except such an explicit ban.
+              mày" in the brief or a character's note), or mixes pronoun pairs within itself
+              ("tao" with "cô"/"cậu"/"bạn", "tôi" with "mày" — the most frequent error in a
+              Sonnet 5.5 review of 《末日校车》, 2026-11-01). Who is speaking is unknown, so
+              nothing else is inferred from the series' xưng hô notes.
 """
 from __future__ import annotations
 
@@ -238,6 +240,20 @@ def forbidden_pronouns(*notes: str) -> frozenset[str]:
     return frozenset(out)
 
 
+# "cô" / "cậu" / "bạn" as the listener — not "cô ấy", "cô ta", "cô giáo", "cô Giang"
+_POLITE_YOU = re.compile(r"(?<![^\W\d_])(?:[Cc]ô|[Cc]ậu|[Bb]ạn)(?![^\W\d_])"
+                         r"(?!\s+(?:ấy|ta|giáo|[A-ZĐÀ-Ỹ]))")   # case-sensitive: "cô Giang" is a name
+
+
+def mixed_pair(vi: str) -> bool:
+    """One line mixing pronoun pairs: "tao" with a polite "cô/cậu/bạn", or "tôi" with "mày".
+    Pure."""
+    words = set(re.findall(r"[^\W\d_]+", (vi or "").casefold()))
+    if "tao" in words and _POLITE_YOU.search(vi or ""):
+        return True
+    return "tôi" in words and "mày" in words
+
+
 def flags(vi: str, zh: str = "", *, glossary: Mapping[str, str] | None = None,
           forbidden: frozenset[str] = frozenset()) -> list[str]:
     """Review-flag keys for one line: han, num, pron, term, latin (in that order)."""
@@ -248,7 +264,8 @@ def flags(vi: str, zh: str = "", *, glossary: Mapping[str, str] | None = None,
         out.append("han")
     if zh and numbers_missing(zh, vi):
         out.append("num")
-    if forbidden and forbidden & set(re.findall(r"[^\W\d_]+", vi.casefold())):
+    if (forbidden and forbidden & set(re.findall(r"[^\W\d_]+", vi.casefold()))) \
+            or mixed_pair(vi):
         out.append("pron")
     if glossary and zh and glossary_missing(zh, vi, glossary):
         out.append("term")

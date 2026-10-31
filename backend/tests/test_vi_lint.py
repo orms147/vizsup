@@ -309,3 +309,17 @@ def test_library_summary_counts_lint_flags(storage, monkeypatch):
     assert store.project_summary(job.id)["pending"] == 1             # "han" flag
     write_srt([Cue(1, 0, 3, "Anh nói xin chào")], job.vi_srt)
     assert store.project_summary(job.id)["pending"] == 0
+
+
+def test_a_mixed_pronoun_pair_in_one_line_is_flagged():
+    """A Sonnet 5.5 review of 《末日校车》 (2026-11-01): "tao" with "cô/cậu/bạn" and "tôi" with
+    "mày" in one line were the most frequent error. Names and third persons are left alone."""
+    from app.pipeline.vi_lint import flags, mixed_pair
+
+    for line in ("Tao bảo cô rồi", "Cậu im đi, tao đánh đấy", "Tôi bảo mày rồi",
+                 "Tao là đại ca, bạn hiểu chưa"):
+        assert mixed_pair(line), line
+        assert "pron" in flags(line)
+    for line in ("Tao nói với cô Giang", "Tao cho mày sáng à", "cô ấy với tao",
+                 "Tôi bảo các cô rồi", "Tao đi với cô giáo"):
+        assert not mixed_pair(line), line
