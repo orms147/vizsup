@@ -1645,8 +1645,22 @@ def main() -> int:
 
     hide_child_consoles()                     # pythonw / packaged: no black ffmpeg windows
     _install_qt_log_filter()
+    if sys.platform == "win32":               # its own taskbar button + icon, not "Python"
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("vizsup.app")
+        except (AttributeError, OSError):
+            pass
     app = QApplication(sys.argv)
     app.setApplicationName("vizsup")
+    from pathlib import Path
+
+    icon = Path(__file__).parent / "assets" / "vizsup.ico"
+    if icon.exists():
+        from PySide6.QtGui import QIcon
+
+        app.setWindowIcon(QIcon(str(icon)))
     from desktop.qt_vi import ViTranslator
 
     app._vi = ViTranslator(app)               # keep a reference: Qt does not own it

@@ -5,6 +5,12 @@ Chi tiết từng phần nằm ở các tài liệu được nhắc tên bên d�
 
 ---
 
+## Mở app
+
+Bấm đúp biểu tượng **vizsup** (tím) trên Desktop hoặc Start Menu. Không cần mở terminal. Cập nhật code xong muốn tạo lại `vizsup.exe` và lối tắt: `make app` (hoặc `.uild-app.ps1`).
+
+Hướng dẫn đầy đủ có ảnh: https://claude.ai/artifact/AKru3GxbiE7r4kkH5dWH7a
+
 ## Luồng hằng ngày (sau khi cài xong)
 
 ```

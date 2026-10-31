@@ -54,3 +54,6 @@ Thumbs.db
 
 # agent worktrees (Claude Code subagents)
 .claude/worktrees/
+
+# the double-click app built by build-app.ps1 (make app)
+/vizsup.exe
