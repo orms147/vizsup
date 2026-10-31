@@ -253,8 +253,9 @@ class SeriesDialog(QDialog):
         tabs.addTab(self.saved, "Đã lưu")
         self._refresh_saved()
         self._bg = None                       # BgRunner, made on the first background call
-        tabs.addTab(self._watch_tab(), "Theo dõi")
+        self._watch_index = tabs.addTab(self._watch_tab(), "Theo dõi")
         self.tabs = tabs
+        tabs.currentChanged.connect(self._tab_changed)
 
         bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Save).setText("Lưu")
@@ -323,8 +324,86 @@ class SeriesDialog(QDialog):
         self.watch_result.setReadOnly(True)
         self.watch_result.setVisible(False)
         v.addWidget(self.watch_result, 1)
+        v.addLayout(self._task_row())
         v.addStretch(0)
         return w
+
+    # --- the Windows scheduled task (only on the owner's click) ------------------------------
+    def _task_row(self) -> QHBoxLayout:
+        from app import schedtask
+
+        row = QHBoxLayout()
+        self.task_lbl = QLabel("Chạy nền trên Windows: …")
+        self.task_lbl.setWordWrap(True)
+        self.task_lbl.setToolTip("Lịch Windows (Task Scheduler) chạy kiểm tra mỗi N giờ cả khi "
+                                 "vizsup đang đóng (khi bạn đã đăng nhập máy). Chỉ tạo / xóa khi "
+                                 "bạn bấm.")
+        self.task_on = QPushButton("Bật chạy nền")
+        self.task_off = QPushButton("Tắt chạy nền")
+        self.task_on.clicked.connect(self._install_task)
+        self.task_off.clicked.connect(self._remove_task)
+        row.addWidget(self.task_lbl, 1)
+        row.addWidget(self.task_on)
+        row.addWidget(self.task_off)
+        self._task_known = False
+        for wdg in (self.task_lbl, self.task_on, self.task_off):
+            wdg.setVisible(schedtask.supported())
+        return row
+
+    def _tab_changed(self, index: int) -> None:
+        """Ask Windows about the task the first time the tab is opened (not at every dialog)."""
+        from app import schedtask
+
+        if index == self._watch_index and not self._task_known and schedtask.supported():
+            self._task_known = True
+            self._task_busy("Chạy nền trên Windows: đang xem…")
+            self._runner().run(schedtask.task_installed, self._task_state, self._task_failed)
+
+    def _task_hours(self) -> int:
+        """The task runs as often as the most frequent followed series (this one as typed)."""
+        hours = [self.watch_every.value()]
+        hours += [series.autopilot_of(p)["every_h"] for p in series.followed()
+                  if p.slug != self.profile.slug]
+        return min(hours)
+
+    def _task_busy(self, text: str) -> None:
+        self.task_lbl.setText(text)
+        self.task_on.setEnabled(False)
+        self.task_off.setEnabled(False)
+
+    def _task_state(self, installed: bool, note: str = "") -> None:
+        self.task_on.setEnabled(True)
+        self.task_off.setEnabled(bool(installed))
+        self.task_on.setText("Đặt lại lịch" if installed else "Bật chạy nền")
+        self.task_lbl.setText(note or ("Chạy nền trên Windows: đang bật." if installed else
+                                       "Chạy nền trên Windows: chưa bật — chỉ kiểm tra khi bạn "
+                                       "chạy lệnh / mở app."))
+
+    def _task_failed(self, msg: str) -> None:
+        self.task_on.setEnabled(True)
+        self.task_off.setEnabled(True)
+        self.task_lbl.setText(f"✗ {msg}")
+
+    def _install_task(self) -> None:
+        from app import schedtask
+
+        hours = self._task_hours()
+        self._task_busy("Đang tạo lịch chạy nền…")
+
+        def done(summary: str) -> None:
+            extra = "" if self.watch_on.isChecked() else \
+                " Nhớ tick “Tự lấy tập mới” rồi bấm Lưu."
+            self._task_state(True, summary + extra)
+
+        self._runner().run(lambda: schedtask.install_task(hours), done, self._task_failed)
+
+    def _remove_task(self) -> None:
+        from app import schedtask
+
+        self._task_busy("Đang tắt chạy nền…")
+        self._runner().run(schedtask.remove_task,
+                           lambda ok: self._task_state(False, "Đã tắt chạy nền." if ok else ""),
+                           self._task_failed)
 
     def _runner(self):
         if self._bg is None:
