@@ -20,6 +20,10 @@ series profile (``series.json``) names the pages to follow; ``list_videos`` read
 ``compilation.episode_range`` — a "1-5" compilation, a "后续" teaser or an unnumbered post is
 skipped) whose ids were not seen yet, oldest first. What was seen / tried and when each
 series was checked lives in ``<storage>/_autopilot/watch.json``.
+
+``check_all`` looks at every series whose watch is on and due (``every_h``) and hands each new
+episode to a ``run(url, slug)`` the caller supplies — ``vizsup autopilot --once`` runs the
+normal pipeline to the edit gate. Nothing here approves or renders anything.
 """
 from __future__ import annotations
 
@@ -419,3 +423,158 @@ def find_new(profile, sources: list[str], *, state: dict | None = None, log=None
     new = new_episodes(profile, videos, skip, after=lib["last"])
     return {"sources": rows, "new": new, "last": lib["last"],
             "have": sorted(i for i in ids if i in lib["ids"])}
+
+
+# --- the check: every followed series that is due ------------------------------------------------
+
+LOCK = "watch.lock"
+LOCK_STALE_S = 12 * 3600       # a lock this old belongs to a run that died
+DUE_SLACK_S = 600              # a scheduled task fires every N h exactly; the last check ended later
+
+
+def is_due(profile, state: dict, now: float | None = None) -> bool:
+    from app.pipeline import series
+
+    last = last_checked(profile.slug, state)
+    now = time.time() if now is None else now
+    return last is None or now - last >= series.autopilot_of(profile)["every_h"] * 3600 - DUE_SLACK_S
+
+
+class _Lock:
+    """One real check at a time (the app and the scheduled task may both start one)."""
+
+    def __init__(self, active: bool = True) -> None:
+        self.path = Path(settings.vizsup_storage_dir) / DIR / LOCK
+        self.active = active          # a dry look takes no lock
+        self.held = False
+
+    def __enter__(self) -> _Lock:
+        if not self.active:
+            return self
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    stale = time.time() - self.path.stat().st_mtime > LOCK_STALE_S
+                except OSError:
+                    stale = True
+                if not stale:
+                    return self
+                self.path.unlink(missing_ok=True)
+                continue
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            self.held = True
+            break
+        return self
+
+    def touch(self) -> None:
+        if self.held:
+            try:
+                os.utime(self.path)
+            except OSError:
+                pass
+
+    def __exit__(self, *exc) -> None:
+        if self.held:
+            self.path.unlink(missing_ok=True)
+
+
+def _item(profile, v: dict, status: str, **extra) -> dict:
+    return {"slug": profile.slug, "series": profile.name, "id": v["id"], "url": v["url"],
+            "title": v.get("title") or "", "episode": v.get("episode"),
+            "published": v.get("published"), "status": status, **extra}
+
+
+def check_series(profile, *, run=None, log=None, state: dict | None = None,
+                 now: float | None = None, lister=None, lock: _Lock | None = None) -> list[dict]:
+    """One followed series: list its pages and hand its new episodes, oldest first, to
+    ``run(url, slug)`` — at most ``max_per_check``, the rest wait for the next check. With
+    ``run=None`` nothing runs and nothing is recorded (a dry look). An episode whose run
+    raised is tried again at the next check, up to MAX_TRIES. → one dict per episode with
+    ``status``: done | failed | new (dry) | later."""
+    from app.pipeline import series
+
+    say = log or (lambda _m: None)
+    ap = series.autopilot_of(profile)
+    st = state if state is not None else load_state()
+    now = time.time() if now is None else now
+    res = find_new(profile, ap["sources"], state=st, log=say, lister=lister)
+    if run is not None:
+        for src in res["sources"]:
+            st["sources"][src["url"]] = {"at": now, "n": src["n"], "error": src["error"]}
+        series_state(st, profile.slug)["checked"] = now
+        save_state(st)
+    if not res["new"]:
+        say(f"《{profile.name}》: không có tập mới")
+    out = []
+    for i, v in enumerate(res["new"]):
+        if i >= ap["max_per_check"]:
+            out.append(_item(profile, v, "later"))
+            continue
+        if run is None:
+            out.append(_item(profile, v, "new"))
+            continue
+        say(f"▶ 《{profile.name}》 tập {v['episode']}: {v['url']}")
+        try:
+            result = run(v["url"], profile.slug)
+        except Exception as exc:  # noqa: BLE001 - one episode must not stop the others
+            e = mark(st, profile.slug, v, "failed", error=f"{type(exc).__name__}: {exc}"[:300])
+            out.append(_item(profile, v, "failed", error=e["error"], tries=e["tries"]))
+        else:
+            mark(st, profile.slug, v, "done", result="" if result is None else str(result))
+            out.append(_item(profile, v, "done", result="" if result is None else str(result)))
+        say(describe(out[-1]))
+        save_state(st)
+        if lock is not None:
+            lock.touch()
+    return out
+
+
+def check_all(*, run=None, log=None, force: bool = False, now: float | None = None,
+              lister=None) -> list[dict]:
+    """Every series whose watch is on and whose check is due (``force``: all of them):
+    find its new episodes and call ``run(url, series_slug)`` for each — the caller decides
+    how to process one (the CLI runs the pipeline to the edit gate). ``run=None`` = a dry
+    look: nothing runs, nothing is recorded. Returns what was found (``check_series``)."""
+    from app.pipeline import series
+
+    say = log or (lambda _m: None)
+    with _Lock(active=run is not None) as lock:
+        if run is not None and not lock.held:
+            say("Một lần kiểm tra khác đang chạy — bỏ qua lần này.")
+            return []
+        st = load_state()
+        now = time.time() if now is None else now
+        out: list[dict] = []
+        profiles = series.followed()
+        if not profiles:
+            say("Chưa có bộ phim nào bật “Theo dõi tập mới”.")
+        for p in profiles:
+            if not force and not is_due(p, st, now):
+                last = last_checked(p.slug, st)
+                say(f"《{p.name}》: chưa tới giờ kiểm tra (lần trước "
+                    f"{time.strftime('%d/%m %H:%M', time.localtime(last))})")
+                continue
+            say(f"Kiểm tra 《{p.name}》…")
+            out += check_series(p, run=run, log=say, state=st, now=now, lister=lister, lock=lock)
+        if run is not None:
+            st["last_run"] = {"at": now, "items": out}
+            save_state(st)
+        return out
+
+
+def describe(item: dict) -> str:
+    """One line about one found episode, for logs and summaries. Pure."""
+    head = f"《{item.get('series')}》 tập {item.get('episode')}"
+    status = item.get("status")
+    if status == "done":
+        return f"✓ {head}: đã tới bước duyệt — chờ bạn duyệt" + (
+            f" ({item['result']})" if item.get("result") else "")
+    if status == "failed":
+        return f"✗ {head}: lỗi (lần {item.get('tries', 1)}/{MAX_TRIES}): {item.get('error', '')}"
+    if status == "later":
+        return f"… {head}: để lần kiểm tra sau"
+    return f"• {head}: sẽ lấy — {item.get('url')}"

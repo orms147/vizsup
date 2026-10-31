@@ -12,6 +12,11 @@ honours the human-edit gate.
 
     vizsup doctor      -> environment self-check (ffmpeg, OCR/ASR deps, fonts, keys).
 
+    vizsup autopilot --once [--dry-run] [--force]
+        -> "theo dõi tập mới": every followed series that is due — its new episodes run to
+           the edit gate with the owner's saved start-screen choices. Never approves,
+           never renders (what the Windows scheduled task runs, app/schedtask.py).
+
 Defaults to the offline stack (passthrough translator + edge-tts) so it runs
 with no API keys for a quick smoke test.
 """
@@ -327,6 +332,169 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- autopilot: "theo dõi tập mới" --------------------------------------------------------------
+
+_OCR_REGIONS = ("bottom-third", "bottom-quarter", "bottom-half", "middle-third", "top-third", "full")
+
+
+def _pick(rows: list[dict], wanted: str | None, *, require: str | None = None,
+          fallback: bool = True) -> str | None:
+    """``wanted`` when it names a usable provider, else (``fallback``) the first usable one —
+    what the start screen's combo shows when nothing was saved. Pure."""
+    def ok(p: dict) -> bool:
+        return bool(p.get("available", True)) and (not require or bool(p.get(require, True)))
+
+    for p in rows:
+        if p.get("name") == wanted and ok(p):
+            return wanted
+    if not fallback:
+        return None
+    return next((p["name"] for p in rows if ok(p)), None)
+
+
+def autopilot_opts(ui: dict, providers: dict) -> dict:
+    """The start screen's opts for an unattended run: the owner's saved choices
+    (storage/ui_state.json) with the screen's own defaults for anything never saved —
+    "không dùng" refine when none was saved, the first usable engine otherwise. Pure."""
+    def on(key: str, default: bool) -> bool:
+        v = ui.get(key)
+        return default if v is None else bool(v)
+
+    ocr = [p for p in providers.get("ocr", []) if p.get("name")]
+    return {
+        "subtitle_source": ui.get("subtitle_source") if ui.get("subtitle_source") in ("ocr", "asr")
+        else "auto",
+        "asr": _pick(providers.get("asr", []), ui.get("asr")) or settings.vizsup_default_asr,
+        "translator": _pick(providers.get("translation", []), ui.get("translator")),
+        "refine": _pick(providers.get("translation", []), ui.get("refine"), require="can_refine",
+                        fallback=False),
+        "tts": ui.get("tts"),
+        "ocr_region": ui.get("ocr_region") if ui.get("ocr_region") in _OCR_REGIONS
+        else "bottom-third",
+        "ocr_engine": _pick(ocr, ui.get("ocr_engine"), fallback=False) or "rapidocr",
+        "ocr_fast": on("ocr_fast", False),
+        "extract_terms": on("extract_terms", False),
+        "auto_context": on("auto_context", True),
+        "auto_snap": on("auto_snap", True),
+        "clause_split": on("clause_split", True),
+        "timing_pass": on("timing_pass", True),
+        "vi_lint": on("vi_lint", True),
+        "voice_guess": on("voice_guess", False),
+        "ai_review": on("ai_review", True),
+        "ai_frames": on("ai_frames", False),
+    }
+
+
+def autopilot_args(url: str, slug: str, opts: dict, work_dir: Path) -> argparse.Namespace:
+    """``vizsup run`` flags for one episode from the start-screen opts. Pure."""
+    a = build_parser().parse_args(["run", url])
+    a.source = opts["subtitle_source"]
+    a.asr = opts["asr"]
+    a.translator = opts["translator"]
+    a.refine = opts["refine"]
+    a.ocr_region = opts["ocr_region"]
+    a.ocr_engine = opts["ocr_engine"]
+    a.ocr_fps = 1.0 if opts["ocr_fast"] else 2.0
+    a.extract_terms = opts["extract_terms"]
+    a.auto_context = opts["auto_context"]
+    a.ai_frames = opts["ai_frames"]
+    a.no_qa = not opts["ai_review"]
+    a.no_snap = not opts["auto_snap"]
+    a.no_clause_split = not opts["clause_split"]
+    a.no_timing_pass = not opts["timing_pass"]
+    a.no_vi_lint = not opts["vi_lint"]
+    a.voice_guess = opts["voice_guess"]
+    a.series = slug
+    a.workdir = str(work_dir)
+    return a
+
+
+def _write_job(work_dir: Path, url: str, opts: dict, stage: str) -> None:
+    """job.json as the desktop app writes it, so the episode is listed (title, link, the
+    choices it ran with) and can be resumed / opened at the gate there."""
+    from app.fsutil import atomic_write_text
+
+    try:
+        meta = json.loads((work_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    atomic_write_text(work_dir / "job.json", json.dumps(
+        {"id": work_dir.name, "url": url, "opts": opts, "stage": stage,
+         "title": meta.get("title") or work_dir.name, "platform": meta.get("platform")},
+        ensure_ascii=False, indent=2))
+
+
+def _autopilot_runner():
+    """run(url, slug) for watch.check_all: the normal `run` path to the edit gate with the
+    owner's saved choices. Raises when no real translator is usable (an unattended run must
+    never hand back untranslated Chinese)."""
+    from app.providers.registry import list_providers
+
+    try:
+        ui = json.loads((Path(settings.vizsup_storage_dir) / "ui_state.json")
+                        .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ui = {}
+    base = autopilot_opts(ui if isinstance(ui, dict) else {}, list_providers())
+
+    def run(url: str, slug: str) -> str:
+        from app import usage
+
+        if base["translator"] in (None, "passthrough"):
+            raise RuntimeError("chưa có bộ dịch dùng được — thêm khóa API trong Cài đặt")
+        work_dir = Path(settings.vizsup_storage_dir) / hashlib.sha1(url.encode()).hexdigest()[:10]
+        work_dir.mkdir(parents=True, exist_ok=True)
+        opts = {**base, "url": url, "series": slug, "autopilot": True}
+        _write_job(work_dir, url, opts, "queued")
+        with usage.track(work_dir, phase="gate"):
+            _run_one(autopilot_args(url, slug, base, work_dir), url)
+        _write_job(work_dir, url, opts, "await_edit")
+        return str(work_dir)
+
+    return run
+
+
+def _autopilot_console() -> None:
+    """pythonw (the scheduled task) has no console: print into <storage>/_autopilot/autopilot.log
+    (the previous one kept as .old once it passes 1 MB)."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    d = Path(settings.vizsup_storage_dir) / "_autopilot"
+    d.mkdir(parents=True, exist_ok=True)
+    log = d / "autopilot.log"
+    try:
+        if log.stat().st_size > 1_000_000:
+            log.replace(d / "autopilot.old.log")
+    except OSError:
+        pass
+    f = open(log, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 - lives as long as the process
+    sys.stdout = sys.stdout or f
+    sys.stderr = sys.stderr or f
+
+
+def cmd_autopilot(args: argparse.Namespace) -> int:
+    """Check the followed series once; new episodes run to the edit gate (never approved,
+    never rendered). Exit 1 when an episode failed (it is retried at the next check)."""
+    import time
+
+    from app import winproc
+    from app.pipeline import watch
+
+    _autopilot_console()
+    winproc.hide_child_consoles()          # pythonw: no black ffmpeg windows
+    print(f"[autopilot] {time.strftime('%Y-%m-%d %H:%M:%S')} — "
+          + ("xem thử (không tải gì)" if args.dry_run else "kiểm tra tập mới"))
+    found = watch.check_all(run=None if args.dry_run else _autopilot_runner(),
+                            log=lambda m: print(f"[autopilot] {m}"), force=args.force)
+    print(f"[autopilot] xong: {len(found)} tập"
+          + ("" if args.dry_run else
+             f" — {sum(f['status'] == 'done' for f in found)} chờ duyệt, "
+             f"{sum(f['status'] == 'failed' for f in found)} lỗi"))
+    for f in found:
+        print("  " + watch.describe(f))
+    return 1 if any(f["status"] == "failed" for f in found) else 0
+
+
 def cmd_providers(_args: argparse.Namespace) -> int:
     from app.providers.registry import list_providers
 
@@ -448,6 +616,17 @@ def build_parser() -> argparse.ArgumentParser:
     cp.set_defaults(func=cmd_compile)
 
     pr.set_defaults(func=cmd_providers)
+
+    au = sub.add_parser("autopilot", help="theo dõi tập mới: run the followed series' new "
+                                          "episodes to the edit gate (never approves / renders)")
+    au.add_argument("--once", action="store_true",
+                    help="check once and exit — the only mode; the Windows scheduled task "
+                         "repeats it every N hours")
+    au.add_argument("--dry-run", action="store_true",
+                    help="only list what would be fetched (nothing downloaded or recorded)")
+    au.add_argument("--force", action="store_true",
+                    help="check every followed series now, even when its check is not due")
+    au.set_defaults(func=cmd_autopilot)
 
     dr = sub.add_parser("doctor", help="environment self-check (deps, GPU, fonts, keys)")
     dr.set_defaults(func=cmd_doctor)
