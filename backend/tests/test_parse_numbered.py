@@ -33,6 +33,11 @@ def test_spacing_variants_and_inner_pipes():
     assert parse_numbered("2 | giữ nguyên | cả dấu này", 3, FB)[1] == "giữ nguyên | cả dấu này"
 
 
+def test_echoed_word_budget_is_dropped():
+    out = parse_numbered("1| Chết tiệt, im hết! *(6 từ)*\n2| Đi thôi (~4 từ)\n3| Mua 6 từ điển", 3, FB)
+    assert out == ["Chết tiệt, im hết!", "Đi thôi", "Mua 6 từ điển"]
+
+
 def test_empty_reply_returns_fallback_copy():
     out = parse_numbered("", 3, FB)
     assert out == FB and out is not FB

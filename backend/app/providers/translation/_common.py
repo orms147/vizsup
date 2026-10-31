@@ -153,6 +153,8 @@ OCR_HINT = (
 )
 
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
+# the word budget echoed back ("im hết! *(6 từ)*", Luna 2026-11-01) — never part of a subtitle
+_BUDGET_ECHO = re.compile(r"\s*\*?\(\s*(?:tối đa\s*)?~?\s*\d+\s*từ\s*\)\*?\s*$", re.IGNORECASE)
 
 # One HTTP client per (api_key, base_url) is cached on the instance (registry
 # providers are module-level singletons). max_retries=0 is deliberate: the app's
@@ -262,7 +264,7 @@ def parse_numbered(reply: str, n: int, fallback: list[str]) -> list[str]:
             continue
         idx = int(m.group(1)) - 1
         if 0 <= idx < n:
-            out[idx] = m.group(2).strip()
+            out[idx] = _BUDGET_ECHO.sub("", m.group(2)).strip()
     return out
 
 
