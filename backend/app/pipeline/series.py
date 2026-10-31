@@ -21,6 +21,8 @@ What flows where (every hook is best effort — a series problem never stops a r
 - **TTS**: ``pronounce_for`` is a layer of ``speak.load_rules`` (global < series < project);
 - **approval** (``learn``): the episode's suggested terms the user KEPT are merged into the
   series glossary — earlier episodes win — and a first style / render setting is remembered;
+  the next episode's run reads the newest approved one's names + xưng hô into the
+  characters (``pipeline/cast.py``, one call per approved episode);
 - **theo dõi tập mới** (``autopilot``): the creator pages ``pipeline/watch.py`` checks every
   ``every_h`` hours for new episodes (run to the edit gate, never approved). Off by default;
   keys this module does not know (platforms, slots…) are kept as they are.
@@ -306,6 +308,11 @@ def sheet(p: Profile) -> str:
     if chars:
         parts.append("Nhân vật (giữ nguyên ở mọi tập):\n" + "\n".join(chars))
     return "\n\n".join(parts)[:SHEET_CHARS].strip()
+
+
+def sheet_for(job) -> str:
+    p = profile_of(job)
+    return sheet(p) if p else ""
 
 
 def summary(p: Profile | None) -> str:

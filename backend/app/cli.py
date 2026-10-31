@@ -157,6 +157,11 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             _series.inherit(job, prof, log_fn=lambda m: print(f"[run] {m}"))
     except Exception as exc:  # noqa: BLE001 - an aid, never fatal
         print(f"[run] series skipped ({exc})")
+    # 2.39) Bộ phim: names + xưng hô from the newest approved episode (one call, once)
+    if force or not job.vi_srt.exists():
+        from app.pipeline import cast
+
+        cast.learn(job, args.translator, log=lambda m: print(f"[run] {m}"))
 
     # 2.4) optional: per-video brief (AI skim and/or your own note) for the translator
     note = (getattr(args, "context", None) or "").strip()
@@ -170,7 +175,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
                                      log=lambda m: print(f"[run] {m}"))
                     if getattr(args, "auto_context", False) else None)
         b = brief.build_brief(job, args.translator, note=note or None, force=force, log=print,
-                              observed=observed)
+                              observed=observed, fixed=_series.sheet_for(job))
         if b:
             print("[run] brief:\n" + "\n".join("    " + ln for ln in b.splitlines() if ln.strip()))
 

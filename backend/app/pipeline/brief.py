@@ -7,6 +7,8 @@ optional, at least one required:
   - note    — the user's own words ("vlog nấu ăn, cô ấy gọi chồng là Lão Lý") which
               the LLM expands into a full brief; the note is AUTHORITATIVE — the
               transcript only fills gaps, it never overrides what the user said.
+A series episode also gets its series sheet (names + xưng hô fixed across episodes, learnt
+from approved episodes by ``pipeline/cast.py``) as fixed input.
 
 The brief is persisted to ``<job>/context_brief.json`` and re-used while its inputs
 (note + transcript) are unchanged, so a resumed run never pays for it twice. It
@@ -56,6 +58,8 @@ BRIEF_INSTRUCTION = (
     "  他 in the transcript is NOT evidence that the person is male.\n"
     "- For SONG lyrics choose the pronouns from the lyrics' own persona (who 我 and 你 are in\n"
     "  the song) — a cover singer's gender may differ from it.\n"
+    "- A SERIES SHEET, when present, is fixed for every episode: copy its names and xưng hô\n"
+    "  exactly (only the USER NOTE may override it) and add only people new in this episode.\n"
     "- If the OBSERVED notes say the gender is uncertain (CHƯA CHẮC / không rõ), use neutral\n"
     "  forms (mình / bạn, or the name) unless the lines themselves make it clear.\n"
     "- Under xưng hô, state the concrete Vietnamese pronouns to use and keep them fixed, e.g.\n"
@@ -103,7 +107,7 @@ def sample_transcript(lines: list[str], budget: int = SAMPLE_CHARS) -> tuple[str
 
 
 def build_request(job: Job, cn_lines: list[str], note: str | None,
-                  observed: str | None = None) -> str:
+                  observed: str | None = None, fixed: str | None = None) -> str:
     meta = job.metadata or {}
     parts: list[str] = []
     for label, key in (("Title", "title"), ("Platform", "platform"),
@@ -113,6 +117,8 @@ def build_request(job: Job, cn_lines: list[str], note: str | None,
             parts.append(f"{label}: {v.strip()}")
     if note and note.strip():
         parts.append(f"USER NOTE (authoritative — these are facts):\n{note.strip()}")
+    if fixed and fixed.strip():
+        parts.append(f"SERIES SHEET (fixed for every episode of this series):\n{fixed.strip()}")
     if observed and observed.strip():
         parts.append(f"OBSERVED (from the video's own audio / frames):\n{observed.strip()}")
     sample, used = sample_transcript(cn_lines)
@@ -123,11 +129,14 @@ def build_request(job: Job, cn_lines: list[str], note: str | None,
     return "\n\n".join(parts)
 
 
-def _inputs_key(cn_lines: list[str], note: str | None, observed: str | None = None) -> str:
+def _inputs_key(cn_lines: list[str], note: str | None, observed: str | None = None,
+                fixed: str | None = None) -> str:
     h = hashlib.sha1()
     h.update((note or "").strip().encode("utf-8"))
     if observed:                                  # adding an observation rebuilds the brief
         h.update(b"\x01" + observed.strip().encode("utf-8"))
+    if fixed and fixed.strip():                   # so does a series sheet that changed
+        h.update(b"\x02" + fixed.strip().encode("utf-8"))
     h.update(b"\x00")
     h.update("\n".join(cn_lines).encode("utf-8"))
     return h.hexdigest()
@@ -156,15 +165,15 @@ def _save(job: Job, *, brief: str, note: str | None, key: str, source: str) -> N
 
 def build_brief(job: Job, provider_name: str, *, note: str | None = None,
                 force: bool = False, log: Callable[[str], None] | None = None,
-                observed: str | None = None) -> str | None:
+                observed: str | None = None, fixed: str | None = None) -> str | None:
     """Create (or re-use) the brief for ``job``. Returns the brief text, or None when
-    there is nothing to go on. Never raises."""
+    there is nothing to go on. ``fixed`` = the series sheet (``series.sheet``). Never raises."""
     from app.pipeline.srt import parse_srt
     from app.providers.registry import get_translator
 
     say = log or (lambda _m: None)
     cn_lines = [c.text for c in parse_srt(job.cn_srt)] if job.cn_srt.exists() else []
-    key = _inputs_key(cn_lines, note, observed)
+    key = _inputs_key(cn_lines, note, observed, fixed)
 
     p = job.work_dir / BRIEF_FILE
     if not force and p.exists():
@@ -183,7 +192,7 @@ def build_brief(job: Job, provider_name: str, *, note: str | None = None,
     try:
         prov = get_translator(provider_name)
         if hasattr(prov, "rewrite") and prov.available():
-            request = build_request(job, cn_lines, note, observed)
+            request = build_request(job, cn_lines, note, observed, fixed)
             for attempt in range(_ATTEMPTS):   # an empty/transient reply is worth one retry
                 try:
                     reply = prov.rewrite(request, BRIEF_INSTRUCTION, max_tokens=_MAX_TOKENS, role="brief")

@@ -190,7 +190,8 @@ class _Characters(_Table):
     def __init__(self, parent=None) -> None:
         super().__init__(["Tiếng Trung", "Tên tiếng Việt", "Giới tính", "Xưng hô / ghi chú"],
                          "Tên nhân vật dịch cố định ở mọi tập; ghi chú xưng hô cho bộ dịch "
-                         "(vd. “gọi Tiểu Vũ là em, xưng anh”).", parent)
+                         "(vd. “gọi Tiểu Vũ là em, xưng anh”). Tự điền từ tập bạn đã duyệt — "
+                         "sửa hay xóa thoải mái, dòng bạn sửa luôn thắng.", parent)
 
     def add_row(self, zh: str = "", vi: str = "", gender: str = "", note: str = "") -> None:
         super().add_row(zh, vi, "", note)

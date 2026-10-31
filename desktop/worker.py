@@ -431,6 +431,11 @@ class PipelineWorker(QObject):
             self._timing_pass(job, o)
         # 2.38) Bộ phim: link the episode to its series and take over its style / render
         self._series(job, o)
+        # 2.39) Bộ phim: names + xưng hô from the newest approved episode (one call, once)
+        if not job.vi_srt.exists():
+            from app.pipeline import cast
+            self._check()
+            cast.learn(job, o.get("translator", "passthrough"), log=self.log.emit)
         # 2.4) per-video brief: the AI skims the video (auto) and/or expands the
         # user's own note into a context sheet the translator reads with every
         # batch. Only when translate will actually run — a kept vi.srt needs none.
@@ -446,8 +451,10 @@ class PipelineWorker(QObject):
             observed = (speakers.observe(job, frames=bool(o.get("ai_frames")),
                                          log=self.log.emit)
                         if o.get("auto_context") else None)
+            from app.pipeline import series
             b = brief.build_brief(job, o.get("translator", "passthrough"),
-                                  note=note or None, log=self.log.emit, observed=observed)
+                                  note=note or None, log=self.log.emit, observed=observed,
+                                  fixed=series.sheet_for(job))
             if b:
                 self.log.emit("── Brief ngữ cảnh (bộ dịch sẽ theo) ──")
                 for ln in b.splitlines():
