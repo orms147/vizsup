@@ -25,6 +25,7 @@ from app.providers.tts.edge import EdgeTTS
 from app.providers.tts.fpt import FptTTS
 from app.providers.tts.google import GoogleTTS
 from app.providers.tts.vieneu import VieNeuTTS
+from app.providers.publish.folder import FolderPublisher
 
 TRANSLATORS = {
     p.name: p
@@ -50,6 +51,13 @@ TTS_PROVIDERS = {
         AzureTTS(),
         GoogleTTS(),
         VieNeuTTS(),
+    )
+}
+
+PUBLISHERS = {
+    p.name: p
+    for p in (
+        FolderPublisher(),
     )
 }
 
@@ -126,6 +134,7 @@ def list_providers() -> dict:
         "tts": [p.info() for p in TTS_PROVIDERS.values()],
         "asr": [p.info() for p in ASR_PROVIDERS.values()],
         "ocr": [p.info() for p in OCR_PROVIDERS.values()],
+        "publish": [p.info() for p in PUBLISHERS.values()],
     }
 
 
@@ -141,6 +150,12 @@ def get_translator(name: str):
     if name not in TRANSLATORS:
         raise KeyError(f"Unknown translator '{name}'. Options: {sorted(TRANSLATORS)}")
     return TRANSLATORS[name]
+
+
+def get_publisher(name: str):
+    if name not in PUBLISHERS:
+        raise KeyError(f"Unknown publisher '{name}'. Options: {sorted(PUBLISHERS)}")
+    return PUBLISHERS[name]
 
 
 def get_tts(name: str):

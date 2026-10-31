@@ -15,6 +15,7 @@ import importlib.util
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -193,4 +194,49 @@ class OCRProvider(Provider):
         """Context manager for one OCR run, yielding ``read(images) -> lines per image``
         where lines are ``[(text, confidence 0..1), …]`` (``[]`` = no text). Holds the
         per-run state (engines, worker threads, HTTP client) for the whole video."""
+        ...
+
+
+# --- publishing (autopilot, 2026-10-31) ------------------------------------------------------
+
+@dataclass
+class PostMeta:
+    """What a platform needs for one post. ``kind``: "long" (the episode / a compilation) or
+    "short" (9:16). ``publish_at``: UTC epoch seconds for a scheduled post (None = now)."""
+    title: str
+    description: str = ""
+    tags: list[str] = field(default_factory=list)
+    kind: str = "long"
+    publish_at: float | None = None
+    thumbnail: Path | None = None
+    playlist: str = ""              # series name — a playlist / collection where supported
+
+
+@dataclass
+class PostResult:
+    ok: bool
+    status: str = ""                # "published" | "scheduled" | "private" (unaudited app) | "draft" | "failed"
+    url: str = ""
+    remote_id: str = ""
+    message: str = ""               # Vietnamese, for the UI / log
+
+
+class PublishProvider(Provider):
+    """Posts a rendered video on one platform for the owner (official APIs only, the owner
+    connects their own account once). Credentials live under ``storage/_accounts/`` — never
+    in the repo, never printed. ``kinds``: which of "long" / "short" this platform takes."""
+
+    kinds: tuple[str, ...] = ("long", "short")
+
+    def connected(self) -> bool:
+        """An account is linked (credentials present and not revoked as far as we know)."""
+        return False
+
+    def account_label(self) -> str:
+        """Who/what is linked, e.g. the channel or Page name ("" when not connected)."""
+        return ""
+
+    @abstractmethod
+    def publish(self, video: Path, meta: PostMeta, *,
+                progress: Callable[[float], None] | None = None) -> PostResult:
         ...
