@@ -1,15 +1,22 @@
 """Series editor ("Bộ phim"): what one series keeps from episode to episode, as plain
 tables — no JSON. Tabs: summary (brief), characters (zh / vi / gender / xưng hô note),
 glossary (zh → vi), pronunciation (written → spoken), saved settings (forget the stored
-subtitle style / render settings so the next episode learns them again).
+subtitle style / render settings so the next episode learns them again), and "Theo dõi"
+(the creator pages checked every N hours for new episodes — run to the edit gate, never
+approved; "Kiểm tra ngay" is a dry look on a background thread).
 
 The conversion between the tables and the profile is pure (``rows_to_map``,
-``rows_to_characters``, ``apply_rows``) and tested without a window; the dialog only
-shows them. All file I/O goes through ``app.pipeline.series``.
+``rows_to_characters``, ``apply_rows``, ``parse_sources``, ``apply_watch``,
+``format_preview``) and tested without a window; the dialog only shows them. All file I/O
+goes through ``app.pipeline.series`` / ``app.pipeline.watch``.
 """
 from __future__ import annotations
 
+import re
+import time
+
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -17,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -28,6 +36,7 @@ from desktop import paths  # noqa: F401  (puts backend on sys.path)
 from app.pipeline import series  # noqa: E402
 
 GENDERS = (("", "—"), ("nam", "Nam"), ("nữ", "Nữ"))
+_URL = re.compile(r"https?://[^\s，,]+")
 
 
 # --- pure conversion (tested without a window) -------------------------------------------
@@ -66,6 +75,51 @@ def apply_rows(p: series.Profile, *, brief: str, characters: list[tuple[str, str
     p.glossary = {k: v for k, v in rows_to_map(glossary).items() if v}
     p.pronounce = rows_to_map(pronounce)
     return p
+
+
+def parse_sources(text: str) -> list[str]:
+    """The links in the "Trang theo dõi" box, in order, once each — a pasted share text
+    ("长按复制… https://v.douyin.com/… 打开抖音") gives its link; other words are ignored."""
+    out: list[str] = []
+    for u in _URL.findall(text or ""):
+        u = u.rstrip(".,;)）】」")
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def apply_watch(p: series.Profile, *, on: bool, sources: list[str], every_h: int) -> series.Profile:
+    """The profile with its watch settings replaced; other autopilot keys are kept."""
+    p.autopilot = series.normalize_autopilot({**p.autopilot, "on": on, "sources": sources,
+                                              "every_h": every_h})
+    return p
+
+
+def _when(t) -> str:
+    return time.strftime("%d/%m %H:%M", time.localtime(t)) if t else ""
+
+
+def format_preview(res: dict, *, name: str, cap: int) -> str:
+    """What a dry check found, for the owner: each page (videos read / its error), then the
+    episodes the next check would fetch (at most ``cap`` now, the rest later)."""
+    lines = []
+    for s in res.get("sources") or []:
+        lines.append(f"✗ {s['url']}: {s['error']}" if s.get("error")
+                     else f"✓ {s['url']}: đọc được {s['n']} video")
+    new = res.get("new") or []
+    last = res.get("last")
+    if not new:
+        lines.append(f"Không có tập mới của 《{name}》"
+                     + (f" (thư viện đã có tới tập {last})." if last is not None else "."))
+        return "\n".join(lines)
+    lines.append(f"Sẽ lấy {min(len(new), cap)} tập của 《{name}》 (tải → phụ đề → dịch, dừng ở "
+                 f"bước duyệt):")
+    for i, v in enumerate(new):
+        when = _when(v.get("published"))
+        later = "  — lần kiểm tra sau" if i >= cap else ""
+        lines.append(f"  • Tập {v['episode']}: {v.get('title', '')[:60]}"
+                     + (f" ({when})" if when else "") + later)
+    return "\n".join(lines)
 
 
 # --- the dialog ----------------------------------------------------------------------------
@@ -198,6 +252,10 @@ class SeriesDialog(QDialog):
         sl.addStretch(1)
         tabs.addTab(self.saved, "Đã lưu")
         self._refresh_saved()
+        self._bg = None                       # BgRunner, made on the first background call
+        self._watch_index = tabs.addTab(self._watch_tab(), "Theo dõi")
+        self.tabs = tabs
+        tabs.currentChanged.connect(self._tab_changed)
 
         bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Save).setText("Lưu")
@@ -218,10 +276,181 @@ class SeriesDialog(QDialog):
         setattr(self.profile, which, {})
         self._refresh_saved()
 
+    # --- "Theo dõi tập mới" ---------------------------------------------------------------
+    def _watch_tab(self) -> QWidget:
+        from app.pipeline import watch
+
+        ap = series.autopilot_of(self.profile)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 8, 0, 0)
+        self.watch_on = QCheckBox("Tự lấy tập mới của bộ phim này")
+        self.watch_on.setChecked(ap["on"])
+        v.addWidget(self.watch_on)
+        hint = QLabel(f"vizsup xem các trang dưới đây theo lịch. Video có 《{self.profile.name}》 "
+                      "và số tập sau tập mới nhất đã có sẽ được tải, làm phụ đề và dịch tới bước "
+                      "duyệt — không tự duyệt, không tự dựng. Mỗi lần lấy tối đa "
+                      f"{ap['max_per_check']} tập.")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        v.addWidget(QLabel("Trang theo dõi (mỗi dòng một link):"))
+        self.watch_sources = QPlainTextEdit("\n".join(ap["sources"]))
+        self.watch_sources.setPlaceholderText("https://www.douyin.com/user/…\n"
+                                              "https://space.bilibili.com/…")
+        self.watch_sources.setMaximumHeight(90)
+        v.addWidget(self.watch_sources)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Kiểm tra mỗi"))
+        self.watch_every = QSpinBox()
+        self.watch_every.setRange(1, 168)
+        self.watch_every.setSuffix(" giờ")
+        self.watch_every.setValue(ap["every_h"])
+        row.addWidget(self.watch_every)
+        row.addStretch(1)
+        v.addLayout(row)
+        last = watch.last_checked(self.profile.slug)
+        self.watch_last = QLabel("Lần kiểm tra trước: " + (_when(last) if last else "chưa có"))
+        v.addWidget(self.watch_last)
+        row = QHBoxLayout()
+        self.watch_check = QPushButton("Kiểm tra ngay")
+        self.watch_check.setToolTip("Chỉ xem trang sẽ lấy những tập nào — chưa tải gì.")
+        self.watch_check.clicked.connect(self._check_now)
+        row.addWidget(self.watch_check)
+        self.watch_status = QLabel("")
+        self.watch_status.setWordWrap(True)
+        row.addWidget(self.watch_status, 1)
+        v.addLayout(row)
+        self.watch_result = QPlainTextEdit()
+        self.watch_result.setReadOnly(True)
+        self.watch_result.setVisible(False)
+        v.addWidget(self.watch_result, 1)
+        v.addLayout(self._task_row())
+        v.addStretch(0)
+        return w
+
+    # --- the Windows scheduled task (only on the owner's click) ------------------------------
+    def _task_row(self) -> QHBoxLayout:
+        from app import schedtask
+
+        row = QHBoxLayout()
+        self.task_lbl = QLabel("Chạy nền trên Windows: …")
+        self.task_lbl.setWordWrap(True)
+        self.task_lbl.setToolTip("Lịch Windows (Task Scheduler) chạy kiểm tra mỗi N giờ cả khi "
+                                 "vizsup đang đóng (khi bạn đã đăng nhập máy). Chỉ tạo / xóa khi "
+                                 "bạn bấm.")
+        self.task_on = QPushButton("Bật chạy nền")
+        self.task_off = QPushButton("Tắt chạy nền")
+        self.task_on.clicked.connect(self._install_task)
+        self.task_off.clicked.connect(self._remove_task)
+        row.addWidget(self.task_lbl, 1)
+        row.addWidget(self.task_on)
+        row.addWidget(self.task_off)
+        self._task_known = False
+        for wdg in (self.task_lbl, self.task_on, self.task_off):
+            wdg.setVisible(schedtask.supported())
+        return row
+
+    def _tab_changed(self, index: int) -> None:
+        """Ask Windows about the task the first time the tab is opened (not at every dialog)."""
+        from app import schedtask
+
+        if index == self._watch_index and not self._task_known and schedtask.supported():
+            self._task_known = True
+            self._task_busy("Chạy nền trên Windows: đang xem…")
+            self._runner().run(schedtask.task_installed, self._task_state, self._task_failed)
+
+    def _task_hours(self) -> int:
+        """The task runs as often as the most frequent followed series (this one as typed)."""
+        hours = [self.watch_every.value()]
+        hours += [series.autopilot_of(p)["every_h"] for p in series.followed()
+                  if p.slug != self.profile.slug]
+        return min(hours)
+
+    def _task_busy(self, text: str) -> None:
+        self.task_lbl.setText(text)
+        self.task_on.setEnabled(False)
+        self.task_off.setEnabled(False)
+
+    def _task_state(self, installed: bool, note: str = "") -> None:
+        self.task_on.setEnabled(True)
+        self.task_off.setEnabled(bool(installed))
+        self.task_on.setText("Đặt lại lịch" if installed else "Bật chạy nền")
+        self.task_lbl.setText(note or ("Chạy nền trên Windows: đang bật." if installed else
+                                       "Chạy nền trên Windows: chưa bật — chỉ kiểm tra khi bạn "
+                                       "chạy lệnh / mở app."))
+
+    def _task_failed(self, msg: str) -> None:
+        self.task_on.setEnabled(True)
+        self.task_off.setEnabled(True)
+        self.task_lbl.setText(f"✗ {msg}")
+
+    def _install_task(self) -> None:
+        from app import schedtask
+
+        hours = self._task_hours()
+        self._task_busy("Đang tạo lịch chạy nền…")
+
+        def done(summary: str) -> None:
+            extra = "" if self.watch_on.isChecked() else \
+                " Nhớ tick “Tự lấy tập mới” rồi bấm Lưu."
+            self._task_state(True, summary + extra)
+
+        self._runner().run(lambda: schedtask.install_task(hours), done, self._task_failed)
+
+    def _remove_task(self) -> None:
+        from app import schedtask
+
+        self._task_busy("Đang tắt chạy nền…")
+        self._runner().run(schedtask.remove_task,
+                           lambda ok: self._task_state(False, "Đã tắt chạy nền." if ok else ""),
+                           self._task_failed)
+
+    def _runner(self):
+        if self._bg is None:
+            from desktop.ui_thread import BgRunner
+
+            self._bg = BgRunner(self)
+        return self._bg
+
+    def _check_now(self) -> None:
+        """A dry look with the links as typed (not saved yet) — on a daemon thread; the
+        widgets are only touched back on the GUI thread (BgRunner)."""
+        from app.pipeline import watch
+
+        sources = parse_sources(self.watch_sources.toPlainText())
+        if not sources:
+            self.watch_status.setText("Chưa có link trang nào.")
+            return
+        self.watch_check.setEnabled(False)
+        self.watch_status.setText("Đang đọc trang… (Douyin mất khoảng 10–30 giây mỗi trang)")
+        prof = series.Profile(slug=self.profile.slug, name=self.profile.name,
+                              match=self.profile.match)
+        self._runner().run(lambda: watch.find_new(prof, sources), self._checked,
+                           self._check_failed)
+
+    def _checked(self, res: dict) -> None:
+        self.watch_check.setEnabled(True)
+        cap = series.autopilot_of(self.profile)["max_per_check"]
+        self.watch_status.setText("Xong — chưa tải gì.")
+        self.watch_result.setPlainText(format_preview(res, name=self.profile.name, cap=cap))
+        self.watch_result.setVisible(True)
+
+    def _check_failed(self, msg: str) -> None:
+        self.watch_check.setEnabled(True)
+        self.watch_status.setText(f"✗ {msg}")
+
+    def done(self, r: int) -> None:  # noqa: D401 - QDialog API: drop results of running checks
+        if self._bg is not None:
+            self._bg.shutdown()
+        super().done(r)
+
     def result_profile(self) -> series.Profile:
-        return apply_rows(self.profile, brief=self.brief.toPlainText(),
-                          characters=self.chars.cells(), glossary=self.gloss.cells(),
-                          pronounce=self.pron.cells())
+        p = apply_rows(self.profile, brief=self.brief.toPlainText(),
+                       characters=self.chars.cells(), glossary=self.gloss.cells(),
+                       pronounce=self.pron.cells())
+        return apply_watch(p, on=self.watch_on.isChecked(),
+                           sources=parse_sources(self.watch_sources.toPlainText()),
+                           every_h=self.watch_every.value())
 
     def _save(self) -> None:
         series.save(self.result_profile())
