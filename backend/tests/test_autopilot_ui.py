@@ -140,3 +140,39 @@ def test_the_gate_opens_the_one_click_review_when_autopilot_is_on(win, storage, 
         qapp.processEvents()
         time.sleep(0.02)
     assert opened == [job.id]
+
+
+def test_the_app_queues_new_episodes_found_by_the_watcher(win, storage, qapp, monkeypatch):
+    from app import schedtask
+    from app.pipeline import series, watch
+
+    monkeypatch.setattr(series, "followed", lambda: [object()])
+    monkeypatch.setattr(schedtask, "task_installed", lambda: False)
+    monkeypatch.setattr(watch, "check_all",
+                        lambda run=None, **kw: [run("https://www.douyin.com/video/1", "末日校车")])
+    queued = []
+    win._start_queue = lambda items, **kw: queued.extend(items)
+    win._watch_due()
+    end = time.time() + 5
+    while not queued and time.time() < end:
+        qapp.processEvents()
+        time.sleep(0.02)
+    (item,) = queued
+    assert item["url"].endswith("/video/1") and item["series"] == "末日校车"
+    assert item["translator"]                                        # the start screen's options
+
+
+def test_the_app_leaves_watching_to_the_background_task(win, storage, qapp, monkeypatch):
+    from app import schedtask
+    from app.pipeline import series, watch
+
+    monkeypatch.setattr(series, "followed", lambda: [object()])
+    monkeypatch.setattr(schedtask, "task_installed", lambda: True)
+    called = []
+    monkeypatch.setattr(watch, "check_all", lambda **kw: called.append(1) or [])
+    win._watch_due()
+    end = time.time() + 2
+    while win._watching and time.time() < end:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert called == []

@@ -176,6 +176,11 @@ class MainWindow(QMainWindow):
         self._post_timer = QTimer(self)
         self._post_timer.timeout.connect(self._post_due)
         self._post_timer.start(60_000)         # posting slots are minutes apart
+        self._watching = False                 # autopilot: one creator check at a time
+        self._watch_timer = QTimer(self)
+        self._watch_timer.timeout.connect(self._watch_due)
+        self._watch_timer.start(10 * 60_000)   # each series has its own interval (6 h)
+        QTimer.singleShot(2 * 60_000, self._watch_due)
         QTimer.singleShot(8000, self._check_catalog)   # newer models, once a day
         self._app_shortcuts()
         self._toast = Toast(self)
@@ -641,6 +646,41 @@ class MainWindow(QMainWindow):
         self._bg.run(lambda: autopilot.auto_short(job), done,
                      lambda m: self.status.set_status(f"Short tự cắt lỗi: {m}", "warn"))
 
+    def _watch_due(self) -> None:
+        """While the app is open: check the followed creators whose time has come (watch.py
+        decides) and queue their new episodes with the start screen's options. Skipped when
+        the Windows background task is installed (it does the same) or nothing is followed."""
+        from app.pipeline import series
+
+        if self._watching or self._closing or not series.followed():
+            return
+        self._watching = True
+
+        def work():
+            from app import schedtask
+            from app.pipeline import watch
+
+            if schedtask.task_installed():
+                return []
+            found: list[tuple[str, str]] = []
+            watch.check_all(run=lambda url, slug: found.append((url, slug)) or "hàng đợi của app")
+            return found
+
+        def done(found):
+            self._watching = False
+            if not found:
+                return
+            base = self.input._collect_opts()
+            items = [{**base, "url": url, "file": None, "series": slug} for url, slug in found]
+            self._start_queue(items)
+            self._notify("Có tập mới", f"{len(items)} tập đang tải và dịch — xong sẽ hỏi bạn duyệt")
+
+        def failed(msg):
+            self._watching = False
+            store.debug(f"watch failed: {msg}")
+
+        self._bg.run(work, done, failed)
+
     def _post_due(self) -> None:
         """Every minute: publish the next post whose slot has come (one at a time, off the GUI
         thread); results go to the post queue and a notification."""
@@ -652,6 +692,8 @@ class MainWindow(QMainWindow):
         if not due:
             return
         post = due[0]
+        if not autopilot.claim(post["id"]):         # the scheduled task has it
+            return
         self._posting = True
 
         def done(res):

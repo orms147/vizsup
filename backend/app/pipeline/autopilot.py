@@ -191,13 +191,24 @@ def plan_posts(job: Job, kind: str, *, now: float | None = None) -> list[dict]:
 def due(now: float | None = None) -> list[dict]:
     """Pending posts whose slot has come (oldest first)."""
     now = now if now is not None else time.time()
-    return sorted((p for p in load_posts() if p.get("status") == "pending" and p["slot"] <= now),
+
+    def ready(p: dict) -> bool:
+        if p.get("status") == "running":           # a publisher that never came back
+            return time.time() - float(p.get("claimed_at") or 0) > RUN_STALE_S
+        return p.get("status") == "pending"
+
+    return sorted((p for p in load_posts() if ready(p) and p["slot"] <= now),
                   key=lambda p: p["slot"])
 
 
 def record(post_id: str, result) -> dict | None:
     """Store a publisher's PostResult on the post job. Failed posts go back to "pending" one hour
     later (three attempts), then stay "failed"."""
+    with _PostsLock():
+        return _record(post_id, result)
+
+
+def _record(post_id: str, result) -> dict | None:
     posts = load_posts()
     for p in posts:
         if p["id"] != post_id:
@@ -209,6 +220,7 @@ def record(post_id: str, result) -> dict | None:
             p["status"] = result.status or "done"
         elif p["tries"] < 3:
             p["slot"] = time.time() + 3600
+            p["status"] = "pending"
         else:
             p["status"] = "failed"
         save_posts(posts)
@@ -238,6 +250,79 @@ def publish(post: dict, *, progress=None):
     except Exception as exc:  # noqa: BLE001 - a post must never crash the app
         return PostResult(False, "failed", message=f"{type(exc).__name__}: {exc}")
 
+
+
+# --- one publisher at a time across processes (the open app + the scheduled task) ---------------
+
+RUN_STALE_S = 2 * 3600           # a "running" post older than this was cut off — retry it
+
+
+class _PostsLock:
+    """A short exclusive section around posts.json read-modify-write (O_EXCL lock file)."""
+
+    def __init__(self) -> None:
+        self.path = _root() / "_autopilot" / "posts.lock"
+
+    def __enter__(self):
+        import os
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        end = time.time() + 10
+        while True:
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - self.path.stat().st_mtime > 60:
+                        self.path.unlink(missing_ok=True)
+                        continue
+                except OSError:
+                    continue
+                if time.time() > end:
+                    raise TimeoutError("posts.json đang bận") from None
+                time.sleep(0.05)
+
+    def __exit__(self, *_exc) -> None:
+        self.path.unlink(missing_ok=True)
+
+
+def claim(post_id: str) -> bool:
+    """Mark a due post "running" for this process; False when another process (the app or the
+    scheduled task) already has it, or it is no longer pending."""
+    import os
+
+    with _PostsLock():
+        posts = load_posts()
+        for p in posts:
+            if p["id"] != post_id:
+                continue
+            stale = p.get("status") == "running" and \
+                time.time() - float(p.get("claimed_at") or 0) > RUN_STALE_S
+            if p.get("status") != "pending" and not stale:
+                return False
+            p.update(status="running", claimed_at=time.time(), claimed_by=os.getpid())
+            save_posts(posts)
+            return True
+    return False
+
+
+def run_due(*, log=None, now: float | None = None) -> list[dict]:
+    """Publish every due post (claimed one at a time) — the scheduled task's path while the
+    app is closed. Returns the updated post jobs."""
+    say = log or (lambda _m: None)
+    done = []
+    for post in due(now):
+        if not claim(post["id"]):
+            continue
+        res = publish(post)
+        p = record(post["id"], res)
+        say(("✓ " if res.ok else "✗ ") + f"{post['platform']} · {post['kind']} · {post['job']}: "
+            + (res.message or res.url or res.status))
+        if p:
+            done.append(p)
+    return done
 
 # --- the Short cut after approval ------------------------------------------------------------
 

@@ -170,3 +170,26 @@ def test_render_opts_from_the_series_or_its_latest_render(storage):
     assert autopilot.render_opts(job)["voice"] == "vieneu:Trúc Ly"         # the series' own wins
     short = autopilot.render_opts(job, "short")
     assert short["frame"] == "tiktok" and short["short"] is True and short["safe_caption"]
+
+
+def test_claim_lets_one_process_publish_a_post(storage):
+    job = _episode(storage)
+    _plan_on({"folder": {"on": True, "kinds": ["long"]}})
+    (post,) = autopilot.plan_posts(job, "long", now=time.time() - 10 * 86400)
+    assert autopilot.claim(post["id"]) is True
+    assert autopilot.claim(post["id"]) is False                     # the other process
+    assert autopilot.due() == []                                    # running is not due
+    posts = autopilot.load_posts()
+    posts[0]["claimed_at"] = time.time() - autopilot.RUN_STALE_S - 1  # a publisher that died
+    autopilot.save_posts(posts)
+    assert [p["id"] for p in autopilot.due()] == [post["id"]] and autopilot.claim(post["id"])
+
+
+def test_run_due_publishes_and_records(storage):
+    job = _episode(storage)
+    _plan_on({"folder": {"on": True, "kinds": ["long"]}})
+    autopilot.plan_posts(job, "long", now=time.time() - 10 * 86400)
+    logs = []
+    (p,) = autopilot.run_due(log=logs.append)
+    assert p["status"] == "draft" and logs and logs[0].startswith("✓ folder")
+    assert autopilot.run_due() == []                                # nothing left

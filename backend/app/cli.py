@@ -492,6 +492,12 @@ def cmd_autopilot(args: argparse.Namespace) -> int:
              f"{sum(f['status'] == 'failed' for f in found)} lỗi"))
     for f in found:
         print("  " + watch.describe(f))
+    if not args.dry_run:                       # posts whose slot came while the app was closed
+        from app.pipeline import autopilot
+
+        posted = autopilot.run_due(log=lambda m: print(f"[autopilot] {m}"))
+        if posted:
+            print(f"[autopilot] đăng: {len(posted)} bài")
     return 1 if any(f["status"] == "failed" for f in found) else 0
 
 
