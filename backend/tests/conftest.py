@@ -90,6 +90,23 @@ def _no_link_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_telegram(monkeypatch):
+    """The Telegram remote (app/remote/telegram.py) never reaches api.telegram.org from a
+    test: every request fails unless the test installs its own fake (tests/telegram_fake.py)."""
+    try:
+        import httpx
+
+        from app.remote import telegram
+    except Exception:  # noqa: BLE001 - module absent in a partial checkout
+        return
+
+    def refuse(request):
+        raise httpx.ConnectError("Telegram is disabled in tests", request=request)
+
+    monkeypatch.setattr(telegram.TelegramChannel, "transport", httpx.MockTransport(refuse))
+
+
+@pytest.fixture(autouse=True)
 def _private_storage(tmp_path_factory, monkeypatch):
     """Tests never read or write the user's real storage/ (translation memory, style
     rules, ui_state, glossary…). A test may still point it elsewhere itself."""

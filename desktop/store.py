@@ -230,12 +230,6 @@ def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:
     return out if out.exists() else None
 
 
-def _qa_load(job) -> list:
-    from app.pipeline import qa
-
-    return qa.load(job)
-
-
 def project_summary(job_id: str) -> dict:
     """Status details for the "Tiếp tục dự án" list: cue count, cues still needing
     review, approval, duration, thumbnail. Blocking (reads files, may run ffmpeg)."""
@@ -271,47 +265,22 @@ def project_summary(job_id: str) -> dict:
 
 
 def _cue_issues(job) -> tuple[list, list[list[str]]]:
-    """The editor's cues and their review flags, judged exactly as the editor judges them."""
-    from app.pipeline import review, vi_lint
+    """The editor's cues and their review flags, judged exactly as the editor judges them
+    (app/pipeline/quickreview.py — shared with the Telegram remote)."""
+    from app.pipeline import quickreview
     from desktop import cuemodel
 
     cues = cuemodel.load_pair(job)
-    ocr, term = review.load_flag_spans(job)
-    rate = _voice_speed(job)            # same speed as the editor judges at
-    issues = review.cue_issues(cues, ocr_spans=ocr, term_spans=term,
-                               guess_spans=review.load_guess_spans(job),
-                               qa_findings=_qa_load(job), rate=rate,
-                               lint=vi_lint.context(job),      # same flags as the editor
-                               late=review.load_late(
-                                   job, rate=f"{int(round((rate - 1) * 100)):+d}%"))
-    return cues, issues
+    return cues, quickreview.cue_issues(job, cues)
 
 
 def flagged_lines(job) -> list[dict]:
     """Lines still needing a look (flagged and not marked "Đã xem"): {n, start, zh, vi, flags}
-    with the flags' Vietnamese labels — what "Duyệt nhanh" shows. [] when nothing is flagged."""
-    from app.pipeline import review
-    from desktop import cuemodel
+    with the flags' Vietnamese labels — what "Duyệt nhanh" shows (and the Telegram bot sends).
+    [] when nothing is flagged."""
+    from app.pipeline import quickreview
 
-    if not job.vi_srt.exists():
-        return []
-    cues, issues = _cue_issues(job)
-    out = []
-    for n, (c, keys) in enumerate(zip(cues, issues, strict=False), 1):
-        if keys and not cuemodel.is_reviewed(c):
-            out.append({"n": n, "start": c.start, "zh": getattr(c, "zh", "") or "",
-                        "vi": getattr(c, "vi", "") or "",
-                        "flags": [review.LABELS.get(k, k) for k in keys]})
-    return out
-
-
-def _voice_speed(job) -> float:
-    """The dub speed picked on the render page (voice.json), 1.0 when none."""
-    try:
-        r = json.loads((job.work_dir / "voice.json").read_text(encoding="utf-8")).get("rate")
-        return float(r) if r else 1.0
-    except (OSError, ValueError, TypeError, AttributeError):
-        return 1.0
+    return quickreview.flagged_lines(job)
 
 
 def debug(msg: str) -> None:

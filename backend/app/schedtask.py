@@ -10,6 +10,12 @@ after sleep. If Windows refuses the XML, the plain ``/SC HOURLY /MO <h> /TR …`
 (it runs from System32: still fine, ``app`` is installed and .env / storage are anchored to the
 repo in app/config.py). pythonw = no console window; the run's output goes to
 ``<storage>/_autopilot/autopilot.log``.
+
+With the Telegram bot paired (app/pipeline/remote.py) the task repeats every
+``REMOTE_EVERY_MIN`` minutes instead, so a link or a ✅ sent from the phone is picked up soon
+while the app is closed; each followed series is still checked only at its own interval
+(watch.is_due). Still created / changed only by the owner's click (Bộ phim → Theo dõi →
+"Bật chạy nền" / "Đặt lại lịch", or Cài đặt → Đăng video → Telegram).
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ TASK = "vizsup-autopilot"
 ARGS = "-m app.cli autopilot --once"
 _NO_WINDOW = 0x08000000          # CREATE_NO_WINDOW
 _TR_MAX = 261                    # schtasks' /TR limit
+REMOTE_EVERY_MIN = 15            # with the Telegram bot paired: read the owner's messages this often
 
 
 def supported() -> bool:
@@ -54,20 +61,40 @@ def _hours(every_h) -> int:
         return 6
 
 
-def task_xml(every_h: int, *, start: datetime | None = None, user: str | None = None) -> str:
-    """The task definition (Task Scheduler schema 1.2). Pure."""
+def _minutes(every_min) -> int | None:
+    try:
+        return max(5, min(60, int(every_min))) if every_min else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _remote_paired() -> bool:
+    try:
+        from app.remote import telegram
+
+        return telegram.paired()
+    except Exception:  # noqa: BLE001 - the task works without the bot
+        return False
+
+
+def task_xml(every_h: int, *, start: datetime | None = None, user: str | None = None,
+             every_min: int | None = None) -> str:
+    """The task definition (Task Scheduler schema 1.2): every ``every_h`` hours, or every
+    ``every_min`` minutes when given. Pure."""
     h = _hours(every_h)
+    m = _minutes(every_min)
+    interval = f"PT{m}M" if m else f"PT{h}H"
     start = (start or datetime.now() + timedelta(minutes=5)).replace(microsecond=0)
     who = f"\n      <UserId>{escape(user)}</UserId>" if user else ""
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>vizsup: kiểm tra tập mới của các bộ phim đang theo dõi, chạy tới bước duyệt (không tự duyệt, không tự dựng). Tắt trong vizsup → Bộ phim → Theo dõi.</Description>
+    <Description>vizsup: kiểm tra tập mới của các bộ phim đang theo dõi, chạy tới bước duyệt (không bao giờ tự duyệt); nếu đã ghép bot Telegram thì đọc tin nhắn của bạn và chỉ dựng tập bạn đã bấm Duyệt. Tắt trong vizsup → Bộ phim → Theo dõi.</Description>
   </RegistrationInfo>
   <Triggers>
     <TimeTrigger>
       <Repetition>
-        <Interval>PT{h}H</Interval>
+        <Interval>{interval}</Interval>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
       <StartBoundary>{start.isoformat()}</StartBoundary>
@@ -116,27 +143,36 @@ def _user() -> str | None:
     return f"{dom}\\{name}" if name and dom else name
 
 
-def install_task(every_h: int) -> str:
-    """Create (or replace) the task: every ``every_h`` hours, first run in ~5 minutes.
-    Returns a short Vietnamese summary; raises RuntimeError when Windows refuses."""
+def install_task(every_h: int, *, every_min: int | None = None) -> str:
+    """Create (or replace) the task: every ``every_h`` hours — every ``every_min`` minutes
+    when given, every REMOTE_EVERY_MIN when the Telegram bot is paired — first run in ~5
+    minutes. Returns a short Vietnamese summary; raises RuntimeError when Windows refuses."""
     if not supported():
         raise RuntimeError("Chạy nền theo lịch chỉ có trên Windows.")
     h = _hours(every_h)
+    m = _minutes(every_min if every_min is not None else
+                 (REMOTE_EVERY_MIN if _remote_paired() else None))
     start = datetime.now() + timedelta(minutes=5)
     with tempfile.TemporaryDirectory(prefix="vizsup-task-") as td:
         xml = Path(td) / f"{TASK}.xml"
-        xml.write_text(task_xml(h, start=start, user=_user()), encoding="utf-16")
+        xml.write_text(task_xml(h, start=start, user=_user(), every_min=m), encoding="utf-16")
         r = _schtasks("/Create", "/TN", TASK, "/XML", str(xml), "/F")
     if r.returncode != 0:
         first = _why(r)
         tr = tr_command()
         if len(tr) > _TR_MAX:
             raise RuntimeError(f"Windows không nhận lịch ({first}).")
-        r = _schtasks("/Create", "/SC", "HOURLY", "/MO", str(min(h, 23)), "/TN", TASK,
-                      "/TR", tr, "/F")
+        if m:
+            r = _schtasks("/Create", "/SC", "MINUTE", "/MO", str(m), "/TN", TASK, "/TR", tr, "/F")
+        else:
+            r = _schtasks("/Create", "/SC", "HOURLY", "/MO", str(min(h, 23)), "/TN", TASK,
+                          "/TR", tr, "/F")
         if r.returncode != 0:
             raise RuntimeError(f"Windows không tạo được lịch chạy nền: {_why(r)}")
         h = min(h, 23)
+    if m:
+        return (f"Đã bật chạy nền: mỗi {m} phút (đọc tin nhắn Telegram; tập mới vẫn kiểm tra "
+                f"theo lịch của từng bộ phim), lần đầu khoảng {start:%H:%M}.")
     return f"Đã bật chạy nền: mỗi {h} giờ, lần đầu khoảng {start:%H:%M}."
 
 

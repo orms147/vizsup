@@ -3,19 +3,21 @@ Khóa API / Tải video / AI và mô hình / Đường dẫn / Đăng video / Ki
 Hủy thay đổi (the editor's "Đã lưu" never means settings were saved). Everything is written
 to the repo-root .env and applied to the live settings object.
 
-Network calls (Kiểm tra kết nối, tải danh sách model, Kết nối tài khoản đăng video) run on
-a daemon thread so the UI never freezes.
+Network calls (Kiểm tra kết nối, tải danh sách model, Kết nối tài khoản đăng video, the
+Telegram bot's token check) run on a daemon thread so the UI never freezes.
 """
 from __future__ import annotations
 
 import threading
+import time
 import webbrowser
 from datetime import date
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -219,6 +221,7 @@ class SettingsView(QWidget):
         self._jobs: list[tuple] = []  # (thread, _NetWorker) — the worker stays referenced until done
         self._acct: dict[str, dict] = {}            # publisher name → its card's widgets
         self._acct_cancel: threading.Event | None = None   # the browser sign-in being waited on
+        self._tg: dict = {}                         # the Telegram card's widgets
         self._dirty = False
 
         root = QVBoxLayout(self)
@@ -765,6 +768,7 @@ class SettingsView(QWidget):
                           "docs/plan/J-publish-setup.md.", "secondary", wrap=True))
         for name in PUBLISH_PLATFORMS:
             v.addWidget(self._account_card(name))
+        v.addWidget(self._telegram_card())
         lock = QHBoxLayout()
         lock.addWidget(icon_label("LockKeyhole", V2["muted"], 14))
         lock.addWidget(label("Mã ứng dụng lưu trong .env; mã truy cập tài khoản lưu trong "
@@ -955,6 +959,225 @@ class SettingsView(QWidget):
         if isinstance(res, Exception):
             self._account_status(name, f"✗ {self._why(res)}", "red")
 
+    # --- Điều khiển qua Telegram (app/remote/telegram.py, app/pipeline/remote.py) -----------
+    def _telegram_card(self) -> QFrame:
+        from app import schedtask
+        from app.remote import telegram
+
+        card = _card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(8)
+        top = QHBoxLayout()
+        top.addWidget(label("Điều khiển qua Telegram", "h2"))
+        badge_w = badge("Chưa nối")
+        top.addWidget(badge_w, 0, Qt.AlignVCenter)
+        top.addStretch(1)
+        connect = button("Kết nối", "Link", variant="primary", small=True)
+        connect.clicked.connect(self._telegram_connect)
+        drop = button("Gỡ kết nối", "Trash2", variant="ghost", small=True)
+        drop.clicked.connect(self._telegram_disconnect)
+        self._buttons += [connect, drop]
+        top.addWidget(connect)
+        top.addWidget(drop)
+        cl.addLayout(top)
+        cl.addWidget(label(
+            "Gửi link Douyin / Bilibili từ điện thoại, duyệt tập mới bằng một nút, xem lịch đăng "
+            "— qua bot Telegram của riêng bạn. Duyệt vẫn là việc của bạn: bot chỉ duyệt khi bạn "
+            "bấm nút Duyệt trong tin, và chỉ đúng bản phụ đề tin đó gửi.", "secondary", wrap=True))
+        cl.addWidget(label(
+            "1. Trong Telegram mở @BotFather → gửi /newbot → đặt tên và username cho bot → chép "
+            "token BotFather gửi (dạng 123456789:AA…).\n"
+            "2. Dán token vào ô dưới rồi bấm Kết nối.\n"
+            "3. Gửi /start <mã> cho bot của bạn (mã hiện bên dưới, dùng 1 lần trong 30 phút).",
+            "small", wrap=True))
+        row = QHBoxLayout()
+        name_lbl = label("Token bot", "secondary")
+        name_lbl.setFixedWidth(96)
+        row.addWidget(name_lbl)
+        token = QLineEdit()
+        token.setObjectName("mono")
+        token.setEchoMode(QLineEdit.Password)
+        token.setPlaceholderText("Dán token @BotFather gửi…")
+        row.addWidget(token, 1)
+        reveal = icon_button("Eye", "Hiện / ẩn", checkable=True)
+        reveal.toggled.connect(
+            lambda on, e=token: e.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
+        row.addWidget(reveal)
+        cl.addLayout(row)
+        status = label("", "small", wrap=True)
+        status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        cl.addWidget(status)
+        open_bot = button("Mở bot trong Telegram", "Smartphone", variant="ghost", small=True)
+        open_bot.clicked.connect(self._telegram_open)
+        open_row = QHBoxLayout()
+        open_row.addWidget(open_bot)
+        open_row.addStretch(1)
+        cl.addLayout(open_row)
+        notes = QHBoxLayout()
+        notes.addWidget(label("Báo cho bạn:", "secondary"))
+        checks = {}
+        for kind in telegram.NOTIFY_KINDS:
+            cb = QCheckBox(telegram.NOTIFY_LABELS[kind])
+            cb.toggled.connect(lambda on, k=kind: self._telegram_notify(k, on))
+            notes.addWidget(cb)
+            checks[kind] = cb
+        notes.addStretch(1)
+        cl.addLayout(notes)
+        task_row = QHBoxLayout()
+        task_lbl = label("Khi app đóng, tác vụ nền của Windows đọc tin nhắn của bot. Bấm để nó "
+                         f"chạy mỗi {schedtask.REMOTE_EVERY_MIN} phút (việc theo dõi tập mới vẫn "
+                         "theo lịch của từng bộ phim).", "small", wrap=True)
+        task_btn = button(f"Chạy nền mỗi {schedtask.REMOTE_EVERY_MIN} phút", "Clock3", small=True)
+        task_btn.clicked.connect(self._telegram_task)
+        self._buttons.append(task_btn)
+        task_row.addWidget(task_lbl, 1)
+        task_row.addWidget(task_btn)
+        cl.addLayout(task_row)
+        for wdg in (task_lbl, task_btn):
+            wdg.setVisible(schedtask.supported())
+        cl.addWidget(label("Bot chỉ trả lời đoạn chat đã ghép, tin từ người khác bị bỏ qua. Token và "
+                           "mã chat chỉ lưu trong storage/_accounts/telegram.json trên máy này.",
+                           "small", wrap=True))
+        timer = QTimer(self)                 # while a code waits: see the pairing land
+        timer.setInterval(2000)
+        timer.timeout.connect(self.refresh_telegram)
+        self._tg = {"badge": badge_w, "connect": connect, "drop": drop, "token": token,
+                    "status": status, "open": open_bot, "checks": checks, "timer": timer,
+                    "task": task_btn, "task_lbl": task_lbl}
+        return card
+
+    def _telegram_status(self, text: str, color: str = "muted") -> None:
+        lbl = self._tg["status"]
+        lbl.setText(text)
+        lbl.setStyleSheet(f"color:{V2[color]};")
+
+    def refresh_telegram(self) -> None:
+        """Badge / status / buttons from storage/_accounts/telegram.json (local file only)."""
+        from app.remote import telegram
+
+        if not self._tg:
+            return
+        st = telegram.status()
+        w = self._tg
+        b = w["badge"]
+        if st["paired"]:
+            b.setText("Đã ghép")
+            b.setObjectName("badgeOk")
+        elif st["code"]:
+            b.setText("Chờ ghép")
+            b.setObjectName("badgeWarn")
+        else:
+            b.setText("Chưa nối" if not st["configured"] else "Chưa ghép")
+            b.setObjectName("badge")
+        b.style().unpolish(b)
+        b.style().polish(b)
+        bot = f"@{st['bot']}" if st["bot"] else "bot của bạn"
+        if st["code"]:
+            left = max(1, int((st["expires"] - time.time()) // 60))
+            extra = (f"\nĐang ghép với {st['who']} — gửi mã mới sẽ chuyển sang đoạn chat khác."
+                     if st["paired"] else "")
+            self._telegram_status(f"Gửi /start {st['code']} cho {bot} trong Telegram (còn ~{left} "
+                                  f"phút) — hoặc bấm “Mở bot trong Telegram”.{extra}", "amber")
+        elif st["paired"]:
+            self._telegram_status(f"✓ Đã ghép với {st['who'] or 'bạn'} (chat {st['chat_hint']}) qua "
+                                  f"{bot} · token {st['token_hint']}. Gửi /help cho bot để xem "
+                                  "lệnh.", "green")
+        elif st["configured"]:
+            self._telegram_status(f"Đã lưu token {st['token_hint']} cho {bot} — bấm Kết nối để lấy "
+                                  "mã ghép mới.")
+        else:
+            self._telegram_status("Chưa kết nối.")
+        w["token"].setPlaceholderText(f"Đã lưu token {st['token_hint']} — dán token mới để đổi bot"
+                                      if st["configured"] else "Dán token @BotFather gửi…")
+        w["connect"].setText("Lấy mã ghép mới" if st["paired"] else "Kết nối")
+        w["drop"].setVisible(st["configured"])
+        w["open"].setVisible(bool(st["code"] and st["bot"]))
+        for kind, cb in w["checks"].items():
+            cb.blockSignals(True)
+            cb.setChecked(st["notify"][kind])
+            cb.setEnabled(st["configured"])
+            cb.blockSignals(False)
+        timer = w["timer"]
+        if st["code"] and not timer.isActive():
+            timer.start()
+        elif not st["code"] and timer.isActive():
+            timer.stop()
+
+    def _telegram_connect(self) -> None:
+        from app.remote import telegram
+
+        token = self._tg["token"].text().strip()
+        if not token:
+            if telegram.configured():          # same bot: only a fresh pairing code
+                telegram.new_pairing()
+                self.refresh_telegram()
+                return
+            self._telegram_status("Dán token bot trước (xem 3 bước ở trên).", "red")
+            return
+        if not telegram.valid_token(token):
+            self._telegram_status("Token không đúng dạng — chép lại cả dòng @BotFather gửi "
+                                  "(dạng 123456789:AA…).", "red")
+            return
+        self._telegram_status("Đang kiểm tra token với Telegram…")
+        self._bg(lambda t=token: telegram.connect(t), self._telegram_connected)
+
+    def _telegram_connected(self, res) -> None:
+        from app.remote.telegram import scrub
+
+        self._set_busy(False)
+        if isinstance(res, Exception):
+            self.refresh_telegram()
+            why = str(res) if type(res).__name__ == "TelegramError" else \
+                f"không kết nối được Telegram ({type(res).__name__})"
+            self._telegram_status(f"✗ {scrub(why)}", "red")
+            return
+        self._tg["token"].clear()
+        self.refresh_telegram()
+
+    def _telegram_open(self) -> None:
+        from app.remote import telegram
+
+        st = telegram.status()
+        link = telegram.deep_link(st["bot"], st["code"])
+        if link:
+            webbrowser.open(link)
+
+    def _telegram_notify(self, kind: str, on: bool) -> None:
+        from app.remote import telegram
+
+        telegram.set_notify(kind, on)
+
+    def _telegram_disconnect(self) -> None:
+        from app.pipeline import remote
+
+        r = QMessageBox.question(self, "Gỡ kết nối Telegram",
+                                 "Gỡ bot Telegram khỏi vizsup? Token và đoạn chat đã ghép bị xóa "
+                                 "khỏi máy; bot sẽ không trả lời nữa cho tới khi Kết nối lại.")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self._telegram_status("Đang gỡ kết nối…")
+        self._bg(remote.unpair, lambda _res: (self._set_busy(False), self.refresh_telegram()))
+
+    def _telegram_task(self) -> None:
+        from app import schedtask
+        from app.pipeline import series
+
+        hours = min([series.autopilot_of(p)["every_h"] for p in series.followed()] or [6])
+        self._tg["task_lbl"].setText("Đang tạo lịch chạy nền…")
+
+        def done(res) -> None:
+            self._set_busy(False)
+            lbl = self._tg["task_lbl"]
+            if isinstance(res, Exception):
+                lbl.setText(f"✗ {res}")
+                lbl.setStyleSheet(f"color:{V2['red']};")
+            else:
+                lbl.setText(str(res))
+                lbl.setStyleSheet(f"color:{V2['green']};")
+
+        self._bg(lambda: schedtask.install_task(hours, every_min=schedtask.REMOTE_EVERY_MIN), done)
+
     @staticmethod
     def _why(exc: Exception) -> str:
         from app.providers.publish._common import PublishError
@@ -1093,6 +1316,7 @@ class SettingsView(QWidget):
             f.setText(getattr(settings, attr, "") or "")
             f.blockSignals(False)
         self._refresh_accounts()
+        self.refresh_telegram()
         for env, _n, attr, _k, _h, _c in OPTIONS:
             w = self._opts[env]
             w.blockSignals(True)
@@ -1268,3 +1492,5 @@ class SettingsView(QWidget):
     def shutdown(self) -> None:  # in-flight network calls: results dropped, nothing joined
         self._closing_jobs = True
         self._cancel_account()            # a browser sign-in still waited on: free its port
+        if self._tg:
+            self._tg["timer"].stop()

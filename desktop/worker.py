@@ -525,44 +525,10 @@ class PipelineWorker(QObject):
             self.finished.emit()
 
     def _note_hardsubs(self, job, o: dict) -> None:
-        """ASR was picked by hand: still look (locally, 16 frames, nothing uploaded)
-        for burned-in Chinese text, so the editor can default to a box that covers it.
-        Best effort — never fails the run."""
-        import json as _json
+        """ASR was picked by hand: still look for burned-in Chinese text (app/pipeline/render.py)."""
+        from app.pipeline import render
 
-        from app.pipeline import hardsub_detect
-
-        try:
-            has = hardsub_detect.detect_hardsubs(job, crop=o.get("ocr_region", "bottom-third"))
-        except Exception as exc:  # noqa: BLE001
-            store.debug(f"hardsub note skipped: {exc}")
-            return
-        job.metadata["has_hardsubs"] = has
-        atomic_write_text((job.work_dir / "metadata.json"),
-            _json.dumps(job.metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-        if has:
-            # say what will really cover it (the render may use the glass, 2026-10-30)
-            how = {"glass": "kính mờ", "box": "nền hộp", "blur": "dải làm mờ"}.get(
-                str(o.get("cover_mode") or ""))
-            self.log.emit("ℹ Video có chữ Trung in sẵn — " + (f"che bằng {how}" if how else
-                          "nên che (màn Dựng → Che chữ Trung, hoặc kiểu chữ Kính mờ trắng)"))
-
-    def _glass_region(self, job, o: dict) -> None:
-        """The glass must sit where the burned-in Chinese is: when no band was measured
-        yet (ASR job, older project) look once now — local OCR on 16 frames, a few
-        seconds, nothing uploaded. Best effort: without it the glass covers the usual
-        caption band."""
-        from app.pipeline import assemble, glass
-
-        if not (glass.is_glass(o.get("style")) or o.get("cover_mode") == "glass"):
-            return
-        if o.get("preview") or assemble._load_region(job) is not None:
-            return
-        _region, hardsubs, _cn = glass.job_context(job)
-        if not hardsubs:
-            return
-        self.progress.emit(0.6, "Đang dò vị trí chữ Trung để đặt kính mờ…")
-        self._note_hardsubs(job, o)
+        render.note_hardsubs(job, o, log=self.log.emit, debug=store.debug)
 
     # --- render --------------------------------------------------------------
     @Slot()
@@ -575,110 +541,14 @@ class PipelineWorker(QObject):
 
     def _render_body(self) -> None:
         """One attempt of _run_render (raises); re-run as a whole after a lost
-        connection — every stage skips what is already on disk."""
-        from app.pipeline import assemble, disclosure, review, tts
+        connection — every stage skips what is already on disk. The body itself is
+        app/pipeline/render.py (shared with the scheduled task's headless render); it
+        refuses anything but the approved revision."""
+        from app.pipeline import render
 
-        job, o = self.job, self.opts
-        self._check()
-        if not job.vi_srt.exists():
-            raise FileNotFoundError("Chưa có vi.srt — hãy chạy tới bước duyệt trước.")
-        # the edit gate, enforced where the money is spent: TTS + encode only run
-        # for the exact revision the user approved (app/pipeline/approval.py)
-        from app.pipeline import approval
-        if not approval.is_approved(job):
-            raise RuntimeError("Phụ đề chưa được duyệt, hoặc đã sửa sau khi duyệt — quay lại "
-                               "Sửa phụ đề và bấm Duyệt và dựng.")
-        from app.pipeline import batch
-
-        batch.save_opts(job.work_dir, o)   # every real render: a template for "Dựng hàng loạt"
-
-        # ENG-2: when keeping the music, separate the instrumental BEFORE TTS
-        # (both heavy → sequential, 8 GB rule). Failure — or no engine installed —
-        # degrades to "duck" in assemble: the original music + effects stay.
-        if o.get("audio_mode") == "keep_music":
-            from app.pipeline import separate
-            if not separate.available():
-                self.log.emit("⚠ Chưa cài bộ tách giọng — dùng “Giữ nguyên âm gốc + lồng "
-                              "tiếng” (nhạc, hiệu ứng vẫn còn).")
-            else:
-                self.stage_started.emit("separate")
-                self.progress.emit(0.1, "Đang tách giọng khỏi nhạc nền…")
-                try:
-                    separate.separate_background(job, log=self.log.emit)
-                except Exception as exc:  # noqa: BLE001 - degrade, don't abort the render
-                    self.log.emit(f"⚠ Không tách được nhạc nền ({exc}) — dùng “Giữ nguyên "
-                                  "âm gốc + lồng tiếng”.")
-
-        original = o.get("audio_mode") == "original"
-        if original:
-            # E-8: keep the original voice/singing — subtitles only, no TTS at all
-            segments = []
-            self.log.emit("Giữ giọng gốc — không lồng tiếng, chỉ đốt phụ đề")
-        else:
-            self.stage_started.emit("tts")
-            self.progress.emit(0.2, "Đang tạo lồng tiếng (TTS)…")
-            segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
-                                      rate=o.get("rate"), log=self.log.emit,
-                                      voice_by_gender=bool(o.get("voice_by_gender")),
-                                      cancel=lambda: self._cancel,  # per-cue cancel (N-10)
-                                      progress=lambda d, n: self.progress.emit(
-                                          0.2 + 0.3 * d / max(1, n),
-                                          f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu"))
-            self.log.emit(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
-
-        # F-4: the user's own commentary — a voice other than the dub's, or their recording
-        from app.pipeline import commentary
-
-        notes = commentary.load(job)
-        voiced = []
-        if notes:
-            self._check()
-            self.progress.emit(0.5, f"Đang tạo giọng cho {len(notes)} đoạn bình luận…")
-            voiced = commentary.synthesize(job, notes, provider=o.get("tts", "edge"),
-                                           dub_voice=o.get("voice"), rate=o.get("rate"),
-                                           log=self.log.emit)
-        # keeping the original voice but adding commentary: the original ducks under it
-        audio_mode = ("duck" if voiced else "replace") if original else \
-            o.get("audio_mode", "replace")
-
-        self._check()
-        self.stage_started.emit("assemble")
-        self.progress.emit(0.6, "Đang ghép video (ffmpeg)…")
-        ui_size = o.get("size")
-        ass_size = int(round(ui_size * 3)) if ui_size else 60  # UI px → .ass units (1080 canvas)
-        self._glass_region(job, o)
-        out = assemble.assemble(
-            job, segments,
-            burn_cues=o.get("burn_cues"),  # N-13 snapshot: subs match what TTS spoke
-            audio_mode=audio_mode,
-            orig_volume=1.0 if original else o.get("orig_volume", 1.0),
-            dub_volume=o.get("dub_volume", 1.0),
-            cover_hardsubs=o.get("cover_hardsubs", False),
-            cover_mode=o.get("cover_mode"),
-            font=o.get("font", "Be Vietnam Pro"),
-            size=ass_size,
-            style=o.get("style"),
-            log=self.log.emit,
-            preview=bool(o.get("preview")),     # E-15: fast low-res check first
-            frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
-            res=o.get("res") or "source",       # "Chất lượng": short side, never upscaled
-            preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
-            progress=lambda f, m: self.progress.emit(0.6 + 0.4 * f, m),
-            cancel=lambda: self._cancel,        # a long encode stops on Hủy
-            overlays=disclosure.overlays(        # F-1/F-2: credit + AI-voice label
-                job, credit=bool(o.get("credit_overlay")),
-                ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
-            commentary=voiced,
-            watermark=o.get("watermark"),      # the translator's own mark
-            fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
-            episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card
-            safe_caption=o.get("safe_caption"),    # Short: subtitles above the platform's UI
-            canvas_text=bool(o.get("canvas_text")),   # 9:16: chip / hook / end card in the bars
-            bar_subs=bool(o.get("bar_subs")),         # … and the dialogue in the bottom bar
-        )
-        review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
-        self.progress.emit(1.0, "Hoàn tất")
-        self.log.emit(f"✓ Xuất: {out}")
+        out = render.render_job(self.job, self.opts, log=self.log.emit,
+                                progress=self.progress.emit, stage=self.stage_started.emit,
+                                cancel=lambda: self._cancel, debug=store.debug)
         self.render_done.emit(str(out))
 
     def _run_render(self) -> None:

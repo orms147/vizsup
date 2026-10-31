@@ -1,4 +1,4 @@
-# J — Nối tài khoản để vizsup tự đăng video (YouTube · Facebook · TikTok)
+# J — Nối tài khoản để vizsup tự đăng video (YouTube · Facebook · TikTok) + điều khiển qua Telegram
 
 Hướng dẫn cho chủ máy, làm **một lần**. vizsup đăng qua **API chính thức** của từng nền tảng,
 bằng **ứng dụng do chính bạn tạo** trên trang dành cho nhà phát triển của họ. vizsup không bao
@@ -251,3 +251,83 @@ httpx thay được bằng `httpx.MockTransport` trong test). Thuộc tính thê
 `connect()` / `fetch_pages()`+`choose_page()` / `disconnect()`. `publish()` trả
 `PostResult(ok=False, status="failed")` khi nền tảng từ chối; lỗi mạng sau khi đã thử lại thì
 **ném ra** để hàng đăng chờ mạng (`app.net.run_resilient`).
+
+---
+
+## 6. Điều khiển qua Telegram (gửi link · duyệt · xem lịch đăng từ điện thoại)
+
+Một **bot Telegram của riêng bạn** để không phải ngồi máy: gửi link → máy làm tới bước duyệt →
+bot gửi các câu cần xem kèm nút **✅ Duyệt** / **✏️ Để sửa trên máy** → bấm Duyệt → máy tự dựng,
+cắt Short, lên lịch và đăng (theo "Tự động đăng" của bộ phim) → bot báo từng bước.
+
+### 6.1 Tạo bot (1 lần, ~2 phút)
+1. Trong Telegram tìm **@BotFather** (có dấu tích xanh) → gửi `/newbot`.
+2. Đặt **tên** (vd. *vizsup của Bách*) rồi **username** kết thúc bằng `bot` (vd. `vizsup_bach_bot`).
+3. BotFather gửi **token** dạng `123456789:AA…` — chép cả dòng. Ai có token là điều khiển được
+   bot: đừng gửi cho ai. Lộ thì gửi `/revoke` cho BotFather để lấy token mới.
+
+vizsup không tạo tài khoản, không đăng nhập Telegram giúp bạn — chỉ dùng token bạn dán.
+
+### 6.2 Ghép bot với vizsup
+1. **Cài đặt → Đăng video → Điều khiển qua Telegram**: dán token → **Kết nối** (vizsup hỏi
+   Telegram để kiểm tra token).
+2. Thẻ hiện **mã 6 số** (dùng 1 lần, 30 phút). Gửi `/start <mã>` cho bot — hoặc bấm **Mở bot
+   trong Telegram** (link `t.me/<bot>?start=<mã>`, chỉ cần bấm Bắt đầu).
+3. Thẻ đổi sang **Đã ghép với <tên bạn>**, bot chào và gửi hướng dẫn. Từ đó bot **chỉ trả lời
+   đoạn chat này**: tin từ người khác (kể cả trong nhóm) bị bỏ qua, không trả lời gì. Nhập sai mã
+   5 lần → mã hủy, bấm **Lấy mã ghép mới**.
+4. **Báo cho bạn:** chọn loại tin muốn nhận — *Tập chờ duyệt*, *Đã lên lịch đăng*, *Đã đăng*,
+   *Lỗi*. Trả lời cho link bạn gửi (đã nhận, đã tải, đang dịch, lỗi) luôn được gửi.
+5. **Gỡ kết nối** xóa token + đoạn chat khỏi máy; bot không trả lời nữa.
+
+### 6.3 Bot làm được gì
+| Bạn gửi | vizsup làm |
+|---|---|
+| Link Douyin / Bilibili, hoặc dán nguyên đoạn chia sẻ "长按复制… https://v.douyin.com/… 打开抖音" | Chạy tới bước duyệt như link dán trong app (bộ phim tự nhận từ 《…》), báo: đã nhận → đã tải → đang dịch → **chờ duyệt** (hoặc lỗi + lý do). Link đã có trên máy: gửi lại tin duyệt / báo đã làm |
+| (tập tới bước duyệt — cả tập do "Theo dõi tập mới" tìm được) | Tin **Chờ duyệt**: tiêu đề, số câu, tối đa 40 câu bị đánh dấu (lúc, tiếng Trung, tiếng Việt, vì sao), "Sau khi duyệt: …" như hộp *Duyệt nhanh*; nút ✅ Duyệt / ✏️ Để sửa trên máy |
+| ✅ Duyệt | Duyệt **đúng bản phụ đề trong tin đó**, rồi Tự động đăng: dựng → "Đã lên lịch đăng: YouTube lúc 19:00 …" → "✅ YouTube: đã đăng <link>" / "❌ … lỗi" |
+| ✏️ Để sửa trên máy | Không duyệt; tập chờ bạn mở Thư viện sửa |
+| `/trangthai` (`/status`) | Tập chờ duyệt, hàng dựng, bài sắp đăng trong 24 giờ, 5 bài vừa đăng (có link), bài lỗi |
+| `/help` | Hướng dẫn |
+
+**Duyệt vẫn là việc của bạn.** Bot không bao giờ tự duyệt. Nút ✅ mang mã dự án + mã phiên bản
+phụ đề lúc gửi tin; bấm ✅ bị **từ chối (kèm lý do)** khi: phụ đề đã đổi sau khi gửi tin (bot gửi
+bản mới để bạn đọc lại), tập đã duyệt rồi, tập đang xử lý / đang dựng, hoặc tập đang mở trên máy
+và bản đang sửa dở khác bản trong tin (app lưu bản đang sửa trước rồi mới so).
+
+### 6.4 Khi app đóng
+- **App mở** (khuyên dùng — để ở khay hệ thống): app đọc tin nhắn liên tục, trả lời trong vài
+  giây, dựng trong app như thường.
+- **App đóng**: tác vụ nền Windows (`vizsup autopilot --once`, xem Bộ phim → Theo dõi → *Bật chạy
+  nền*) đọc tin mỗi lần chạy: link → tải + dịch → gửi tin duyệt; ✅ Duyệt → **duyệt rồi dựng ngay
+  trong tác vụ nền** (không cần mở app) theo cài đặt dựng của bộ phim, cắt Short (chỉ tự duyệt
+  Short khi mọi câu của nó là câu đã duyệt, như trong app), lên lịch và đăng đúng giờ. Bộ phim
+  chưa bật Tự động đăng / chưa từng dựng tập nào: bot báo "đã duyệt — mở app để dựng".
+- Sau khi ghép bot, bấm **Chạy nền mỗi 15 phút** (thẻ Telegram) hoặc *Đặt lại lịch* ở Bộ phim →
+  Theo dõi: tác vụ chạy mỗi 15 phút để trả lời kịp; tập mới của từng bộ phim vẫn chỉ kiểm tra
+  theo lịch riêng (mỗi 6 giờ …). Lịch chỉ tạo/đổi khi **bạn bấm**. Chưa đặt lại thì tác vụ vẫn
+  chạy theo giờ cũ — Telegram giữ tin chờ tối đa **24 giờ**, quá thì tin bị mất.
+- Chỉ một nơi đọc tin của bot một lúc: app mở thì tác vụ nền chỉ gửi báo, không đọc.
+- Máy phải bật và bạn đã đăng nhập Windows (tác vụ nền chạy khi bạn đăng nhập).
+
+### 6.5 Riêng tư
+- Token, mã đoạn chat và vị trí đọc tin (offset) chỉ nằm trong `storage/_accounts/telegram.json`
+  trên máy này (thư mục `storage/` không lên git); Cài đặt chỉ hiện 4 ký tự cuối. Log không bao
+  giờ có token.
+- vizsup chỉ gọi `https://api.telegram.org` (long polling — không webhook, máy sau router vẫn chạy).
+- Nội dung đi qua máy chủ Telegram: tiêu đề tập, các câu phụ đề bị đánh dấu, link bài đã đăng.
+  Không gửi video, không gửi khóa API. Chat với bot **không** mã hóa đầu-cuối (Telegram không có
+  Secret Chat cho bot).
+
+### 6.6 Ghi chú cho người phát triển
+`backend/app/remote/telegram.py` (Bot API qua httpx: getMe, getUpdates, sendMessage,
+answerCallbackQuery, editMessageReplyMarkup; ghép mã; tệp tài khoản; `TelegramChannel.transport`
+thay bằng `httpx.MockTransport` trong test), `backend/app/remote/__init__.py` (giao diện kênh:
+thêm Zalo/Google Sheet = một module cùng các hàm), `backend/app/pipeline/remote.py` (ý nghĩa tin
+nhắn, chốt duyệt theo revision, khóa "một nơi đọc" `storage/_remote/poll.json`, trạng thái tin
+duyệt đã gửi `storage/_remote/state.json`, `CliSession` cho tác vụ nền), `desktop/remote_bridge.py`
+(app mở: poll trên luồng nền, xử lý trên luồng GUI, gửi qua `remote.Outbox`). Dựng không cần app:
+`backend/app/pipeline/render.py` (thân dựng chung với `desktop/worker.py`, tự kiểm tra duyệt).
+Sự thật đã kiểm (core.telegram.org/bots/api, 31/10/2026): tin ≤ 4096 ký tự, `callback_data`
+1–64 byte, `answerCallbackQuery` ≤ 200 ký tự, update giữ ≤ 24 giờ, đang có webhook thì
+getUpdates không chạy (vizsup gọi `deleteWebhook` khi Kết nối), hai getUpdates cùng lúc → 409.

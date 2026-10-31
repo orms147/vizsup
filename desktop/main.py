@@ -182,6 +182,10 @@ class MainWindow(QMainWindow):
         self._watch_timer.start(10 * 60_000)   # each series has its own interval (6 h)
         QTimer.singleShot(2 * 60_000, self._watch_due)
         QTimer.singleShot(8000, self._check_catalog)   # newer models, once a day
+        from desktop.remote_bridge import RemoteBridge
+
+        # Điều khiển qua Telegram (app/pipeline/remote.py): links / ✅ from the owner's phone
+        self.remote = RemoteBridge(self)
         self._app_shortcuts()
         self._toast = Toast(self)
         app = QApplication.instance()
@@ -338,7 +342,7 @@ class MainWindow(QMainWindow):
             "progress": self.input.set_progress,
             "log": self.input.append_log,
             "failed": self._on_gate_failed,
-            "gate_reached": self._on_gate,
+            "gate_reached": lambda j=job: (self._on_gate(), self.remote.gate(j)),
             "split_done": self._on_split_done,
         })
 
@@ -352,6 +356,8 @@ class MainWindow(QMainWindow):
         self.input.append_log(f"• {s}")
         self.input.set_stage(s)
         running = self._queue_job or self.job
+        if self._queue_job is not None:
+            self.remote.stage(s, self._queue_job, self._queue_opts)
         if s != "download" and running is not None:
             md = dict(running.metadata)     # copy: the worker thread owns the dict
             plat = {"douyin": "Douyin", "bilibili": "Bilibili"}.get(md.get("platform") or "", "")
@@ -541,11 +547,9 @@ class MainWindow(QMainWindow):
 
     # --- autopilot (docs/plan/J-autopilot.md): approve once -> render -> Short -> post ----------
     def _autopilot_plan(self, job):
-        from app.pipeline import autopilot, series
+        from app.pipeline import autopilot
 
-        p = series.profile_of(job)
-        plan = autopilot.load_plan(p.slug) if p is not None else None
-        return p, (plan if plan and plan.get("on") else None)
+        return autopilot.plan_of(job)
 
     def _fast_approve(self, iid: str) -> None:
         """Thư viện -> «Duyệt nhanh»: the flagged lines only + one button. The gate is this click."""
@@ -563,17 +567,7 @@ class MainWindow(QMainWindow):
             flagged = store.flagged_lines(job)
         except Exception:  # noqa: BLE001 - flags are a help; the owner can still open the editor
             flagged = []
-        p, plan = self._autopilot_plan(job)
-        if plan is None:
-            after = ("Bộ phim này chưa bật Tự động đăng (Thư viện -> Tự động đăng): duyệt xong "
-                     "bạn tự dựng như thường.")
-        elif autopilot.render_opts(job) is None:
-            after = ("Duyệt xong app CHƯA tự dựng được: bộ phim chưa có tập nào dựng — dựng tay "
-                     "một tập để app học cài đặt.")
-        else:
-            after = ("Duyệt xong app tự dựng theo cài đặt của bộ phim"
-                     + (", tự cắt 1 Short" if plan.get("auto_short") else "")
-                     + " rồi " + autopilot.summary(p.slug).replace("Tự đăng: ", "đăng lên ") + ".")
+        after = autopilot.after_approve_text(job)
         title = clean_title(_job_title(job.work_dir), 80)
         dlg = FastApproveDialog(self, title=title, cues=len(parse_srt(job.vi_srt)),
                                 flagged=flagged, after=after)
@@ -587,6 +581,11 @@ class MainWindow(QMainWindow):
             return
         if self.job is not None and self.job.id == job.id:
             self.editor.save_now()             # the open editor's text is what gets approved
+        if approval.is_approved(job):
+            # approved meanwhile (the Telegram bot's ✅ while this dialog was open): the
+            # after-approve step already ran once — never queue the render twice
+            self.status.set_status("Đã duyệt rồi (từ Telegram) — " + title[:40], "ok")
+            return
         approval.approve(job)
         if self.job is not None and self.job.id == job.id:
             self.editor.refresh_approval()
@@ -626,6 +625,7 @@ class MainWindow(QMainWindow):
             first = min(p["slot"] for p in new)
             self._notify("Đã lên lịch đăng", f"{len(new)} bài · bài đầu lúc "
                          f"{_t.strftime('%H:%M %d/%m', _t.localtime(first))}")
+            self.remote.planned(job, new)
         _p, plan = self._autopilot_plan(job)
         if kind != "long" or plan is None or not plan.get("auto_short"):
             return
@@ -636,6 +636,8 @@ class MainWindow(QMainWindow):
             if not approval.is_approved(child):
                 self._notify("Short cần duyệt", "Short tự cắt có câu khác bản đã duyệt — mở "
                              "Thư viện để duyệt.", "err")
+                self.remote.gate(child, intro="Short tự cắt có câu khác bản đã duyệt — duyệt "
+                                              "riêng:")
                 return
             opts = autopilot.render_opts(child, "short")
             if opts:
@@ -700,10 +702,11 @@ class MainWindow(QMainWindow):
             from desktop.widgets.autopilot_dialogs import PLATFORM_NAMES
 
             self._posting = False
-            autopilot.record(post["id"], res)
+            p = autopilot.record(post["id"], res)
             where = PLATFORM_NAMES.get(post["platform"], post["platform"])
             self._notify(f"{where}: " + ("đã đăng" if res.ok else "đăng lỗi"),
                          res.message or res.url or post["job"], "ok" if res.ok else "err")
+            self.remote.posted(p)
 
         def failed(msg):
             from app.providers.base import PostResult
@@ -1183,6 +1186,8 @@ class MainWindow(QMainWindow):
             self._batch.clear()
         else:
             self._batch_failed.append(f"{item['title']}: {msg}")
+            if item.get("autopilot"):
+                self.remote.render_failed(item, msg)
         self._batch_after(item)
 
     def _batch_after(self, item: dict) -> None:
@@ -1326,6 +1331,7 @@ class MainWindow(QMainWindow):
         self.input.refresh_recent()
         title = (job.metadata.get("title") or job.id).split("#")[0].strip()
         self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
+        self.remote.gate(job)               # the bot: the flagged lines + [✅ Duyệt]
 
     def _on_queued_failed(self, job: Job, opts: dict, msg: str) -> None:
         self._queue_opts = None
@@ -1337,6 +1343,7 @@ class MainWindow(QMainWindow):
         self.input.refresh_recent()
         if not msg.strip().startswith("Đã hủy"):
             self._notify("Một video trong hàng đợi lỗi", msg[:160], "err")
+        self.remote.run_failed(job, opts, msg)
 
     def _run(self, method: str, opts: dict, connections: dict, *, job: Job | None = None,
              slot: str = "main") -> None:
@@ -1453,6 +1460,7 @@ class MainWindow(QMainWindow):
             self.render.shutdown()  # voice sample synthesis
             self.settings_view.shutdown()  # connection tests / model list
             self._bg.shutdown()            # the daily model-catalog check
+            self.remote.shutdown()         # Telegram: stop polling, hand the bot to the task
         except Exception:  # noqa: BLE001
             pass
         e.accept()

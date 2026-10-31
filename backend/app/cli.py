@@ -14,8 +14,11 @@ honours the human-edit gate.
 
     vizsup autopilot --once [--dry-run] [--force]
         -> "theo dõi tập mới": every followed series that is due — its new episodes run to
-           the edit gate with the owner's saved start-screen choices. Never approves,
-           never renders (what the Windows scheduled task runs, app/schedtask.py).
+           the edit gate with the owner's saved start-screen choices. Never approves on its
+           own (what the Windows scheduled task runs, app/schedtask.py). With the Telegram
+           bot paired and the app closed it also answers the owner's messages: links run to
+           the gate, and ONLY an episode the owner approved with the bot's ✅ is rendered
+           and its posts planned (app/pipeline/remote.py).
 
 Defaults to the offline stack (passthrough translator + edge-tts) so it runs
 with no API keys for a quick smoke test.
@@ -473,31 +476,46 @@ def _autopilot_console() -> None:
 
 
 def cmd_autopilot(args: argparse.Namespace) -> int:
-    """Check the followed series once; new episodes run to the edit gate (never approved,
-    never rendered). Exit 1 when an episode failed (it is retried at the next check)."""
+    """Check the followed series once; new episodes run to the edit gate (never approved
+    here). With the Telegram bot paired (app/pipeline/remote.py) and the app closed, also
+    read the owner's messages: links run to the gate, and an episode the owner approved with
+    the bot's [✅ Duyệt] is rendered headless + its posts planned — only that, never anything
+    unapproved. Exit 1 when an episode failed (it is retried at the next check)."""
     import time
 
     from app import winproc
-    from app.pipeline import watch
+    from app.pipeline import remote, watch
 
     _autopilot_console()
     winproc.hide_child_consoles()          # pythonw: no black ffmpeg windows
+
+    def say(m: str) -> None:
+        print(f"[autopilot] {m}")
+
     print(f"[autopilot] {time.strftime('%Y-%m-%d %H:%M:%S')} — "
           + ("xem thử (không tải gì)" if args.dry_run else "kiểm tra tập mới"))
-    found = watch.check_all(run=None if args.dry_run else _autopilot_runner(),
-                            log=lambda m: print(f"[autopilot] {m}"), force=args.force)
-    print(f"[autopilot] xong: {len(found)} tập"
-          + ("" if args.dry_run else
-             f" — {sum(f['status'] == 'done' for f in found)} chờ duyệt, "
-             f"{sum(f['status'] == 'failed' for f in found)} lỗi"))
-    for f in found:
-        print("  " + watch.describe(f))
-    if not args.dry_run:                       # posts whose slot came while the app was closed
-        from app.pipeline import autopilot
+    if args.dry_run:
+        found = watch.check_all(run=None, log=say, force=args.force)
+        print(f"[autopilot] xong: {len(found)} tập")
+        for f in found:
+            print("  " + watch.describe(f))
+        return 0
+    runner = _autopilot_runner()
+    with remote.CliSession(log=say, run_link=runner) as rs:
+        rs.inbox()                             # the owner's links / approvals from the phone
+        found = watch.check_all(run=rs.wrap(runner), log=say, force=args.force)
+        print(f"[autopilot] xong: {len(found)} tập"
+              f" — {sum(f['status'] == 'done' for f in found)} chờ duyệt, "
+              f"{sum(f['status'] == 'failed' for f in found)} lỗi")
+        for f in found:
+            print("  " + watch.describe(f))
+        rs.inbox()                             # approvals that came in meanwhile
+        from app.pipeline import autopilot     # posts whose slot came while the app was closed
 
-        posted = autopilot.run_due(log=lambda m: print(f"[autopilot] {m}"))
+        posted = autopilot.run_due(log=say)
         if posted:
             print(f"[autopilot] đăng: {len(posted)} bài")
+        rs.posted(posted)
     return 1 if any(f["status"] == "failed" for f in found) else 0
 
 
