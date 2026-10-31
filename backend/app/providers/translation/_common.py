@@ -165,8 +165,13 @@ OCR_HINT = (
 )
 
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
-# the word budget echoed back ("im hết! *(6 từ)*", Luna 2026-11-01) — never part of a subtitle
-_BUDGET_ECHO = re.compile(r"\s*\*?\(\s*(?:tối đa\s*)?~?\s*\d+\s*từ\s*\)\*?\s*$", re.IGNORECASE)
+# the word budget echoed back ("im hết! *(6 từ)*", "Tôi không ép, tối đa bốn từ" — Luna
+# 2026-11-01) — never part of a subtitle. Without brackets only after a comma + "tối đa", so
+# a real "Mỗi câu tối đa bốn từ" stays.
+_COUNT = r"(?:\d+|một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mười(?:\s+\w+)?)"
+_BUDGET_ECHO = re.compile(
+    rf"(?:\s*\*?\(\s*(?:tối đa\s*)?~?\s*{_COUNT}\s*từ\s*\)\*?|\s*[,;–-]\s*tối đa\s*~?\s*{_COUNT}\s*từ)"
+    r"\s*$", re.IGNORECASE)
 
 # One HTTP client per (api_key, base_url) is cached on the instance (registry
 # providers are module-level singletons). max_retries=0 is deliberate: the app's

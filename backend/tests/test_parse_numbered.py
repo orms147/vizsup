@@ -36,6 +36,9 @@ def test_spacing_variants_and_inner_pipes():
 def test_echoed_word_budget_is_dropped():
     out = parse_numbered("1| Chết tiệt, im hết! *(6 từ)*\n2| Đi thôi (~4 từ)\n3| Mua 6 từ điển", 3, FB)
     assert out == ["Chết tiệt, im hết!", "Đi thôi", "Mua 6 từ điển"]
+    out = parse_numbered("1| Tôi không ép, tối đa bốn từ\n2| Mỗi câu tối đa bốn từ\n"
+                         "3| Đi đi (tối đa mười hai từ)", 3, FB)
+    assert out == ["Tôi không ép", "Mỗi câu tối đa bốn từ", "Đi đi"]
 
 
 def test_empty_reply_returns_fallback_copy():
