@@ -64,12 +64,13 @@ class Profile:
     pronounce: dict[str, str] = field(default_factory=dict)
     short: dict = field(default_factory=dict)       # the "Short" preset's settings (shorts.learn)
     autopilot: dict = field(default_factory=dict)   # "theo dõi tập mới" (autopilot_of)
+    ocr_area: dict = field(default_factory=dict)    # "Khoanh vùng chữ Trung" (pipeline/ocr_area.py)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "match": self.match, "glossary": self.glossary,
                 "characters": self.characters, "brief": self.brief, "style": self.style,
                 "render": self.render, "pronounce": self.pronounce, "short": self.short,
-                "autopilot": self.autopilot}
+                "autopilot": self.autopilot, "ocr_area": self.ocr_area}
 
     @property
     def terms(self) -> int:
@@ -110,7 +111,8 @@ def _from_dict(slug: str, d: dict) -> Profile:
                    render=d["render"] if isinstance(d.get("render"), dict) else {},
                    pronounce=_clean_map(d.get("pronounce")),
                    short=d["short"] if isinstance(d.get("short"), dict) else {},
-                   autopilot=d["autopilot"] if isinstance(d.get("autopilot"), dict) else {})
+                   autopilot=d["autopilot"] if isinstance(d.get("autopilot"), dict) else {},
+                   ocr_area=d["ocr_area"] if isinstance(d.get("ocr_area"), dict) else {})
 
 
 def load(slug: str) -> Profile | None:

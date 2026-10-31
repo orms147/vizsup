@@ -257,13 +257,17 @@ class SeriesDialog(QDialog):
         sl.setContentsMargins(0, 8, 0, 0)
         self.style_lbl = QLabel()
         self.render_lbl = QLabel()
-        for lbl in (self.style_lbl, self.render_lbl):
+        self.area_lbl = QLabel()
+        for lbl in (self.style_lbl, self.render_lbl, self.area_lbl):
             lbl.setWordWrap(True)
         self.forget_style = QPushButton("Quên kiểu phụ đề đã lưu")
         self.forget_render = QPushButton("Quên cài đặt dựng đã lưu")
+        self.forget_area = QPushButton("Quên vùng chữ Trung đã khoanh")
         self.forget_style.clicked.connect(lambda: self._forget("style"))
         self.forget_render.clicked.connect(lambda: self._forget("render"))
-        for wdg in (self.style_lbl, self.forget_style, self.render_lbl, self.forget_render):
+        self.forget_area.clicked.connect(lambda: self._forget("ocr_area"))
+        for wdg in (self.style_lbl, self.forget_style, self.render_lbl, self.forget_render,
+                    self.area_lbl, self.forget_area):
             sl.addWidget(wdg)
         sl.addWidget(QLabel("Tập đầu tiên được duyệt / dựng sẽ lưu lại kiểu và cài đặt; các tập "
                             "sau tự dùng. Quên đi để tập kế tiếp lưu lại bản mới."))
@@ -287,8 +291,11 @@ class SeriesDialog(QDialog):
         self.style_lbl.setText("Kiểu phụ đề: " + ("đã lưu" if p.style else "chưa có"))
         self.render_lbl.setText("Cài đặt dựng (giọng, tốc độ, chế độ âm thanh, watermark…): "
                                 + ("đã lưu" if p.render else "chưa có"))
+        self.area_lbl.setText("Vùng chữ Trung (OCR chỉ đọc vùng này ở mọi tập): "
+                              + ("đã khoanh" if p.ocr_area else "chưa có — app tự dò"))
         self.forget_style.setEnabled(bool(p.style))
         self.forget_render.setEnabled(bool(p.render))
+        self.forget_area.setEnabled(bool(p.ocr_area))
 
     def _forget(self, which: str) -> None:
         setattr(self.profile, which, {})

@@ -422,14 +422,25 @@ def _fmt_eta(sec: float) -> str:
         f"{sec // 60}:{sec % 60:02d}"
 
 
+def frame_filter(fps: float, crop: str, area: dict | None = None) -> str:
+    """The ffmpeg chain that feeds OCR: the sampling rate, then the owner's band when drawn
+    (pipeline/ocr_area.py), else the ``crop`` preset. Pure."""
+    from app.pipeline import ocr_area
+
+    return f"fps={fps}," + (ocr_area.crop_filter(area) if area
+                            else _CROP.get(crop, _CROP["bottom-third"]))
+
+
 def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      min_dur: float = 0.4, min_conf: float = 0.5, sim: float = 0.5,
                      engine: str = "rapidocr",
                      progress: Callable[[float, str], None] | None = None,
                      cancel: Callable[[], bool] | None = None,
-                     log: Callable[[str], None] | None = None) -> Job:
+                     log: Callable[[str], None] | None = None,
+                     area: dict | None = None) -> Job:
     """OCR burned-in subtitles → job.cn_srt with the OCR engine ``engine`` (a provider in
-    the registry: local RapidOCR, or a cloud vision model). Resumable (``ocr_frames.json``)."""
+    the registry: local RapidOCR, or a cloud vision model). Resumable (``ocr_frames.json``).
+    ``area`` = the owner's band (pipeline/ocr_area.py): only that rectangle is read."""
     from contextlib import nullcontext
 
     from app.heavy import heavy_task
@@ -441,14 +452,18 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         raise RuntimeError(f"Chưa dùng được bộ đọc chữ “{prov.display_name}” "
                            f"(thiếu khóa API hoặc chưa cài).")
 
+    from app.pipeline import ocr_area
+
     src = job.source_video
-    vf = f"fps={fps}," + _CROP.get(crop, _CROP["bottom-third"])
+    area = ocr_area.clean(area) if area else None
+    vf = frame_filter(fps, crop, area)
     old_frames = job.work_dir / "frames"                 # PNG dumps of the old pipeline
     if old_frames.is_dir():
         for old in old_frames.glob("*.png"):
             old.unlink(missing_ok=True)
 
-    band = band_rows(_ensure_region(job, crop, log), crop) if prov.crop_to_band else None
+    band = (band_rows(_ensure_region(job, crop, log), crop)
+            if prov.crop_to_band and not area else None)      # the owner's band is tight already
     ckpt = job.work_dir / CHECKPOINT
     key = _checkpoint_key(src, fps, vf, min_conf, prov.cache_tag(), band)
     done: list[list] = _load_checkpoint(ckpt, key)

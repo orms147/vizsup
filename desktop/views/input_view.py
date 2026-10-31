@@ -590,6 +590,13 @@ class InputView(QWidget):
             "không sót câu nào, mốc thời gian lệch tối đa ~0,8 s (tự canh lời theo giọng sửa "
             "lại). Vlog chữ ngắn có thể sót câu dưới 1 giây.")
         g.addWidget(self.ocr_fast, 8, 1)
+        self.pick_area = QCheckBox("Khoanh vùng chữ Trung sau khi tải (lần đầu mỗi bộ phim)")
+        self.pick_area.setToolTip(
+            "Tải xong, app mở một khung hình để bạn kéo chuột quanh dải phụ đề tiếng Trung: OCR "
+            "chỉ đọc vùng đó (không đọc nhầm logo, tên tác giả, chữ trong cảnh) và khi dựng sẽ che "
+            "đúng dải đó. Vùng được nhớ cho cả bộ phim — các tập sau, kể cả tập tự tải hay gửi "
+            "qua bot, dùng luôn mà không hỏi. Quên vùng: Bộ phim → Đã lưu.")
+        g.addWidget(self.pick_area, 11, 0, 1, 2)
         self.asr_note = label("Âm thanh được gửi lên máy chủ AI khi dùng “AI nghe âm thanh”.",
                               "small", wrap=True)
         g.addWidget(self.asr_note, 10, 0, 1, 2)
@@ -659,6 +666,7 @@ class InputView(QWidget):
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
         self.ocr_fast.setChecked(bool(st.get("ocr_fast", False)))
+        self.pick_area.setChecked(bool(st.get("pick_area", True)))
         self.ocr_engine.select(st.get("ocr_engine"))
         ix = self.ocr_region.findData(st.get("ocr_region"))
         if ix >= 0:
@@ -679,6 +687,7 @@ class InputView(QWidget):
         self._ocr_engine_field.setVisible(src in ("auto", "ocr"))
         self.ocr_proofread.setEnabled(src in ("auto", "ocr"))
         self.ocr_fast.setEnabled(src in ("auto", "ocr"))
+        self.pick_area.setEnabled(src in ("auto", "ocr"))
         self._asr_field.setEnabled(src in ("auto", "asr"))
         self._srt_field.setVisible(src == "srt")
         if src != "srt":
@@ -768,6 +777,7 @@ class InputView(QWidget):
             "ai_frames": self.ai_frames.isChecked(),
             "split_long": self.split_long.isChecked(),
             "ocr_fast": self.ocr_fast.isChecked(),
+            "pick_area": self.pick_area.isChecked(),
             "series": self.series_combo.currentData() or "auto",
         }
         note = self.context_note.toPlainText().strip()

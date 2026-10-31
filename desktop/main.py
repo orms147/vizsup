@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         # editor stays usable for the next episode meanwhile
         self.library.batchRequested.connect(self._start_batch)
         self.library.fastApproveRequested.connect(self._fast_approve)
+        self.library.rereadRequested.connect(self._reread)
         self.library.batchCancelRequested.connect(self._cancel_batch)
         self.library.batch_queued = self._batch_ids
         self.render.renderLaterRequested.connect(self._render_later)
@@ -344,6 +345,7 @@ class MainWindow(QMainWindow):
             "failed": self._on_gate_failed,
             "gate_reached": lambda j=job: (self._on_gate(), self.remote.gate(j)),
             "split_done": self._on_split_done,
+            "area_needed": self._on_area_needed,
         })
 
     def _on_gate_failed(self, msg: str) -> None:
@@ -450,6 +452,42 @@ class MainWindow(QMainWindow):
         elif opts:
             # E-11: an unfinished run — continue from the first missing step
             self._run_gate(job, opts, f"▶ Tiếp tục dự án đang dở (job {job.id})")
+
+    def _reread(self, job_id: str) -> None:
+        """«Đọc lại phụ đề»: the old lines go to backup/, the band is drawn again, then OCR →
+        translate → the gate (a new revision: approve again)."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.pipeline import ocr_area
+
+        if self._busy() or self._render_busy():
+            self.status.set_status("Đang bận — đợi việc hiện tại xong rồi đọc lại.", "warn")
+            return
+        loaded = store.load_job(job_id)
+        if not loaded or not loaded[0].source_video.exists():
+            self.status.set_status("Dự án này không còn video nguồn để đọc lại.", "warn")
+            return
+        job, opts = loaded
+        title = job.metadata.get("title") or job.id
+        ok = QMessageBox.question(
+            self, "Đọc lại phụ đề",
+            f"Đọc lại phụ đề tiếng Trung của “{str(title)[:60]}”?\n\nPhụ đề hiện tại (cả bản dịch "
+            "và chỗ bạn đã sửa) được cất vào thư mục backup của dự án, không mất. App sẽ mở khung "
+            "hình để bạn khoanh vùng chữ, đọc lại, dịch lại (~0,002 $) rồi dừng ở bước duyệt — "
+            "bạn duyệt lại như tập mới. Kiểu chữ, cài đặt dựng giữ nguyên.")
+        if ok != QMessageBox.Yes:
+            return
+        ed = getattr(self.editor, "job", None)
+        if ed is not None and ed.id == job.id:
+            self.editor.flush()                         # pending edits go into the backup too
+            self.editor.job = None                      # …and nothing autosaves over the re-read
+        if self.job is not None and self.job.id == job.id:
+            self.job = None
+        dest = ocr_area.set_aside(job.work_dir)
+        self.input.append_log(f"↷ Phụ đề cũ đã cất vào {dest}" if dest else "↷ Không có phụ đề cũ")
+        run = {**(opts or {}), "subtitle_source": "ocr", "pick_area": True, "_ask_area": True,
+               "url": job.url, "file": None}
+        self._run_gate(job, run, f"▶ Đọc lại phụ đề (job {job.id})")
 
     # --- Thư viện (every project) -----------------------------------------------------
     def _open_library(self) -> None:
@@ -673,7 +711,8 @@ class MainWindow(QMainWindow):
             if not found:
                 return
             base = self.input._collect_opts()
-            items = [{**base, "url": url, "file": None, "series": slug} for url, slug in found]
+            items = [{**base, "url": url, "file": None, "series": slug, "_watch": True}
+                     for url, slug in found]
             self._start_queue(items)
             self._notify("Có tập mới", f"{len(items)} tập đang tải và dịch — xong sẽ hỏi bạn duyệt")
 
@@ -931,7 +970,20 @@ class MainWindow(QMainWindow):
             "failed": lambda m, j=job, o=opts: self._on_queued_failed(j, o, m),
             "gate_reached": lambda j=job, o=opts: self._on_queued_gate(j, o),
             "split_done": self._on_split_done,
+            "area_needed": self._on_area_needed,
         }, job=job)
+
+    def _on_area_needed(self, ask: dict) -> None:
+        """The worker waits for the OCR band (desktop/widgets/area_dialog.py)."""
+        from desktop.widgets.area_dialog import AreaDialog
+
+        worker = self._worker
+        self.raise_()
+        self.activateWindow()
+        dlg = AreaDialog(ask.get("frames") or [], ask.get("suggestion"), ask.get("series"), self)
+        dlg.exec()
+        if worker is not None:
+            worker.answer_area(dlg.result_area(), dlg.remember.isChecked())
 
     def _on_split_done(self, items: list) -> None:
         """A long video became parts: queue them first, keep the app free meanwhile."""

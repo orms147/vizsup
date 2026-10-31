@@ -96,6 +96,21 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
         _skip("cn.srt", "subtitle stage")
     else:
         src = "srt" if args.srt else args.source
+        area = None
+        if src in ("auto", "ocr"):
+            # "Khoanh vùng chữ Trung": the band the owner drew for this series (ocr_area.py)
+            from app.pipeline import ocr_area
+            from app.pipeline import series as _ser
+
+            try:
+                _ser.resolve(job, getattr(args, "series", None) or "auto")
+                area = ocr_area.for_job(job)
+            except Exception as exc:  # noqa: BLE001 - detect the band as before
+                print(f"[run] series band unavailable ({exc})")
+            if area is not None:
+                ocr_area.remember(job, area, series_too=False)
+                print("[run] reading the series' marked subtitle band")
+                src = "ocr"
         if src == "auto":
             # E-1: sampled-frame OCR routes OCR vs ASR; missing OCR deps → ASR.
             from app.pipeline import hardsub_detect
@@ -120,7 +135,7 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
 
             print(f"[run] reading hardsubs (OCR, region: {args.ocr_region}) ...")
             ocr.extract_hardsubs(job, crop=args.ocr_region, engine=args.ocr_engine, log=print,
-                                 fps=args.ocr_fps)
+                                 fps=args.ocr_fps, area=area)
         else:
             print(f"[run] transcribing (ASR: {args.asr}) ...")
             asr.transcribe(job, provider=args.asr, vocals=not getattr(args, "no_vocal_timing", False))

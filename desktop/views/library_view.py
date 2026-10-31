@@ -192,6 +192,7 @@ class _Row(QFrame):
     chaptersRequested = Signal(str)
     shortRequested = Signal(str)           # «Cắt Short…» on this approved episode
     fastApproveRequested = Signal(str)     # «Duyệt nhanh…» (autopilot) on an unapproved episode
+    rereadRequested = Signal(str)          # «Đọc lại phụ đề (khoanh vùng lại)…»
 
     def __init__(self, item: dict, busy: str | None) -> None:
         super().__init__()
@@ -334,6 +335,9 @@ class _Row(QFrame):
             self.short_act = m.addAction("Cắt Short (30–60 giây, 9:16)…",
                                          lambda: self.shortRequested.emit(iid))
             self._set_short_enabled(None)
+            reread = m.addAction("Đọc lại phụ đề (khoanh vùng chữ Trung lại)…",
+                                 lambda: self.rereadRequested.emit(iid))
+            reread.setEnabled(self._playable and busy is None)
         m.addSeparator()
         self.clean_act = m.addAction("Chỉ xóa file nặng…", lambda: self.cleanRequested.emit(iid))
         self.delete_act = m.addAction("Xóa dự án (vào Thùng rác)…",
@@ -479,6 +483,7 @@ class LibraryView(QWidget):
     message = Signal(str, str)             # status bar text, kind
     compileRequested = Signal(dict)        # CompileDialog.spec() → main window runs the join
     fastApproveRequested = Signal(str)     # «Duyệt nhanh» → the main window approves + autopilot
+    rereadRequested = Signal(str)          # «Đọc lại phụ đề» → the main window re-runs it
     compileCancelRequested = Signal()
     batchRequested = Signal(dict)          # BatchDialog.spec() → main window queues the renders
     batchCancelRequested = Signal()
@@ -747,6 +752,7 @@ class LibraryView(QWidget):
             row.chaptersRequested.connect(self._copy_chapters)
             row.shortRequested.connect(self._cut_short)
             row.fastApproveRequested.connect(self.fastApproveRequested)
+            row.rereadRequested.connect(self.rereadRequested)
             row.deleteRequested.connect(lambda iid: self.delete_items([self._item(iid)]))
             row.cleanRequested.connect(
                 lambda iid: self.delete_items([self._item(iid)], heavy_only=True))

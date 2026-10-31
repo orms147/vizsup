@@ -34,12 +34,57 @@ class PipelineWorker(QObject):
     render_done = Signal(str)          # output video path
     split_done = Signal(list)          # long video → part opts to queue (no gate for the parent)
     finished = Signal()                # worker done (success or failure)
+    area_needed = Signal(object)       # {"frames", "suggestion", "series"}: draw the OCR band
 
     def __init__(self, job: Job, opts: dict) -> None:
         super().__init__()
         self.job = job
         self.opts = opts
         self._cancel = False
+        import threading
+
+        self._area_event = threading.Event()
+        self._area_answer: tuple[dict | None, bool] = (None, False)
+
+    def answer_area(self, rect: dict | None, series_too: bool = True) -> None:
+        """The picker's answer (GUI thread): the band, or None = let the app detect it."""
+        self._area_answer = (rect, series_too)
+        self._area_event.set()
+
+    def _ask_area(self, job: Job, o: dict, suggestion: dict | None = None) -> dict | None:
+        """"Khoanh vùng chữ Trung": show frames + the detected band, wait for the owner.
+        Only for a run the owner started in the app (never the watcher's or the bot's)."""
+        from app.pipeline import assemble, hardsub_detect, ocr_area, series
+
+        self.progress.emit(0.3, "Đang dò phụ đề cháy sẵn trên video…")
+        try:
+            has = hardsub_detect.detect_hardsubs(job, crop=o.get("ocr_region", "bottom-third"),
+                                                 engine=o.get("ocr_engine") or "rapidocr")
+        except Exception as exc:  # noqa: BLE001 - the picker still works without a guess
+            store.debug(f"area detect failed: {exc}")
+            has = True
+        if not has and o.get("subtitle_source") == "auto":
+            return None                                  # no burned subtitles: ASR, no question
+        frames = ocr_area.sample_frames(job)
+        if not frames:
+            return None
+        p = series.profile_of(job)
+        self.progress.emit(0.32, "Chờ bạn khoanh vùng chữ Trung…")
+        self.log.emit("Khoanh vùng chữ Trung: kéo chuột quanh dải phụ đề trong cửa sổ vừa mở")
+        self._area_event.clear()
+        self.area_needed.emit({"frames": frames,
+                               "suggestion": suggestion or assemble._load_region(job),
+                               "series": p.name if p is not None else None})
+        while not self._area_event.wait(0.2):
+            self._check()
+        rect, series_too = self._area_answer
+        if rect is None:
+            self.log.emit("↷ Để app tự dò vùng chữ")
+            return None
+        kept = ocr_area.remember(job, rect, series_too=series_too)
+        if kept and series_too and p is not None:
+            self.log.emit(f"✓ Đã nhớ vùng chữ cho bộ phim 《{p.name}》 — các tập sau dùng luôn")
+        return kept
 
     def cancel(self) -> None:
         self._cancel = True
@@ -328,10 +373,35 @@ class PipelineWorker(QObject):
         if self._split_if_long(job, o):
             return
 
+        # 1.7) "Khoanh vùng chữ Trung": the band OCR reads — the series' saved one, else asked
+        # once in the app (never for the watcher's / the bot's runs: nobody is at the screen)
+        area = None
+        if not job.cn_srt.exists() and o.get("subtitle_source", "asr") in ("auto", "ocr"):
+            from app.pipeline import ocr_area
+
+            try:                                     # the series link, so its band is found
+                from app.pipeline import series as _ser
+
+                _ser.resolve(job, o.get("series") or "auto")
+            except Exception as exc:  # noqa: BLE001 - the 2.38 step reports series problems
+                store.debug(f"area series link: {exc}")
+            area = ocr_area.for_job(job)
+            if o.get("_ask_area"):                   # "Đọc lại phụ đề": draw it again
+                self._check()
+                area = self._ask_area(job, o, suggestion=area)
+            elif area is not None:
+                ocr_area.remember(job, area, series_too=False)   # the cover band follows it
+            elif o.get("pick_area") and not (o.get("_remote") or o.get("_watch")):
+                self._check()
+                area = self._ask_area(job, o)
+
         # 2) Chinese subtitles — source chosen by the user in step 1
         self._check()
         self.stage_started.emit("subtitle")
         src = o.get("subtitle_source", "asr")
+        if area is not None and src == "auto":
+            src = "ocr"                                # the owner drew the band: burned subs
+            self.log.emit("✓ Đọc chữ trong vùng đã khoanh")
         store.debug(f"subtitle stage begin src={src}")
         if job.cn_srt.exists():
             src = "existing"  # resume: keep the already-extracted subtitles
@@ -373,7 +443,7 @@ class PipelineWorker(QObject):
             self.log.emit(f"OCR: đọc phụ đề tiếng Trung cháy sẵn… (vùng: {region}"
                           + (", AI đọc qua mạng" if engine != "rapidocr" else "") + ")")
             ocr.extract_hardsubs(
-                job, crop=region, engine=engine, log=self.log.emit,
+                job, crop=region, engine=engine, log=self.log.emit, area=area,
                 fps=1.0 if o.get("ocr_fast") else 2.0,             # "OCR nhanh"
                 cancel=lambda: self._cancel,                       # long videos: ETA + resume
                 progress=lambda f, m: self.progress.emit(0.4 + 0.15 * f, m))
