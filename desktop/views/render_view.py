@@ -1676,7 +1676,10 @@ class RenderView(QWidget):
         self._joined = None
         self.log.clear()
         self.preview.pause()
-        self.result.pause()
+        # let go of the shown output.mp4 / preview.mp4: Windows keeps a file the player holds
+        # locked, and the finished render could not replace it (WinError 5, 2026-11-01). The
+        # pane loads the new file when the render is done.
+        self.result.unload()
         self._t0 = time.monotonic()
         self._tick.start()
         self.bar.setValue(0)
