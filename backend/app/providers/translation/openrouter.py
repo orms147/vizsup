@@ -31,6 +31,22 @@ REASONING_OFF = {"reasoning": {"effort": "none"}}
 REASONING_MIN = {"reasoning": {"effort": "minimal"}}
 REASONING_HEADROOM = 2048
 
+# Which HOST serves the model. One id is sold by many hosts at very different prices:
+# deepseek-v4.1-flash by ~40 (2026-10-31: 0.013–0.6 $/M in, 0.14–2.4 out, half of them
+# 4-bit). OpenRouter's default balancing put a real 50-line draft batch on Wafer (mxfp4)
+# or CoreWeave for $0.00046–0.00071; sort=price alone ranks by the INPUT price and took a
+# 4-bit host with 0.53 $/M output ($0.00043); with 4/6-bit hosts left out it took an fp8
+# host for $0.00015–0.00018 — a third — and two blind judges scored all seven samples
+# within noise (docs/plan/G-cost-log.md). One stable host also lets prompt caching hit.
+# Hosts that state no quantisation ("unknown": the model's own vendor — OpenAI, Alibaba,
+# DeepSeek) stay eligible. OPENROUTER_ROUTING=auto restores OpenRouter's own choice.
+QUANT_OK = ["int8", "fp8", "fp16", "bf16", "fp32", "unknown"]
+ROUTE_PRICE = {"provider": {"sort": "price", "quantizations": QUANT_OK}}
+
+
+def routing_on() -> bool:
+    return (settings.openrouter_routing or "").strip().lower() != "auto"
+
 
 class EmptyReply(RuntimeError):
     """HTTP 200 with no ``choices`` — OpenRouter relays an upstream provider failure
@@ -67,6 +83,20 @@ def _model_is_gone(exc: Exception) -> bool:
                                   "model not found", "has been deprecated", "expired"))
 
 
+def _no_host(exc: Exception) -> bool:
+    """No host matched the routing filter — 404 "No endpoints found for the request with
+    quantization: …" (2026-10-31). A pulled model answers alike, so the caller first
+    retries WITHOUT the filter; only a failure then means the model is gone."""
+    return _status(exc) in (400, 404) and "no endpoints found" in str(exc).lower()
+
+
+def _host(resp) -> str | None:
+    """The host that served a reply (OpenRouter's top-level ``provider`` field)."""
+    extra = getattr(resp, "model_extra", None) or {}
+    h = extra.get("provider") if isinstance(extra, dict) else None
+    return h if isinstance(h, str) and h else None
+
+
 class OpenRouter(OpenAICompatTranslator):
     name = "openrouter"
     display_name = "OpenRouter"
@@ -77,6 +107,7 @@ class OpenRouter(OpenAICompatTranslator):
     # the worst race is one extra probe request — no lock needed.
     _mandatory_reasoning: set[str] = set()   # models that rejected REASONING_OFF
     _dead_promo: set[str] = set()            # promo models that answered "gone"
+    _unroutable: set[str] = set()            # models no host matched ROUTE_PRICE for
 
     @property
     def api_key(self) -> str:  # type: ignore[override]
@@ -128,26 +159,35 @@ class OpenRouter(OpenAICompatTranslator):
 
     # --- request shaping --------------------------------------------------
     def _chat(self, **kw):
-        """Send with reasoning switched off; degrade to minimal reasoning for
-        endpoints that insist on it, and to the main model if the promo vanished.
-        Both fallbacks are remembered, so each costs at most one extra request."""
-        # Worst case is 4 sends: promo(off) → promo(min) → main(off) → main(min). Each
-        # fallback adds to a memo set, so the loop cannot cycle.
-        for _ in range(4):
+        """Send with reasoning switched off and the cheapest non-4-bit host (ROUTE_PRICE);
+        degrade to minimal reasoning for endpoints that insist on it, to OpenRouter's own
+        host choice when no host matches the filter, and to the main model if the promo
+        vanished. Every fallback is remembered, so each costs at most one extra request."""
+        # Worst case is 6 sends: promo(off) → promo(min) → promo(min, any host) → main(…)
+        # likewise. Each fallback adds to a memo set, so the loop cannot cycle.
+        for _ in range(6):
             model = kw["model"]
             mandatory = model in self._mandatory_reasoning
-            call = dict(kw, extra_body=REASONING_MIN if mandatory else REASONING_OFF)
+            routed = routing_on() and model not in self._unroutable
+            body = dict(REASONING_MIN if mandatory else REASONING_OFF)
+            if routed:
+                body.update(ROUTE_PRICE)
+            call = dict(kw, extra_body=body)
             if mandatory:
                 call["max_tokens"] = kw["max_tokens"] + REASONING_HEADROOM
             try:
                 resp = require_choices(self._client().chat.completions.create(**call))
                 from app import usage
 
-                usage.record(model, getattr(resp, "usage", None))   # E-14 per-job cost
+                usage.record(model, getattr(resp, "usage", None), host=_host(resp))  # E-14
                 return resp
             except Exception as exc:
                 if not mandatory and _reasoning_is_mandatory(exc):
                     self._mandatory_reasoning.add(model)
+                    continue
+                if routed and _no_host(exc):
+                    self._unroutable.add(model)
+                    log.info("no host matches the price routing for %s — OpenRouter picks", model)
                     continue
                 if model == self.active_promo() and _model_is_gone(exc):
                     self._dead_promo.add(model)

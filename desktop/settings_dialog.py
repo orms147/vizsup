@@ -112,6 +112,11 @@ OPTIONS = [
     ("OPENROUTER_PROMO_EXPIRES", "Hết hạn khuyến mãi (YYYY-MM-DD)", "openrouter_promo_expires",
      "text", "Từ ngày này trở đi model khuyến mãi không được dùng nữa. Bỏ trống = không hết hạn.",
      None),
+    ("OPENROUTER_ROUTING", "Máy chủ chạy model (OpenRouter)", "openrouter_routing",
+     "choice", "Một model được nhiều máy chủ bán với giá rất khác nhau. Bỏ trống = máy chủ rẻ "
+     "nhất, không dùng máy nén 4-bit (31/10: lượt nháp DeepSeek rẻ ~3 lần, chấm mù như nhau, "
+     "chậm hơn vài giây). auto = để OpenRouter tự chọn (thường nhanh hơn, đắt hơn).",
+     ["", "auto"]),
     ("AUDIO_LLM_MODEL", "Model AI nghe âm thanh", "audio_llm_model",
      "choice", "Bỏ trống = qwen/qwen3.8-omni-flash — chính xác nhất và ỔN ĐỊNH nhất trên vlog "
      "Douyin thật (01/10/2026). MiMo đôi khi nghe tốt hơn nhưng hay lặp vòng / trả rỗng / "

@@ -97,6 +97,7 @@ class AudioLLM(ASRProvider):
             REASONING_HEADROOM,
             REASONING_MIN,
             REASONING_OFF,
+            _host,
             _reasoning_is_mandatory,
             require_choices,
         )
@@ -127,7 +128,7 @@ class AudioLLM(ASRProvider):
                                f"— usually a repetition loop; pick another AUDIO_LLM_MODEL")
         from app import usage
 
-        usage.record(self.model, getattr(resp, "usage", None))   # E-14 per-job cost
+        usage.record(self.model, getattr(resp, "usage", None), host=_host(resp))  # E-14
         if not transcript:
             return (resp.choices[0].message.content or "").strip()
         text = _cloud.clean_transcript(resp.choices[0].message.content or "")

@@ -57,6 +57,10 @@ GONE = FakeErr(404, "No endpoints found for stealth/space-bunny-alpha.")
 def prov(monkeypatch):
     monkeypatch.setattr(OpenRouter, "_mandatory_reasoning", set())
     monkeypatch.setattr(OpenRouter, "_dead_promo", set())
+    monkeypatch.setattr(OpenRouter, "_unroutable", set())
+    # the reasoning / promo tests below compare whole request bodies; host routing has its
+    # own section at the end ("price routing"), which switches it back on
+    monkeypatch.setattr(settings, "openrouter_routing", "auto")
     monkeypatch.setattr(settings, "openrouter_api_key", "sk-test")
     monkeypatch.setattr(settings, "model_draft", "deepseek/deepseek-v4.1-flash")   # draft role
     monkeypatch.setattr(settings, "openrouter_promo_model", "")
@@ -296,3 +300,119 @@ def test_the_legacy_single_model_setting_is_no_longer_read(prov, monkeypatch):
     monkeypatch.setattr(settings, "openrouter_model", "deepseek/deepseek-v4.1-flash")
     monkeypatch.setattr(settings, "model_draft", "")
     assert prov.model_for("draft") == orm.DEFAULT_MODEL
+
+
+# --- price routing: the cheapest host that is not 4-bit (2026-10-31 cost pass) -------
+
+NO_HOST = FakeErr(404, "No endpoints found for the request with quantization: fp8, bf16. "
+                       "To learn more about provider routing, visit: https://openrouter.ai/docs")
+
+
+@pytest.fixture()
+def routed(prov, monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_routing", "")      # the default
+    return prov
+
+
+def test_every_call_asks_for_the_cheapest_non_4bit_host_by_default(routed, monkeypatch):
+    client = use(monkeypatch, routed, lambda call: ok())
+    routed.translate_texts(["你好"])
+    routed.rewrite("xin chào bạn", "rút gọn", role="qa")
+    for call in client.calls:
+        body = call["extra_body"]
+        assert body["reasoning"] == REASONING_OFF["reasoning"]           # still switched off
+        assert body["provider"]["sort"] == "price"
+        quants = set(body["provider"]["quantizations"])
+        assert not quants & {"int4", "fp4", "mxfp4", "nvfp4", "fp6"}
+        assert "unknown" in quants         # the vendors' own hosts state no quantisation
+
+
+def test_auto_leaves_the_host_to_openrouter(routed, monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_routing", "auto")
+    client = use(monkeypatch, routed, lambda call: ok())
+    routed.translate_texts(["你好"])
+    assert client.calls[0]["extra_body"] == REASONING_OFF
+
+
+def test_no_matching_host_falls_back_to_openrouters_choice_and_sticks(routed, monkeypatch):
+    def script(call):
+        if "provider" in call["extra_body"]:
+            raise NO_HOST
+        return ok()
+
+    client = use(monkeypatch, routed, script)
+    assert routed.translate_texts(["你好"]) == ["xin chào"]
+    assert ["provider" in c["extra_body"] for c in client.calls] == [True, False]
+    routed.translate_texts(["再见"])                          # remembered: no second probe
+    assert len(client.calls) == 3 and "provider" not in client.calls[-1]["extra_body"]
+    assert OpenRouter._dead_promo == set()       # "no endpoints" here is not a dead model
+
+
+def test_a_vanished_promo_still_falls_back_with_routing_on(routed, monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_promo_model", "stealth/space-bunny-alpha")
+
+    def script(call):
+        if call["model"] == "stealth/space-bunny-alpha":
+            raise GONE
+        return ok()
+
+    client = use(monkeypatch, routed, script)
+    assert routed.translate_texts(["你好"]) == ["xin chào"]
+    assert [(c["model"], "provider" in c["extra_body"]) for c in client.calls] == [
+        ("stealth/space-bunny-alpha", True),       # gone looks like "no host" at first…
+        ("stealth/space-bunny-alpha", False),      # …asked plainly it is still gone
+        ("deepseek/deepseek-v4.1-flash", True),    # the main model keeps the price routing
+    ]
+    assert "stealth/space-bunny-alpha" in OpenRouter._dead_promo
+
+
+def test_worst_case_chain_with_routing_still_succeeds(routed, monkeypatch):
+    """promo needs reasoning → promo vanished → main needs reasoning → no host matches main."""
+    monkeypatch.setattr(settings, "openrouter_promo_model", "stealth/p")
+
+    def script(call):
+        body = call["extra_body"]
+        if body["reasoning"] == REASONING_OFF["reasoning"]:
+            raise MANDATORY
+        if call["model"] == "stealth/p":
+            raise GONE
+        if "provider" in body:
+            raise NO_HOST
+        return ok()
+
+    client = use(monkeypatch, routed, script)
+    assert routed.translate_texts(["你好"]) == ["xin chào"]
+    assert [(c["model"].split("/")[0], c["extra_body"]["reasoning"]["effort"],
+             "provider" in c["extra_body"]) for c in client.calls] == [
+        ("stealth", "none", True), ("stealth", "minimal", True), ("stealth", "minimal", False),
+        ("deepseek", "none", True), ("deepseek", "minimal", True), ("deepseek", "minimal", False),
+    ]
+
+
+def test_a_gone_main_model_still_fails_loudly_with_routing_on(routed, monkeypatch):
+    def script(call):
+        raise GONE
+
+    client = use(monkeypatch, routed, script)
+    with pytest.raises(FakeErr):
+        routed.translate_texts(["你好"])
+    assert len(client.calls) == 2
+
+
+def test_the_serving_host_is_recorded_per_model(routed, monkeypatch, tmp_path):
+    import json
+
+    from app import usage
+
+    def reply(call):
+        r = ok()
+        r.model_extra = {"provider": "Morph"}
+        r.usage = {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0001}
+        return r
+
+    use(monkeypatch, routed, reply)
+    with usage.track(tmp_path, phase="gate"):
+        routed.translate_texts(["你好"])
+        routed.translate_texts(["再见"])
+    m = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))["models"]
+    assert m["deepseek/deepseek-v4.1-flash"]["hosts"] == {"Morph": 2}

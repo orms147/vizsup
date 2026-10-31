@@ -15,6 +15,10 @@ part of any package.
 Prices: https://openrouter.ai/api/v1/models, 2026-10-27, $/M tokens in/out —
 gpt-6-luna 0.10/0.50 · deepseek-v4.1-flash 0.14/0.42 · deepseek-v4.1-flash-1017 0.30/1.20 ·
 kimi-k3 0.20/20.00 · qwen3.8-flash 0.15/0.47. Re-measure before changing a package.
+2026-10-31: deepseek-v4.1-flash 0.045/0.50, -1017 0.15/0.60 (×2 on weekdays 01–04 and
+06–10 UTC), luna / qwen unchanged; the DeepSeek roles are now served by the cheapest
+non-4-bit host (~0.022/0.19, providers/translation/openrouter.py ROUTE_PRICE), so the
+usd_per_min figures below are upper bounds.
 """
 from __future__ import annotations
 
