@@ -65,12 +65,12 @@ def test_a_short_render_is_saved_on_the_series_and_the_next_episode_gets_it(stor
             "burn_cues": [object()], "voice": "vi-VN-NamMinhNeural"}
     batch.save_opts(ep1.work_dir, opts)
     p = series.profile_of(ep1)
-    assert p.short["platform"] == "reels" and p.short["res"] == "720"
+    assert p.short["platform"] == "reels" and "res" not in p.short   # a Short: always the source size
     assert "burn_cues" not in p.short and p.short["episode_card"]["chip"] == "Ep {n}"
     ep2 = _job(storage, "e2", "第2集 | 《末日校车》02 然后")
     series.resolve(ep2)
     cfg = shorts.settings_for(ep2.work_dir)
-    assert cfg["platform"] == "reels" and cfg["tiktok_fill"] == "black" and cfg["res"] == "720"
+    assert cfg["platform"] == "reels" and cfg["tiktok_fill"] == "black" and cfg["res"] == "source"
     # the latest Short render wins
     batch.save_opts(ep2.work_dir, {**opts, "safe_caption": "shorts", "res": "1080"})
     assert shorts.settings_for(ep1.work_dir)["platform"] == "shorts"
@@ -130,7 +130,7 @@ def test_the_preset_uses_the_series_short_settings(qapp, storage):
     v = _view(qapp)
     v.set_job(ep2, cues=1, tts="edge")
     v.short_btn.click()
-    assert v.fill.currentData() == "black" and v.res.currentData() == "720"
+    assert v.fill.currentData() == "black" and v.res.currentData() == "source"   # never a learned 720
     assert v.preset.currentData() == "light"
     assert v.card_chip.text() == "Phần {n}" and v.card_end.text() == "Xem tiếp Phần {next}"
     assert v.collect_opts()["safe_caption"] == "reels" and v.preview.safe_zone() == "reels"
@@ -189,7 +189,9 @@ def test_short_preset_turns_on_the_bar_text_and_it_only_shows_in_the_9_16_frame(
     v.short_btn.click()
     assert v.canvas_cb.isVisibleTo(v) and v.bars_cb.isVisibleTo(v)
     o = v.collect_opts()
-    assert o["canvas_text"] is True and o["bar_subs"] is True
+    assert o["canvas_text"] is True and o["bar_subs"] is False   # the dialogue: on the band
+    v.bars_cb.setChecked(True)
+    assert v.collect_opts()["bar_subs"] is True                  # the bar is still a choice
     v.bars_cb.setChecked(False)
     assert v.collect_opts()["bar_subs"] is False and v.collect_opts()["canvas_text"] is True
     v.canvas_cb.setChecked(False)                          # no canvas layer → no bar dialogue either

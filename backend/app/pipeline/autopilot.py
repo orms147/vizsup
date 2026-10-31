@@ -563,6 +563,6 @@ def render_opts(job: Job, kind: str = "long") -> dict | None:
         sh = shorts.settings_for(job.work_dir)
         opts.update({k: v for k, v in sh.items() if k != "platform"})
         opts.update({"safe_caption": sh.get("platform"), "short": True})
-        opts["res"] = sh.get("res") or "source"       # a Short is always 1080×1920 (never the
-        # episode's 720p): a vertical frame is judged up close on a phone
+        opts["res"] = "source"       # a Short is always 1080×1920 (never the episode's 720p):
+        # a vertical frame is judged up close on a phone
     return opts

@@ -1326,7 +1326,7 @@ class RenderView(QWidget):
         self.safe_cb.setChecked(True)
         self._safe_touched = True
         self.canvas_cb.setChecked(bool(cfg.get("canvas_text", True)))
-        self.bars_cb.setChecked(bool(cfg.get("bar_subs", True)) and self.canvas_cb.isChecked())
+        self.bars_cb.setChecked(bool(cfg.get("bar_subs", False)) and self.canvas_cb.isChecked())
         plat = cfg.get("platform") or "tiktok"
         if self.preview.safe_zone() != plat:
             self.preview.set_safe_zone(plat)

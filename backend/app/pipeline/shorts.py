@@ -32,8 +32,11 @@ LETTERBOX_SCALE = 1.3           # a 16:9 picture on a 9:16 phone is small: bigge
 LETTERBOX_BELOW = 0.6           # picture height / canvas height under which the picture is "small"
 SIZE_MAX = 120                  # .ass font units (1080 canvas)
 
-DEFAULT_SHORT = {"platform": "tiktok", "frame": "tiktok", "tiktok_fill": "blur",
-                 "episode_card": {"on": True}, "canvas_text": True, "bar_subs": True}
+# the dialogue stays ON the picture, over the (covered) Chinese band — where the owner expects
+# it (2026-11-01: "phụ đề nằm linh tinh" in the bar); "Phụ đề ở dải nền" remains a choice.
+# A Short is always the source's resolution (1080×1920 for a 1080p source), never learned.
+DEFAULT_SHORT = {"platform": "tiktok", "frame": "tiktok", "tiktok_fill": "blur", "res": "source",
+                 "episode_card": {"on": True}, "canvas_text": True, "bar_subs": False}
 
 
 def _canvas(frame: str, pic: tuple[int, int] | None, res: str) -> tuple[int, int] | None:
@@ -90,7 +93,7 @@ def settings_for(work_dir: Path) -> dict:
     lk = series.link_of(Path(work_dir))
     p = series.load(lk["slug"]) if lk else None
     saved = p.short if p is not None and p.short else {}
-    return {**DEFAULT_SHORT, **saved}
+    return {**DEFAULT_SHORT, **{k: v for k, v in saved.items() if k != "res"}}
 
 
 def learn(work_dir: Path, opts: dict) -> bool:
@@ -104,7 +107,7 @@ def learn(work_dir: Path, opts: dict) -> bool:
     p = series.load(lk["slug"]) if lk else None
     if p is None:
         return False
-    keep = ("platform", "frame", "tiktok_fill", "res", "preset", "episode_card", "cover_mode",
+    keep = ("platform", "frame", "tiktok_fill", "preset", "episode_card", "cover_mode",
             "credit_overlay", "ai_label", "audio_mode", "orig_volume", "dub_volume", "voice", "rate",
             "watermark", "canvas_text", "bar_subs")
     p.short = {"platform": opts.get("safe_caption") or "tiktok",
