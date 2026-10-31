@@ -10,6 +10,8 @@ giờ hỏi mật khẩu: bạn đăng nhập trong trình duyệt, nền tảng
   đưa lên git, không in ra log). **Ngắt kết nối** trong Cài đặt sẽ xóa tệp đó.
 - Nền tảng chưa nối vẫn dùng được "Gói đăng (thư mục)": vizsup xuất sẵn video + tiêu đề + mô tả
   để bạn tự đăng tay.
+- Mở kênh mới? Đọc trước **[J-channel-safety.md](J-channel-safety.md)**: bảo mật, xin phép tác
+  giả, gậy bản quyền và report hàng loạt.
 
 Kiểm tra lần cuối: **31/10/2026**. Các trang của Google/Meta/TikTok đổi thường xuyên — tên nút
 có thể khác đôi chút; nếu khác nhiều, xem các liên kết chính thức ở cuối mỗi phần.
