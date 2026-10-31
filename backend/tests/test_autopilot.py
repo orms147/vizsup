@@ -107,10 +107,13 @@ def test_publish_with_the_folder_publisher(storage):
     assert autopilot.record(post["id"], res)["status"] == "draft"
 
 
-def test_publish_refuses_an_unconnected_platform(storage):
+def test_publish_refuses_an_unknown_platform_and_packages_an_unconnected_one(storage):
     job = _episode(storage)
     post = {"id": "x", "job": job.id, "kind": "long", "platform": "nowhere", "series": "末日校车"}
     assert not autopilot.publish(post).ok
+    res = autopilot.publish({**post, "platform": "youtube"})          # not linked on this machine
+    assert res.ok and res.status == "draft" and "chưa kết nối" in res.message
+    assert (Path(res.url) / "post.txt").exists()
 
 
 def test_short_title_and_tags(storage):

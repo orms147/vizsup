@@ -242,9 +242,12 @@ def publish(post: dict, *, progress=None):
         pub = get_publisher(post["platform"])
     except KeyError:
         return PostResult(False, "failed", message=f"Chưa có nơi đăng “{post['platform']}”.")
-    if not pub.connected():
-        return PostResult(False, "failed", message=f"{pub.display_name}: chưa kết nối tài khoản.")
     meta = post_meta(job, post["kind"], load_plan(post.get("series") or ""))
+    if not pub.connected():
+        # not linked (yet): the post still goes out as a ready-made package to post by hand
+        res = get_publisher("folder").publish(video, meta, progress=progress)
+        res.message = f"{pub.display_name} chưa kết nối — đã xuất gói đăng: {res.url}"
+        return res
     try:
         return pub.publish(video, meta, progress=progress)
     except Exception as exc:  # noqa: BLE001 - a post must never crash the app

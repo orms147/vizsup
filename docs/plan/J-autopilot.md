@@ -9,14 +9,18 @@ Owner, 2026-10-31: "luồng mình chỉ cần làm là: up link → đăng video
 - **Theo dõi tập mới mỗi 6 giờ** (Douyin / Bilibili creator page, filtered by the series' 《…》).
 
 Platform facts (checked 2026-10-31, re-check before relying on them):
-- YouTube Data API: uploads from a project that has not passed Google's API compliance audit are
-  locked **private** (scheduling included). Until the owner's project is audited, the app uploads
-  private + scheduled metadata and tells the owner to publish in YouTube Studio.
+- YouTube Data API: the videos.insert reference (updated 2026-10-15) now says uploads from
+  unverified projects are NOT restricted to private; 100 uploads/day ("Video Uploads" bucket).
+  The publisher still reads the status back and reports "private" if it ever happens. (Earlier
+  third-party summaries repeated the 2020 private-lock rule — superseded.) Consent screen in
+  Testing mode → refresh tokens expire in 7 days: press "Publish app" (J-publish-setup.md).
 - TikTok Content Posting API: an unaudited client can post only to a **private account**
   (SELF_ONLY); public posting needs TikTok's audit.
 - Facebook Page Reels (`/{page-id}/video_reels`, rupload): public by nature, 30 API posts / 24 h.
 - Reposting other creators' videos is the risky part of any audit and of the platforms'
-  reused-content rules; the rights note (`rights.json`) stays visible on every post.
+  reused-content rules (TikTok's guidelines: "Not acceptable: an app that copies arbitrary
+  contents from other platforms to TikTok"); the rights note (`rights.json`) stays visible.
+- A platform that is not connected still gets its post as a package in `storage/_posts`.
 
 ## Flow
 ```
