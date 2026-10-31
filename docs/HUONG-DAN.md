@@ -28,7 +28,7 @@ Tập mới trên Douyin / Bilibili (hoặc bạn gửi link cho bot / dán vào
 | 2 | Nối **bot Telegram** | Cài đặt → Đăng video → Điều khiển qua Telegram | [J-publish-setup §6](plan/J-publish-setup.md) |
 | 3 | Nối **YouTube** (rồi Facebook, TikTok nếu dùng) | Cài đặt → Đăng video | [J-publish-setup §1–3](plan/J-publish-setup.md) — nhớ bấm "Publish app" ở Google |
 | 4 | Bật **Theo dõi** tập mới cho bộ phim | Bộ phim 《…》 → tab **Theo dõi** → dán link 1 tập → **Kiểm tra ngay** | App tự tìm 合集; nên chọn mỗi 6 giờ |
-| 5 | Bật **Tự động đăng** | Thư viện → **Tự động đăng** | Chọn nền tảng × video dài / Short, giờ đăng, 1 bài/ngày, tên phim tiếng Việt |
+| 5 | Bật **Tự động đăng** | Thư viện → **Tự động đăng** | Chọn nền tảng × video dài / Short, giờ đăng, 1 bài/ngày, tên phim tiếng Việt. Mấy tập đầu tick **Đăng thử** (YouTube riêng tư, TikTok chỉ mình tôi, Facebook xuất gói) — chạy ổn thì bỏ tick |
 | 6 | **Chạy nền** khi app tắt | Bộ phim → Theo dõi → **Bật chạy nền** (và nút "Chạy nền mỗi 15 phút" ở thẻ Telegram) | Tác vụ Windows: kiểm tra tập mới, trả lời bot, dựng tập đã duyệt, đăng bài tới giờ |
 
 - **Bộ phim mới:**

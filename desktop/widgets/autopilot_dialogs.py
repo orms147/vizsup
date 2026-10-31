@@ -115,11 +115,14 @@ class AutopilotDialog(VzDialog):
         g.addWidget(self.per_day, 2, 3)
         self.auto_short = QCheckBox("Tự cắt 1 Short (30–60 giây) từ mỗi tập đã duyệt")
         g.addWidget(self.auto_short, 3, 0, 1, 4)
-        g.addWidget(label("Nơi đăng", "h3"), 4, 0, 1, 4)
+        self.private = QCheckBox("Đăng thử: video để RIÊNG TƯ (YouTube riêng tư, TikTok chỉ mình "
+                                 "tôi, Facebook xuất gói) — tắt khi đã ổn")
+        g.addWidget(self.private, 4, 0, 1, 4)
+        g.addWidget(label("Nơi đăng", "h3"), 5, 0, 1, 4)
         from app.providers.registry import PUBLISHERS
 
         self.rows: dict[str, tuple[QCheckBox, QCheckBox, QCheckBox]] = {}
-        for r, (name, pub) in enumerate(PUBLISHERS.items(), start=5):
+        for r, (name, pub) in enumerate(PUBLISHERS.items(), start=6):
             on = QCheckBox(PLATFORM_NAMES.get(name, pub.display_name))
             lg, sh = QCheckBox("video dài"), QCheckBox("Short")
             state = pub.account_label() if pub.connected() else "chưa kết nối"
@@ -155,6 +158,7 @@ class AutopilotDialog(VzDialog):
         self.times.setText(", ".join(plan.get("times") or []))
         self.per_day.setValue(int(plan.get("per_day") or 1))
         self.auto_short.setChecked(bool(plan.get("auto_short")))
+        self.private.setChecked(bool(plan.get("private")))
         for name, (on, lg, sh) in self.rows.items():
             cfg = (plan.get("platforms") or {}).get(name) or {}
             kinds = cfg.get("kinds") or ["long", "short"]
@@ -194,7 +198,7 @@ class AutopilotDialog(VzDialog):
         return {**autopilot.load_plan(self.slug() or ""), "on": self.on.isChecked(),
                 "series_name": self.name.text().strip(), "times": times or ["19:00"],
                 "per_day": self.per_day.value(), "auto_short": self.auto_short.isChecked(),
-                "platforms": platforms}
+                "private": self.private.isChecked(), "platforms": platforms}
 
     def save(self) -> None:
         from app.pipeline import autopilot

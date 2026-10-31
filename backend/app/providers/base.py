@@ -210,6 +210,7 @@ class PostMeta:
     publish_at: float | None = None
     thumbnail: Path | None = None
     playlist: str = ""              # series name — a playlist / collection where supported
+    private: bool = False           # a test post: only the owner sees it (plan "Đăng thử")
 
 
 @dataclass

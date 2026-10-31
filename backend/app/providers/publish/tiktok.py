@@ -368,7 +368,8 @@ class TikTokPublisher(PublishProvider):
             return PostResult(False, "failed", message=f"Tài khoản TikTok này chỉ đăng được video "
                                                        f"tối đa {limit:.0f} giây (video dài "
                                                        f"{dur:.0f} giây).")
-        privacy = next((p for p in ("PUBLIC_TO_EVERYONE", "SELF_ONLY") if p in options), "")
+        wanted = ("SELF_ONLY",) if meta.private else ("PUBLIC_TO_EVERYONE", "SELF_ONLY")
+        privacy = next((p for p in wanted if p in options), "")
         if not privacy:
             return PostResult(False, "failed", message="TikTok không cho chọn quyền xem công khai "
                                                        f"hay riêng tư ({', '.join(options)}).")

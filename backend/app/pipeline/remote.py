@@ -429,6 +429,13 @@ def posted_outs(post: dict | None) -> list[Out]:
         if res.get("url"):
             text += f"\n{res['url']}"
         return [_say(text, note="posted", preview=True)]
+    if post.get("status") == "private":
+        text = f"🔒 {name}: đã tải lên {title} ({kind}) ở chế độ riêng tư"
+        if res.get("url"):
+            text += f"\n{res['url']}"
+        if res.get("message"):
+            text += f"\n{res['message']}"
+        return [_say(text, note="posted", preview=True)]
     if post.get("status") in POSTED:
         text = f"✅ {name}: đã đăng {title} ({kind})"
         if res.get("url"):

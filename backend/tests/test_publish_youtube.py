@@ -306,6 +306,17 @@ def test_scheduled_post(env):
     assert "publishAt" in fake.insert_body["status"]
 
 
+def test_a_test_post_stays_private_without_a_publish_time(env):
+    _connected(env)
+    fake = FakeGoogle(listed_privacy="private")
+    res = _pub(fake).publish(_video(env, 1000), PostMeta(title="T", private=True,
+                                                         publish_at=cm.now() + 86400))
+    assert res.ok and res.status == "private" and "đăng thử" in res.message
+    assert "audit" not in res.message                         # asked for, not locked
+    assert fake.insert_body["status"]["privacyStatus"] == "private"
+    assert "publishAt" not in fake.insert_body["status"]      # never goes public by itself
+
+
 def test_private_although_public_was_asked_is_reported_as_locked(env):
     _connected(env)
     res = _pub(FakeGoogle(listed_privacy="private")).publish(_video(env, 1000), PostMeta(title="T"))

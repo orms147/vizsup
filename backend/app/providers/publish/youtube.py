@@ -131,8 +131,9 @@ def _iso_utc(ts: float) -> str:
 def video_body(meta: PostMeta, *, at: float | None = None) -> tuple[dict, bool]:
     """(videos.insert body, scheduled?). ``at`` = now (tests pin it)."""
     at = time.time() if at is None else at
-    scheduled = bool(meta.publish_at and meta.publish_at - at >= SCHEDULE_MIN_AHEAD)
-    status: dict = {"privacyStatus": "private" if scheduled else "public",
+    scheduled = bool(not meta.private and meta.publish_at
+                     and meta.publish_at - at >= SCHEDULE_MIN_AHEAD)
+    status: dict = {"privacyStatus": "private" if scheduled or meta.private else "public",
                     "selfDeclaredMadeForKids": False}
     if scheduled:
         status["publishAt"] = _iso_utc(meta.publish_at)
@@ -496,6 +497,10 @@ class YouTubePublisher(PublishProvider):
                               message=f"YouTube từ chối video ({st.get('rejectionReason', '')})."
                                       + tail)
         privacy = st.get("privacyStatus", body["status"]["privacyStatus"])
+        if meta.private:                                 # a test post: private as asked
+            return PostResult(True, "private", url=url, remote_id=vid,
+                              message="Đã tải lên YouTube ở chế độ RIÊNG TƯ (đăng thử) — chỉ "
+                                      "bạn xem được trong YouTube Studio" + tail)
         # nothing listed → trust the request; a scheduled video that lost its publishAt is
         # as locked as a public one that came back private
         locked = (privacy == "private" and not scheduled) or bool(

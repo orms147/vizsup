@@ -39,6 +39,7 @@ DEFAULT_PLAN = {
     "times": ["19:00"],                  # local posting times
     "per_day": 1,                        # posts per platform per kind per day
     "auto_short": True,
+    "private": False,                    # "Đăng thử": YouTube private, TikTok only me, FB package
     "series_name": "",                   # the series' name in posts (Vietnamese), else its 《name》
     "title": "{series} – Tập {n} | Vietsub + Lồng tiếng",
     "short_title": "{hook} | {series} tập {n}",
@@ -186,8 +187,10 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
     if kind == "short":
         tags = [*tags, "#shorts"]
     thumb = job.work_dir / "thumb.jpg"
-    return PostMeta(title=title, description=desc, tags=tags, kind=kind, publish_at=publish_at,
-                    thumbnail=thumb if thumb.exists() else None, playlist=name)
+    private = bool(plan.get("private"))
+    return PostMeta(title=title, description=desc, tags=tags, kind=kind,
+                    publish_at=None if private else publish_at,
+                    thumbnail=thumb if thumb.exists() else None, playlist=name, private=private)
 
 
 def plan_posts(job: Job, kind: str, *, now: float | None = None) -> list[dict]:
@@ -285,10 +288,12 @@ def publish(post: dict, *, progress=None):
         return PostResult(False, "failed", message=f"Chưa có nơi đăng “{post['platform']}”.")
     meta = post_meta(job, post["kind"], load_plan(post.get("series") or ""),
                      publish_at=post["slot"] if early(post) else None)
-    if not pub.connected():
-        # not linked (yet): the post still goes out as a ready-made package to post by hand
+    if not pub.connected() or (meta.private and post["platform"] == "facebook"):
+        # not linked (yet) — or a test post where the Page has no private video: the post
+        # still goes out as a ready-made package to post by hand
+        why = "đăng thử (Facebook không có video riêng tư)" if pub.connected() else "chưa kết nối"
         res = get_publisher("folder").publish(video, meta, progress=progress)
-        res.message = f"{pub.display_name} chưa kết nối — đã xuất gói đăng: {res.url}"
+        res.message = f"{pub.display_name} {why} — đã xuất gói đăng: {res.url}"
         return res
     try:
         return pub.publish(video, meta, progress=progress)
@@ -430,7 +435,7 @@ def summary(slug: str) -> str:
                              if k in KINDS)
             bits.append(f"{names.get(name, name)} ({kinds})")
     return (f"Tự đăng: {', '.join(bits) or 'chưa chọn nơi đăng'} · {', '.join(plan.get('times') or [])}"
-            f" · {plan.get('per_day') or 1}/ngày")
+            f" · {plan.get('per_day') or 1}/ngày" + (" · ĐĂNG THỬ (riêng tư)" if plan.get("private") else ""))
 
 
 # --- render settings ---------------------------------------------------------------------------

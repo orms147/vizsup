@@ -272,3 +272,38 @@ def test_a_new_series_renders_like_the_owners_latest_episode(storage):
     os.utime(short / "output.mp4", (time.time() + 60, time.time() + 60))  # the Short is newer
     opts = autopilot.render_opts(job)
     assert opts["voice"] == "vieneu:Ngọc Huyền" and opts["frame"] == "source"
+
+
+def test_a_test_plan_keeps_every_post_private(storage, monkeypatch):
+    job = _episode(storage)
+    autopilot.save_plan("末日校车", {**autopilot.DEFAULT_PLAN, "on": True, "private": True,
+                                     "platforms": {"youtube": {"on": True, "kinds": ["long"]},
+                                                   "facebook": {"on": True, "kinds": ["long"]}}})
+    assert "ĐĂNG THỬ" in autopilot.summary("末日校车")
+    meta = autopilot.post_meta(job, "long", autopilot.load_plan("末日校车"), publish_at=time.time() + 7200)
+    assert meta.private is True and meta.publish_at is None
+
+    seen = []
+
+    class Pub:
+        display_name = "Facebook (Trang)"
+
+        def connected(self):
+            return True
+
+        def publish(self, video, meta, progress=None):
+            seen.append(meta)
+            return PostResult(True, "private", url="https://youtu.be/x")
+
+    class Folder:
+        def publish(self, video, meta, progress=None):
+            return PostResult(True, "draft", url="C:/posts/x")
+
+    monkeypatch.setattr("app.providers.registry.get_publisher",
+                        lambda name: Folder() if name == "folder" else Pub())
+    autopilot.plan_posts(job, "long")
+    posts = {p["platform"]: p for p in autopilot.load_posts()}
+    res = autopilot.publish(posts["youtube"])
+    assert res.status == "private" and seen[-1].private and seen[-1].publish_at is None
+    res = autopilot.publish(posts["facebook"])                 # no private Page video → package
+    assert res.status == "draft" and "đăng thử" in res.message and len(seen) == 1
