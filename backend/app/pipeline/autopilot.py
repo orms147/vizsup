@@ -71,6 +71,31 @@ def save_plan(slug: str, plan: dict) -> None:
     _write(_root() / PLANS, all_)
 
 
+def plan_of(job: Job):
+    """(series profile or None, its plan when Tự động đăng is ON else None)."""
+    from app.pipeline import series
+
+    p = series.profile_of(job)
+    plan = load_plan(p.slug) if p is not None else None
+    return p, (plan if plan and plan.get("on") else None)
+
+
+def after_approve_text(job: Job) -> str:
+    """What happens once ``job`` is approved — the «Duyệt nhanh» dialog's last line and the
+    Telegram approval message's: nothing automatic, nothing yet (the series was never
+    rendered), or render → Short → posts with the series' plan."""
+    p, plan = plan_of(job)
+    if plan is None:
+        return ("Bộ phim này chưa bật Tự động đăng (Thư viện -> Tự động đăng): duyệt xong "
+                "bạn tự dựng như thường.")
+    if render_opts(job) is None:
+        return ("Duyệt xong app CHƯA tự dựng được: bộ phim chưa có tập nào dựng — dựng tay "
+                "một tập để app học cài đặt.")
+    return ("Duyệt xong app tự dựng theo cài đặt của bộ phim"
+            + (", tự cắt 1 Short" if plan.get("auto_short") else "")
+            + " rồi " + summary(p.slug).replace("Tự đăng: ", "đăng lên ") + ".")
+
+
 def targets(plan: dict, kind: str) -> list[str]:
     """Platforms that take ``kind`` under ``plan`` (on, and listing the kind). Pure."""
     if not plan.get("on"):

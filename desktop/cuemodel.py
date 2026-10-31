@@ -154,10 +154,9 @@ def _override_row(c: EditorCue) -> dict:
 # the user has not seen (qt-handoff: "sửa cue sẽ làm trạng thái kiểm tra hết hiệu lực").
 
 def fingerprint(c: EditorCue) -> str:
-    import hashlib
+    from app.pipeline import quickreview     # one formula for the editor, Duyệt nhanh, the bot
 
-    raw = f"{c.start:.3f}|{c.end:.3f}|{c.vi}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return quickreview.fingerprint(c.start, c.end, c.vi)
 
 
 def is_reviewed(c: EditorCue) -> bool:
