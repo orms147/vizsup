@@ -5,7 +5,8 @@ to start cold: names, xưng hô, voice, subtitle look and render settings were r
 A profile lives in ``<storage>/_series/<slug>/series.json``::
 
     {name, match, glossary {zh: vi}, characters [{zh, vi, gender, note}], brief,
-     style {style.json}, render {render_opts.json}, pronounce {written: spoken}}
+     style {style.json}, render {render_opts.json}, pronounce {written: spoken},
+     autopilot {on, sources [urls], every_h, max_per_check}}
 
 A project links to it through ``<job>/series_link.json`` ``{slug, name, episode, last}``;
 the link is made automatically from the 《…》 in the title (or by the user's pick).
@@ -19,7 +20,10 @@ What flows where (every hook is best effort — a series problem never stops a r
   sheet (brief + characters) and the last lines of the previous episode to the prompt;
 - **TTS**: ``pronounce_for`` is a layer of ``speak.load_rules`` (global < series < project);
 - **approval** (``learn``): the episode's suggested terms the user KEPT are merged into the
-  series glossary — earlier episodes win — and a first style / render setting is remembered.
+  series glossary — earlier episodes win — and a first style / render setting is remembered;
+- **theo dõi tập mới** (``autopilot``): the creator pages ``pipeline/watch.py`` checks every
+  ``every_h`` hours for new episodes (run to the edit gate, never approved). Off by default;
+  keys this module does not know (platforms, slots…) are kept as they are.
 """
 from __future__ import annotations
 
@@ -57,11 +61,13 @@ class Profile:
     render: dict = field(default_factory=dict)
     pronounce: dict[str, str] = field(default_factory=dict)
     short: dict = field(default_factory=dict)       # the "Short" preset's settings (shorts.learn)
+    autopilot: dict = field(default_factory=dict)   # "theo dõi tập mới" (autopilot_of)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "match": self.match, "glossary": self.glossary,
                 "characters": self.characters, "brief": self.brief, "style": self.style,
-                "render": self.render, "pronounce": self.pronounce, "short": self.short}
+                "render": self.render, "pronounce": self.pronounce, "short": self.short,
+                "autopilot": self.autopilot}
 
     @property
     def terms(self) -> int:
@@ -101,7 +107,8 @@ def _from_dict(slug: str, d: dict) -> Profile:
                    style=d["style"] if isinstance(d.get("style"), dict) else {},
                    render=d["render"] if isinstance(d.get("render"), dict) else {},
                    pronounce=_clean_map(d.get("pronounce")),
-                   short=d["short"] if isinstance(d.get("short"), dict) else {})
+                   short=d["short"] if isinstance(d.get("short"), dict) else {},
+                   autopilot=d["autopilot"] if isinstance(d.get("autopilot"), dict) else {})
 
 
 def load(slug: str) -> Profile | None:
@@ -140,6 +147,68 @@ def create(name: str, *, match: str | None = None) -> Profile:
 def _saved(p: Profile) -> Profile:
     save(p)
     return p
+
+
+# --- "theo dõi tập mới" ---------------------------------------------------------------------
+
+AUTOPILOT_DEFAULTS = {"on": False, "sources": [], "every_h": 6, "max_per_check": 3}
+
+
+def _int_in(v, lo: int, hi: int, default: int) -> int:
+    try:
+        return min(hi, max(lo, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_autopilot(block) -> dict:
+    """The defaults filled in, ``sources`` a de-duplicated list of stripped links, the hours /
+    the per-check cap clamped; any other key is kept untouched. Pure."""
+    out = {**AUTOPILOT_DEFAULTS, **(block if isinstance(block, dict) else {})}
+    out["on"] = bool(out.get("on"))
+    raw = out.get("sources")
+    raw = raw.split() if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    sources: list[str] = []
+    for s in raw:
+        s = str(s).strip()
+        if s and s not in sources:
+            sources.append(s)
+    out["sources"] = sources
+    out["every_h"] = _int_in(out.get("every_h"), 1, 168, AUTOPILOT_DEFAULTS["every_h"])
+    out["max_per_check"] = _int_in(out.get("max_per_check"), 1, 20,
+                                   AUTOPILOT_DEFAULTS["max_per_check"])
+    return out
+
+
+def autopilot_of(p: Profile) -> dict:
+    return normalize_autopilot(p.autopilot)
+
+
+def load_autopilot(slug: str) -> dict | None:
+    """The profile's watch settings (defaults when it never had any); None = no profile."""
+    p = load(slug)
+    return autopilot_of(p) if p else None
+
+
+def save_autopilot(slug: str, **changes) -> Profile | None:
+    """Merge ``changes`` (on / sources / every_h / …) into the profile's block, read fresh
+    from disk so nothing else in the profile is overwritten. None = no profile."""
+    p = load(slug)
+    if p is None:
+        return None
+    p.autopilot = normalize_autopilot({**p.autopilot, **changes})
+    save(p)
+    return p
+
+
+def followed() -> list[Profile]:
+    """Profiles whose watch is on and has at least one page to look at."""
+    out = []
+    for p in list_profiles():
+        ap = autopilot_of(p)
+        if ap["on"] and ap["sources"]:
+            out.append(p)
+    return out
 
 
 # --- the project's link ------------------------------------------------------------------
