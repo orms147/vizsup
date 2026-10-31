@@ -126,3 +126,17 @@ def test_a_rendered_episode_gets_its_posts_and_a_due_post_is_published(win, stor
         time.sleep(0.02)
     (done,) = autopilot.load_posts()
     assert done["status"] == "draft" and Path(done["result"]["url"], "post.txt").exists()
+
+
+def test_the_gate_opens_the_one_click_review_when_autopilot_is_on(win, storage, qapp):
+    job = _episode(storage, out=False)
+    opened = []
+    win._fast_approve = opened.append
+    win.job, win.opts = job, {}
+    autopilot.save_plan("末日校车", {**autopilot.DEFAULT_PLAN, "on": True})
+    win._on_gate()
+    end = time.time() + 3
+    while not opened and time.time() < end:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert opened == [job.id]

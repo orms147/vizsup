@@ -392,6 +392,9 @@ class MainWindow(QMainWindow):
             self._notify("Phụ đề đã sẵn sàng",
                          f"{len(self.editor.cues)} câu · {self.editor.pending_count()} câu cần xem lại")
             store.debug("on_gate: switched to editor")
+            if self._autopilot_plan(self.job)[1] is not None:
+                # Tự động đăng: straight to the one-click review (paste link → approve)
+                QTimer.singleShot(400, lambda jid=self.job.id: self._fast_approve(jid))
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
             import traceback as _tb
             store.debug(f"on_gate FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
@@ -571,11 +574,17 @@ class MainWindow(QMainWindow):
                                 flagged=flagged, after=after)
         ok = dlg.exec()
         if dlg.edit_requested:
-            self._resume(iid)
+            if self.job is None or self.job.id != iid:
+                self._resume(iid)
+            self.stack.setCurrentIndex(EDITOR)
             return
         if not ok:
             return
+        if self.job is not None and self.job.id == job.id:
+            self.editor.save_now()             # the open editor's text is what gets approved
         approval.approve(job)
+        if self.job is not None and self.job.id == job.id:
+            self.editor.refresh_approval()
         self.status.set_status("Đã duyệt " + title[:40], "ok")
         self._autopilot_after_approve(job)
 
