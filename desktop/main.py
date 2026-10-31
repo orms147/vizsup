@@ -601,7 +601,7 @@ class MainWindow(QMainWindow):
             return
         opts = autopilot.render_opts(job)
         if opts is None:
-            self.status.set_status("Tự động đăng: bộ phim chưa có tập nào dựng — dựng tay một "
+            self.status.set_status("Tự động đăng: máy chưa dựng video nào — dựng tay một "
                                    "tập để app học cài đặt.", "warn")
             return
         title = job.metadata.get("title") or job.id
@@ -704,7 +704,8 @@ class MainWindow(QMainWindow):
             self._posting = False
             p = autopilot.record(post["id"], res)
             where = PLATFORM_NAMES.get(post["platform"], post["platform"])
-            self._notify(f"{where}: " + ("đã đăng" if res.ok else "đăng lỗi"),
+            state = "đã hẹn giờ" if res.status == "scheduled" else "đã đăng"
+            self._notify(f"{where}: " + (state if res.ok else "đăng lỗi"),
                          res.message or res.url or post["job"], "ok" if res.ok else "err")
             self.remote.posted(p)
 

@@ -77,7 +77,8 @@ def test_plan_posts_queues_each_platform_once(storage):
     new = autopilot.plan_posts(job, "long", now=now)
     assert {p["platform"] for p in new} == {"folder", "youtube"}
     assert autopilot.plan_posts(job, "long", now=now) == []             # already queued
-    assert autopilot.due(now) == []
+    # YouTube holds a scheduled post itself → it goes up now; the folder package waits
+    assert [p["platform"] for p in autopilot.due(now)] == ["youtube"]
     assert len(autopilot.due(now + 3 * 86400)) == 2
     # no series plan / no rendered video → nothing
     other = _episode(storage, "ep10", out=False)
@@ -90,7 +91,9 @@ def test_record_retries_then_fails(storage):
     (post,) = autopilot.plan_posts(job, "long", now=time.time() - 10 * 86400)
     for _ in range(2):
         p = autopilot.record(post["id"], PostResult(False, "failed", message="mạng"))
-        assert p["status"] == "pending" and p["slot"] > time.time()
+        assert p["status"] == "pending" and p["retry_at"] > time.time()
+        assert autopilot.due() == []                                    # waits for its retry
+    assert [x["id"] for x in autopilot.due(time.time() + 3601)] == [post["id"]]
     p = autopilot.record(post["id"], PostResult(False, "failed", message="mạng"))
     assert p["status"] == "failed" and p["result"]["message"] == "mạng"
 
@@ -160,7 +163,7 @@ def test_render_opts_from_the_series_or_its_latest_render(storage):
     from app.pipeline import series
 
     job = _episode(storage, out=False)
-    assert autopilot.render_opts(job) is None                           # never rendered
+    assert autopilot.render_opts(job) is None                           # nothing ever rendered
     prev = _episode(storage, "ep8", title="第6集 | 《末日校车》08")
     (prev.work_dir / "render_opts.json").write_text(json.dumps(
         {"voice": "vi-VN-NamMinhNeural", "rate": "+30%", "frame": "source", "res": "720"}),
@@ -196,3 +199,76 @@ def test_run_due_publishes_and_records(storage):
     (p,) = autopilot.run_due(log=logs.append)
     assert p["status"] == "draft" and logs and logs[0].startswith("✓ folder")
     assert autopilot.run_due() == []                                # nothing left
+
+
+def test_youtube_and_facebook_go_up_early_as_scheduled_posts(storage, monkeypatch):
+    job = _episode(storage)
+    _plan_on({"youtube": {"on": True, "kinds": ["long"]}, "facebook": {"on": True, "kinds": ["long"]},
+              "tiktok": {"on": True, "kinds": ["long"]}})
+    now = time.time()
+    autopilot.plan_posts(job, "long", now=now)
+    posts = autopilot.load_posts()
+    slot = now + 6 * 3600                                       # tonight, whatever the clock says
+    for p in posts:
+        p["slot"] = slot
+    autopilot.save_posts(posts)
+    assert {p["platform"] for p in autopilot.due(now)} == {"youtube", "facebook"}  # TikTok: at the slot
+
+    seen = {}
+
+    class Pub:
+        display_name = "YouTube"
+
+        def connected(self):
+            return True
+
+        def publish(self, video, meta, progress=None):
+            seen["at"] = meta.publish_at
+            return PostResult(True, "scheduled", url="https://youtu.be/x", message="hẹn giờ")
+    monkeypatch.setattr("app.providers.registry.get_publisher", lambda _name: Pub())
+    yt = next(p for p in posts if p["platform"] == "youtube")
+    assert autopilot.publish(yt).status == "scheduled" and seen["at"] == slot
+    p = autopilot.record(yt["id"], PostResult(True, "scheduled", url="https://youtu.be/x"))
+    assert p["status"] == "scheduled" and p["slot"] == slot          # its hour is kept
+
+    # a failed early upload keeps the slot and is retried an hour later, still scheduled
+    fb = next(x for x in posts if x["platform"] == "facebook")
+    p = autopilot.record(fb["id"], PostResult(False, "failed", message="mạng"))
+    assert p["slot"] == slot and p["retry_at"] > now
+    # too near (or already past) → published at the slot, not scheduled
+    near = {**yt, "slot": time.time() + 60}
+    assert autopilot.early(near) is False
+    autopilot.publish(near)
+    assert seen["at"] is None
+
+
+def test_scheduled_posts_are_reported_as_such(storage):
+    from app.pipeline import remote
+
+    outs = remote.posted_outs({"platform": "youtube", "kind": "long", "job": "nope",
+                               "status": "scheduled", "slot": time.time() + 7200,
+                               "result": {"url": "https://youtu.be/x"}})
+    assert outs[0].text.startswith("⏰ YouTube: đã tải lên") and "tự công khai lúc" in outs[0].text
+
+
+def test_a_new_series_renders_like_the_owners_latest_episode(storage):
+    """No render in this series yet → the owner's newest long render of another series;
+    a Short's 9:16 settings never serve as the template."""
+    job = _episode(storage, out=False)
+    other = storage / "solo"
+    other.mkdir()
+    (other / "metadata.json").write_text(json.dumps({"title": "《别的》01"}), encoding="utf-8")
+    (other / "output.mp4").write_bytes(b"mp4")
+    (other / "render_opts.json").write_text(json.dumps({"voice": "vieneu:Ngọc Huyền", "frame": "source"}),
+                                            encoding="utf-8")
+    short = storage / "short1"
+    short.mkdir()
+    (short / "metadata.json").write_text(json.dumps({"title": "x", "short": {"parent": "solo"}}),
+                                         encoding="utf-8")
+    (short / "output.mp4").write_bytes(b"mp4")
+    (short / "render_opts.json").write_text(json.dumps({"voice": "edge", "frame": "tiktok"}),
+                                            encoding="utf-8")
+    import os
+    os.utime(short / "output.mp4", (time.time() + 60, time.time() + 60))  # the Short is newer
+    opts = autopilot.render_opts(job)
+    assert opts["voice"] == "vieneu:Ngọc Huyền" and opts["frame"] == "source"

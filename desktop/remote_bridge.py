@@ -168,7 +168,7 @@ class RemoteBridge(remote.Host):
             return ("Bộ phim này chưa bật Tự động đăng — mở vizsup trên máy để dựng như thường "
                     "(tập đã ở trạng thái đã duyệt).")
         if autopilot.render_opts(job) is None:
-            return ("Chưa tự dựng được: bộ phim chưa có tập nào dựng — dựng tay một tập trên máy "
+            return ("Chưa tự dựng được: máy chưa dựng video nào — dựng tay một tập trên máy "
                     "để app học cài đặt.")
         w._autopilot_after_approve(job)
         return "🎬 Đang dựng trên máy theo cài đặt của bộ phim — xong sẽ lên lịch đăng và báo bạn."

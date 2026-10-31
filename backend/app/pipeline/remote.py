@@ -423,6 +423,12 @@ def posted_outs(post: dict | None) -> list[Out]:
     from app.pipeline.compilation import _job_title, clean_title
 
     title = clean_title(_job_title(d), 80) if d.is_dir() else str(post.get("job"))
+    if post.get("status") == "scheduled":
+        when = time.strftime("%H:%M %d/%m", time.localtime(float(post.get("slot") or 0)))
+        text = f"⏰ {name}: đã tải lên {title} ({kind}) — tự công khai lúc {when}"
+        if res.get("url"):
+            text += f"\n{res['url']}"
+        return [_say(text, note="posted", preview=True)]
     if post.get("status") in POSTED:
         text = f"✅ {name}: đã đăng {title} ({kind})"
         if res.get("url"):
@@ -709,7 +715,7 @@ class CliHost(Host):
             return ("Bộ phim này chưa bật Tự động đăng — mở vizsup trên máy để dựng (tập đã ở "
                     "trạng thái đã duyệt).")
         if autopilot.render_opts(job) is None:
-            return ("Chưa tự dựng được: bộ phim chưa có tập nào dựng — dựng tay một tập trên máy "
+            return ("Chưa tự dựng được: máy chưa dựng video nào — dựng tay một tập trên máy "
                     "để app học cài đặt.")
         self.to_render.append(job.id)
         return ("App vizsup trên máy đang đóng — tác vụ nền đang dựng theo cài đặt của bộ phim; "

@@ -7,6 +7,8 @@ posting slots — so the owner's loop is "paste a link (or let the watcher find 
   posts per platform per day, whether to cut a Short automatically, title templates.
 - **Posts** (``<storage>/_autopilot/posts.json``): one job per (project, kind, platform) with
   its slot, status and result. ``due()`` lists what to publish now; ``record()`` stores results.
+  YouTube / Facebook posts go up right away as scheduled posts (``early``): private until the
+  slot, so YouTube's copyright check runs first and this PC need not be on at that hour.
 - **The gate stays.** A Short cut automatically inherits the episode's approval ONLY when every
   line of it is, word for word, an approved line of the episode (``carry_approval``) — the
   owner's click approved those words; the Short's hook is one of those lines. Anything else
@@ -28,6 +30,9 @@ from app.models import Job
 PLANS = Path("_autopilot") / "plans.json"
 POSTS = Path("_autopilot") / "posts.json"
 KINDS = ("long", "short")
+EARLY = ("youtube", "facebook")       # platforms that hold a scheduled post until its slot
+EARLY_MIN_S = 30 * 60                 # nearer than this: posted at the slot (YouTube 5 min, FB 11)
+EARLY_MAX_S = 25 * 86400              # Facebook Reels: at most 29 days ahead
 DEFAULT_PLAN = {
     "on": False,
     "platforms": {},                     # {"youtube": {"on": True, "kinds": ["long", "short"]}}
@@ -89,7 +94,7 @@ def after_approve_text(job: Job) -> str:
         return ("Bộ phim này chưa bật Tự động đăng (Thư viện -> Tự động đăng): duyệt xong "
                 "bạn tự dựng như thường.")
     if render_opts(job) is None:
-        return ("Duyệt xong app CHƯA tự dựng được: bộ phim chưa có tập nào dựng — dựng tay "
+        return ("Duyệt xong app CHƯA tự dựng được: máy chưa dựng video nào — dựng tay "
                 "một tập để app học cài đặt.")
     return ("Duyệt xong app tự dựng theo cài đặt của bộ phim"
             + (", tự cắt 1 Short" if plan.get("auto_short") else "")
@@ -213,16 +218,27 @@ def plan_posts(job: Job, kind: str, *, now: float | None = None) -> list[dict]:
     return new
 
 
+def early(post: dict, now: float | None = None) -> bool:
+    """A post the platform itself can hold until its slot (YouTube / Facebook scheduling):
+    uploaded as soon as it is planned — YouTube checks copyright while it is still private,
+    and the slot is kept even when this PC is off at that hour. Pure."""
+    now = now if now is not None else time.time()
+    slot = post.get("slot")
+    return (post.get("platform") in EARLY and slot is not None
+            and EARLY_MIN_S <= float(slot) - now <= EARLY_MAX_S)
+
+
 def due(now: float | None = None) -> list[dict]:
-    """Pending posts whose slot has come (oldest first)."""
+    """Pending posts whose slot has come, or that go up early (``early``), oldest first.
+    A failed post waits for its ``retry_at``."""
     now = now if now is not None else time.time()
 
     def ready(p: dict) -> bool:
         if p.get("status") == "running":           # a publisher that never came back
             return time.time() - float(p.get("claimed_at") or 0) > RUN_STALE_S
-        return p.get("status") == "pending"
+        return p.get("status") == "pending" and float(p.get("retry_at") or 0) <= now
 
-    return sorted((p for p in load_posts() if ready(p) and p["slot"] <= now),
+    return sorted((p for p in load_posts() if ready(p) and (p["slot"] <= now or early(p, now))),
                   key=lambda p: p["slot"])
 
 
@@ -244,7 +260,7 @@ def _record(post_id: str, result) -> dict | None:
         if result.ok:
             p["status"] = result.status or "done"
         elif p["tries"] < 3:
-            p["slot"] = time.time() + 3600
+            p["retry_at"] = time.time() + 3600       # the slot stays: an early upload keeps its hour
             p["status"] = "pending"
         else:
             p["status"] = "failed"
@@ -267,7 +283,8 @@ def publish(post: dict, *, progress=None):
         pub = get_publisher(post["platform"])
     except KeyError:
         return PostResult(False, "failed", message=f"Chưa có nơi đăng “{post['platform']}”.")
-    meta = post_meta(job, post["kind"], load_plan(post.get("series") or ""))
+    meta = post_meta(job, post["kind"], load_plan(post.get("series") or ""),
+                     publish_at=post["slot"] if early(post) else None)
     if not pub.connected():
         # not linked (yet): the post still goes out as a ready-made package to post by hand
         res = get_publisher("folder").publish(video, meta, progress=progress)
@@ -418,17 +435,22 @@ def summary(slug: str) -> str:
 
 # --- render settings ---------------------------------------------------------------------------
 
-def _latest_rendered_in_series(job: Job) -> Path | None:
-    from app.pipeline import series
+def _latest_rendered_in_series(job: Job, *, any_series: bool = False) -> Path | None:
+    """The newest really rendered project of ``job``'s series — or, ``any_series``, the
+    owner's newest rendered episode anywhere (a Short's 9:16 settings never count)."""
+    from app.pipeline import clipshort, series
 
     lk = series.link_of(job.work_dir)
-    if not lk:
+    if not lk and not any_series:
         return None
     best: tuple[float, Path] | None = None
     for d in _root().iterdir():
         if not d.is_dir() or d == job.work_dir or d.name.startswith("_"):
             continue
-        if (series.link_of(d) or {}).get("slug") != lk.get("slug"):
+        if any_series:
+            if clipshort.info(Job(id=d.name, work_dir=d)) is not None:
+                continue
+        elif (series.link_of(d) or {}).get("slug") != lk.get("slug"):
             continue
         out = d / "output.mp4"
         if (d / "render_opts.json").exists() and out.exists():
@@ -440,15 +462,18 @@ def _latest_rendered_in_series(job: Job) -> Path | None:
 
 def render_opts(job: Job, kind: str = "long") -> dict | None:
     """The settings to render ``job`` with, unattended: the series' learned render settings,
-    else the latest rendered episode of the series; the project's own subtitle look wins
-    (batch.opts_for). A Short adds the series' Short preset. None when the series has never
-    been rendered (the owner renders one episode by hand first)."""
+    else the latest rendered episode of the series, else the owner's latest rendered episode
+    of any series (a new series starts from how the owner renders); the project's own
+    subtitle look wins (batch.opts_for). A Short adds the series' Short preset. None only
+    when nothing was ever rendered (the owner renders one episode by hand first)."""
     from app.pipeline import batch, series, shorts
 
     p = series.profile_of(job)
     template = dict(p.render) if p is not None and p.render else None
-    if not template:
-        src = _latest_rendered_in_series(job)
+    for wide in (False, True):
+        if template:
+            break
+        src = _latest_rendered_in_series(job, any_series=wide)
         template = batch.template_from(src) if src else None
     if not template:
         return None

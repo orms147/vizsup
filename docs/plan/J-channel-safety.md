@@ -189,8 +189,12 @@ Luật YPP ([1311392](https://support.google.com/youtube/answer/1311392)):
 - [ ] **Không mua view / sub / like, không vào nhóm "sub chéo"** — vi phạm chính sách tương tác
       giả, có thể bị gỡ video hoặc xóa kênh.
 - [ ] **Đăng thử ở chế độ riêng tư / hẹn giờ trước:** YouTube Studio chạy "Kiểm tra" bản quyền
-      lúc tải lên. Thấy khiếu nại bản quyền thì đừng công khai video đó. Bài vizsup hẹn giờ
-      được tải lên ở chế độ riêng tư, tới giờ mới công khai — vẫn kịp xem Studio báo gì.
+      lúc tải lên. Thấy khiếu nại bản quyền thì đừng công khai video đó.
+      - vizsup tải bài YouTube / Facebook lên **ngay sau khi dựng**, ở chế độ hẹn giờ (riêng tư
+        tới giờ đăng): YouTube kiểm tra bản quyền trước, bạn kịp xem Studio báo gì, máy không
+        cần bật đúng giờ đăng. Bot Telegram báo "⏰ đã tải lên — tự công khai lúc …".
+      - Thấy khiếu nại → vào Studio đổi video đó về "Riêng tư" (hủy hẹn giờ).
+      - TikTok không có hẹn giờ qua API: đăng đúng giờ, lúc máy bật hoặc tác vụ nền chạy.
 
 **TikTok:**
 - Nội dung "không nguyên bản / tái sử dụng mà không thêm gì mới" **không được lên For You**

@@ -13,15 +13,48 @@ is already on disk).
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 from app.fsutil import atomic_write_text
 from app.models import Job
 
+# edge-tts refuses at random some nights; the lines already made are kept, so waiting and
+# going on finishes the dub without the owner clicking "Dựng lại" (an unattended render has
+# nobody to click it)
+THROTTLE_WAITS = (60.0, 180.0, 420.0)
+
 
 def _noop(*_a) -> None:
     return None
+
+
+def throttled(exc: BaseException) -> bool:
+    """The TTS server limited us (tts.synthesize's RuntimeError from edge's TTSThrottled)."""
+    return type(exc).__name__ == "TTSThrottled" or type(exc.__cause__).__name__ == "TTSThrottled"
+
+
+def with_throttle_waits(make: Callable[[], list], *, log: Callable[[str], None] = _noop,
+                        cancel: Callable[[], bool] | None = None,
+                        waits: tuple[float, ...] = THROTTLE_WAITS,
+                        sleep: Callable[[float], None] = time.sleep) -> list:
+    """``make()`` (the dub), waiting and trying again while the TTS server is limiting us.
+    Each try only makes the lines still missing. Cancel is honoured during the wait."""
+    for i, wait in enumerate((*waits, None)):
+        try:
+            return make()
+        except RuntimeError as exc:
+            if wait is None or not throttled(exc):
+                raise
+            log(f"⏳ Máy chủ giọng đọc đang giới hạn — tự thử tiếp sau {wait:.0f} giây "
+                f"({i + 1}/{len(waits)})")
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                if cancel is not None and cancel():
+                    raise InterruptedError("Đã hủy.") from exc
+                sleep(min(1.0, max(0.0, end - time.monotonic())))
+    raise AssertionError("unreachable")
 
 
 def note_hardsubs(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
@@ -113,13 +146,13 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
     else:
         stage("tts")
         progress(0.2, "Đang tạo lồng tiếng (TTS)…")
-        segments = tts.synthesize(job, provider=o.get("tts", "edge"), voice=o.get("voice"),
-                                  rate=o.get("rate"), log=log,
-                                  voice_by_gender=bool(o.get("voice_by_gender")),
-                                  cancel=(lambda: bool(cancel and cancel())),  # per-cue (N-10)
-                                  progress=lambda d, n: progress(
-                                      0.2 + 0.3 * d / max(1, n),
-                                      f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu"))
+        segments = with_throttle_waits(lambda: tts.synthesize(
+            job, provider=o.get("tts", "edge"), voice=o.get("voice"), rate=o.get("rate"), log=log,
+            voice_by_gender=bool(o.get("voice_by_gender")),
+            cancel=(lambda: bool(cancel and cancel())),  # per-cue (N-10)
+            progress=lambda d, n: progress(0.2 + 0.3 * d / max(1, n),
+                                           f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu")),
+            log=log, cancel=cancel)
         log(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
 
     # F-4: the user's own commentary — a voice other than the dub's, or their recording
