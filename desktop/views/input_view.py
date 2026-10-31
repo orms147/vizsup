@@ -668,7 +668,7 @@ class InputView(QWidget):
         self.timing_pass.setChecked(bool(st.get("timing_pass", True)))
         self.vi_lint.setChecked(bool(st.get("vi_lint", True)))
         self.voice_guess.setChecked(bool(st.get("voice_guess", False)))
-        self.voice_hints.setChecked(bool(st.get("voice_hints", True)))
+        self.voice_hints.setChecked(bool(st.get("voice_hints", False)))
         self.ai_review.setChecked(bool(st.get("ai_review", True)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))

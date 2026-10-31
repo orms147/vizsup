@@ -562,7 +562,7 @@ class PipelineWorker(QObject):
             translate.translate(job, draft=o.get("translator", "passthrough"),
                                 refine=o.get("refine"), glossary=gl or None,
                                 log=self.log.emit, cancel=lambda: self._cancel,
-                                voice_hints=o.get("voice_hints", True))
+                                voice_hints=o.get("voice_hints", False))
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             # 3.4) Vietnamese typography lint (spaces, …, quotes, repeated function words)
             # BEFORE the AI review, whose findings are tied to the unchanged line text
