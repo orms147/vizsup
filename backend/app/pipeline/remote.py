@@ -64,6 +64,11 @@ HELP = ("🤖 vizsup — điều khiển từ điện thoại\n\n"
         "• Duyệt xong: bộ phim bật Tự động đăng thì máy tự dựng, cắt Short, lên lịch và đăng; "
         "bot báo từng bước.\n\n"
         "/trangthai — tập chờ duyệt, hàng dựng, lịch đăng 24 giờ, bài vừa đăng, lỗi\n"
+        "/lich — kế hoạch đăng + các bài sắp đăng\n"
+        "/gio 19:00 21:00 — đổi giờ đăng (mọi bộ phim đang tự đăng; bài chờ được xếp lại)\n"
+        "/moingay 2 — số bài mỗi ngày cho mỗi nơi đăng\n"
+        "/dangthu bat | tat — đăng thử: video để riêng tư\n"
+        "/tamdung · /tieptuc — tạm dừng / tiếp tục đăng\n"
         "/help — hướng dẫn này")
 
 
@@ -473,6 +478,78 @@ def waiting(now: float | None = None) -> list[Job]:
     return [j for _t, j in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
+def schedule_text(*, now: float | None = None) -> str:
+    """/lich: each series' posting plan and the next posts (7 days)."""
+    from app.pipeline import autopilot
+    from app.pipeline.compilation import _job_title, clean_title
+
+    now = time.time() if now is None else now
+    lines = ["📅 Lịch đăng" + (" — ⏸ ĐANG TẠM DỪNG (/tieptuc để đăng lại)"
+                               if autopilot.paused() else "")]
+    plans = autopilot.plans_on()
+    if not plans:
+        lines.append("Chưa bộ phim nào bật Tự động đăng (trên máy: Thư viện → Tự động đăng).")
+    for slug, plan in plans.items():
+        name = (plan.get("series_name") or "").strip() or slug
+        lines.append(f"• {name}: {autopilot.summary(slug).removeprefix('Tự đăng: ')}")
+    soon = sorted((p for p in autopilot.load_posts()
+                   if p.get("status") in ("pending", "running", "scheduled")
+                   and now - 3600 <= float(p.get("slot") or 0) <= now + 7 * 86400),
+                  key=lambda p: p["slot"])
+    lines.append("")
+    if soon:
+        lines.append(f"Sắp đăng ({len(soon)}):")
+        for p in soon[:12]:
+            d = _root() / str(p.get("job") or "")
+            title = clean_title(_job_title(d), 50) if d.is_dir() else str(p.get("job"))
+            mark = "⏰ đã tải lên" if p.get("status") == "scheduled" else "chờ"
+            lines.append(f"• {_when(p['slot'])} · {PLATFORMS.get(p['platform'], p['platform'])} "
+                         f"· {KINDS.get(p['kind'], p['kind'])} · {title} ({mark})")
+    else:
+        lines.append("Chưa có bài nào sắp đăng.")
+    return "\n".join(lines)
+
+
+def schedule_command(cmd: str, args: list[str]) -> str:
+    """/gio /moingay /dangthu /tamdung /tieptuc — change the posting schedule from the phone.
+    Never approves or publishes anything by itself."""
+    from app.pipeline import autopilot
+
+    if cmd == "/lich":
+        return schedule_text()
+    if cmd == "/tamdung":
+        autopilot.set_paused(True)
+        return ("⏸ Đã tạm dừng đăng. Bài đã tải lên YouTube/Facebook ở chế độ hẹn giờ vẫn tự "
+                "công khai đúng giờ (đổi trong YouTube Studio nếu cần). /tieptuc để đăng lại.")
+    if cmd == "/tieptuc":
+        autopilot.set_paused(False)
+        moved = autopilot.reschedule()
+        return "▶️ Đăng lại bình thường" + (f" — xếp lại {moved} bài chờ vào giờ tới." if moved
+                                            else ".")
+    if not autopilot.plans_on():
+        return "Chưa bộ phim nào bật Tự động đăng (trên máy: Thư viện → Tự động đăng)."
+    if cmd == "/gio":
+        times = autopilot.parse_times(args)
+        if not times:
+            return "Gửi giờ theo dạng: /gio 19:00 hoặc /gio 12:00 19:30"
+        names = autopilot.change_plans(times=times)
+        return f"🕖 Giờ đăng mới: {', '.join(times)} — {', '.join(names)}. Bài chờ đã xếp lại."
+    if cmd == "/moingay":
+        if not args or not args[0].isdigit() or not 1 <= int(args[0]) <= 6:
+            return "Gửi số bài mỗi ngày (1–6), vd. /moingay 2"
+        names = autopilot.change_plans(per_day=int(args[0]))
+        return f"📆 {args[0]} bài/ngày cho mỗi nơi đăng — {', '.join(names)}. Bài chờ đã xếp lại."
+    if cmd == "/dangthu":
+        word = (args[0].lower() if args else "")
+        if word not in ("bat", "bật", "on", "tat", "tắt", "off"):
+            return "Gửi /dangthu bat (video để riêng tư) hoặc /dangthu tat (đăng công khai)"
+        on = word in ("bat", "bật", "on")
+        names = autopilot.change_plans(private=on)
+        return ("🔒 Đăng thử BẬT — bài mới để riêng tư" if on else
+                "🌐 Đăng thử TẮT — bài mới đăng công khai theo lịch") + f" — {', '.join(names)}."
+    return HELP
+
+
 def status_text(renders: list[str] | None = None, *, now: float | None = None) -> str:
     """/trangthai: episodes waiting for approval, the render queue, the next 24 h of posts,
     the last five published, failures."""
@@ -588,6 +665,8 @@ def _text(ev: Event, host: Host) -> list[Out]:
         return [_say(HELP)]
     if cmd in ("/trangthai", "/status"):
         return [_say(status_text(host.renders()))]
+    if cmd in ("/lich", "/gio", "/moingay", "/dangthu", "/tamdung", "/tieptuc"):
+        return [_say(schedule_command(cmd, t.split()[1:]))]
     url = find_link(t)
     if url:
         return _link(url, host)

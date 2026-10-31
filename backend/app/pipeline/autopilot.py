@@ -29,6 +29,7 @@ from app.models import Job
 
 PLANS = Path("_autopilot") / "plans.json"
 POSTS = Path("_autopilot") / "posts.json"
+PAUSE = Path("_autopilot") / "paused.json"     # "/tamdung": nothing is published until resumed
 KINDS = ("long", "short")
 EARLY = ("youtube", "facebook")       # platforms that hold a scheduled post until its slot
 EARLY_MIN_S = 30 * 60                 # nearer than this: posted at the slot (YouTube 5 min, FB 11)
@@ -236,6 +237,9 @@ def due(now: float | None = None) -> list[dict]:
     A failed post waits for its ``retry_at``."""
     now = now if now is not None else time.time()
 
+    if paused():
+        return []
+
     def ready(p: dict) -> bool:
         if p.get("status") == "running":           # a publisher that never came back
             return time.time() - float(p.get("claimed_at") or 0) > RUN_STALE_S
@@ -300,6 +304,78 @@ def publish(post: dict, *, progress=None):
     except Exception as exc:  # noqa: BLE001 - a post must never crash the app
         return PostResult(False, "failed", message=f"{type(exc).__name__}: {exc}")
 
+
+
+# --- the schedule, changed from the phone (Telegram /gio /moingay /dangthu /tamdung) ------------
+
+def paused() -> bool:
+    return bool(_read(_root() / PAUSE).get("on"))
+
+
+def set_paused(on: bool) -> None:
+    _write(_root() / PAUSE, {"on": bool(on), "at": time.time()})
+
+
+def plans_on() -> dict[str, dict]:
+    """{slug: plan} of the series whose Tự động đăng is on."""
+    out = {}
+    for slug in _read(_root() / PLANS):
+        plan = load_plan(slug)
+        if plan.get("on"):
+            out[slug] = plan
+    return out
+
+
+def parse_times(words: list[str]) -> list[str]:
+    """"19:00", "19h", "7h30", "19.30", "19" → "HH:MM" (sorted, no repeats); [] when any word
+    is not a time of day. Pure."""
+    import re
+
+    out = []
+    for w in words:
+        m = re.fullmatch(r"(\d{1,2})(?:[:h.](\d{2})?)?h?", w.strip().lower())
+        if not m:
+            return []
+        h, mi = int(m.group(1)), int(m.group(2) or 0)
+        if not (0 <= h < 24 and 0 <= mi < 60):
+            return []
+        out.append(f"{h:02d}:{mi:02d}")
+    return sorted(set(out))
+
+
+def reschedule(slugs: list[str] | None = None, *, now: float | None = None) -> int:
+    """Give the still-waiting posts of these series (all when None) fresh slots under their
+    plans' current times / per-day, oldest first. Posts already on a platform (scheduled
+    there, published, private …) keep theirs. Returns how many were moved."""
+    now = time.time() if now is None else now
+    with _PostsLock():
+        posts = load_posts()
+        fixed = [p for p in posts if p.get("status") != "pending"
+                 or (slugs is not None and p.get("series") not in slugs)]
+        moving = sorted((p for p in posts if p not in fixed), key=lambda p: p["slot"])
+        taken = list(fixed)
+        for p in moving:
+            plan = load_plan(p.get("series") or "")
+            mine = [q["slot"] for q in taken if q["platform"] == p["platform"]
+                    and q["kind"] == p["kind"] and q.get("status") in
+                    ("pending", "done", "scheduled", "private", "draft")]
+            p["slot"] = next_slot(mine, plan.get("times") or [], plan.get("per_day") or 1, now)
+            p.pop("retry_at", None)
+            taken.append(p)
+        save_posts(posts)
+        return len(moving)
+
+
+def change_plans(**changes) -> list[str]:
+    """Apply ``changes`` (times / per_day / private) to every series with Tự động đăng on, then
+    re-slot their waiting posts. Returns the series names changed."""
+    names = []
+    for slug, plan in plans_on().items():
+        save_plan(slug, {**plan, **changes})
+        names.append((plan.get("series_name") or "").strip() or slug)
+    if names and ("times" in changes or "per_day" in changes):
+        reschedule(list(plans_on()))
+    return names
 
 
 # --- one publisher at a time across processes (the open app + the scheduled task) ---------------
