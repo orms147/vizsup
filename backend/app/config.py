@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # the first day it is NOT used — same meaning as OpenRouter's `expiration_date`.
     openrouter_promo_model: str = ""
     openrouter_promo_expires: str = ""  # YYYY-MM-DD; blank = no expiry
+    # Which host serves a model (one model id is often sold by dozens of hosts at very
+    # different prices): blank / "price" = the cheapest host that is not 4-bit quantised
+    # (2026-10-31 cost pass, providers/translation/openrouter.py ROUTE_PRICE); "auto" =
+    # OpenRouter's own load balancing.
+    openrouter_routing: str = ""
     # E-2: one OpenRouter model per ROLE (blank → the benchmarked default in
     # app/providers/roles.py). OPENROUTER_MODEL above is legacy and no longer read.
     # MODEL_PRESET = the model package (app/providers/presets.py: economy / balanced /

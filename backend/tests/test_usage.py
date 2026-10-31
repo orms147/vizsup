@@ -56,3 +56,17 @@ def test_cached_prompt_tokens_are_recorded(tmp_path):
 
     m = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))["models"]["m/x"]
     assert (m["in"], m["cached"], m["calls"]) == (1500, 600, 2)
+
+
+def test_hosts_are_counted_per_model_and_absent_without_one(tmp_path):
+    import json
+
+    with usage.track(tmp_path, phase="gate"):
+        usage.record("m/x", U(10, 5, 0.001), host="Morph")
+        usage.record("m/x", U(10, 5, 0.001), host="Morph")
+        usage.record("m/x", U(10, 5, 0.001), host="DeepInfra")
+        usage.record("m/y", U(10, 5, 0.001))
+    m = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))["models"]
+    assert m["m/x"]["hosts"] == {"Morph": 2, "DeepInfra": 1}
+    assert "hosts" not in m["m/y"]
+    assert usage.summary(tmp_path)["calls"] == 4

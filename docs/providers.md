@@ -218,6 +218,20 @@ retried once with `effort: "minimal"` plus 2048 tokens of headroom, and remember
 models ignore the param. The shaping lives in `OpenRouter._chat()`; the DeepSeek/Qwen direct
 providers do not send it (it is an OpenRouter extension).
 
+**Host routing (2026-10-31).** One model id is sold by many hosts at very different prices —
+`deepseek/deepseek-v4.1-flash` by ~40, 0.013–0.6 $/M in and 0.14–2.4 out, half of them 4-bit.
+Every chat request therefore also sends `provider: {sort: "price", quantizations: [int8, fp8,
+fp16, bf16, fp32, unknown]}`: the cheapest host that is not 4/6-bit ("unknown" = the vendor's own
+host, e.g. OpenAI, Alibaba, DeepSeek). Measured on a real episode: DeepSeek draft + brief ≈ ⅓ of
+what OpenRouter's default balancing paid (it chose mxfp4 / CoreWeave hosts), same blind-judge
+scores, a few seconds slower (docs/plan/G-cost-log.md). `sort: "price"` alone ranks by the
+*input* price and picked a 4-bit host with an expensive output price — hence the filter. When no
+host matches (404 "No endpoints found for the request with quantization…") the call is re-sent
+without the filter and the model remembered for the process. `OPENROUTER_ROUTING=auto` (Settings →
+AI và mô hình → "Máy chủ chạy model") restores OpenRouter's own choice. The host of each call is
+counted in `usage.json` (`models.<id>.hosts`). Whisper word timing is billed the same on every
+host ($0.0000075/s), so the `/audio/transcriptions` call is left alone.
+
 **Promo model.** `OPENROUTER_PROMO_MODEL` is used *instead of* `OPENROUTER_MODEL` until
 `OPENROUTER_PROMO_EXPIRES` (YYYY-MM-DD — the first day it is NOT used, same meaning as
 OpenRouter's `expiration_date` in `/models`). From that date the app falls back on its own; it also
