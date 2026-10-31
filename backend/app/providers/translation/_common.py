@@ -209,6 +209,34 @@ def build_proofread_prompt(texts: list[str], *, context: dict | None = None) -> 
     return "\n".join(parts)
 
 
+def _ranges(nums: list[int]) -> str:
+    """[1, 2, 3, 5] → "1-3, 5". Pure."""
+    out: list[str] = []
+    for n in nums:
+        if out and n == int(out[-1].split("-")[-1]) + 1:
+            out[-1] = out[-1].split("-")[0] + f"-{n}"
+        else:
+            out.append(str(n))
+    return ", ".join(out)
+
+
+def voice_hint(context: dict | None, n: int) -> str:
+    """The "who speaks" line for a batch of ``n`` lines from ``context['_voices']`` (one
+    ``m`` / ``f`` / None per line, ``voices.line_hints``); "" when absent or misaligned."""
+    tags = (context or {}).get("_voices")
+    if not tags or len(tags) != n:
+        return ""
+    man = [i for i, t in enumerate(tags, 1) if t == "m"]
+    woman = [i for i, t in enumerate(tags, 1) if t == "f"]
+    if not man and not woman:
+        return ""
+    heard = "; ".join(f"{label}: {_ranges(nums)}" for label, nums in
+                      (("a man's voice", man), ("a woman's voice", woman)) if nums)
+    return ("Voice heard on each line (measured from the audio's pitch — usually right; lines "
+            f"not listed are unsure): {heard}. Use it to tell who is speaking, and so which "
+            "xưng hô pair applies; when a line's own words plainly say otherwise, trust the words.")
+
+
 def build_refine_prompt(
     cn_texts: list[str],
     vi_texts: list[str],
@@ -230,6 +258,9 @@ def build_refine_prompt(
         parts.append(f"Glossary (zh -> vi): {gl}")
     if context and context.get("_ocr_source"):
         parts.append(OCR_HINT)
+    voices = voice_hint(context, len(cn_texts))
+    if voices:
+        parts.append(voices)
     parts.append("Polish each Vietnamese draft against its Chinese source. "
                  "Reply with only the improved Vietnamese as `n| <vietnamese>`:\n")
     # API-8: an overlong draft line carries a word budget so the refiner shortens it
@@ -262,6 +293,9 @@ def build_user_prompt(
         parts.append(f"Glossary (zh -> vi): {gl}")
     if context and context.get("_ocr_source"):
         parts.append(OCR_HINT)
+    voices = voice_hint(context, len(texts))
+    if voices:
+        parts.append(voices)
     parts.append("Translate every numbered line to Vietnamese:\n")
     parts.append("\n".join(f"{i}| {t}" for i, t in enumerate(texts, 1)))
     return "\n".join(parts)

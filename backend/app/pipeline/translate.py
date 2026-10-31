@@ -123,6 +123,13 @@ def _retry(fn, *, sleep: Callable[[float], None]):
             sleep(max(delay, _retry_after(exc) or 0.0))
 
 
+def _batch_context(context: dict | None, bi: int) -> dict | None:
+    """``context`` for batch ``bi``: the per-line voice tags (``_voices``) cut to its lines."""
+    if not context or "_voices" not in context:
+        return context
+    return {**context, "_voices": context["_voices"][bi * BATCH:(bi + 1) * BATCH]}
+
+
 def _ckpt_key(provider: str, cn: list[str]) -> str:
     # covers the POST-dedupe text list (a stale checkpoint after cn.srt changed
     # would misalign lines) and the provider (never mix two engines' drafts)
@@ -291,7 +298,7 @@ def translate_cues(
             def task(bi: int) -> list[str]:
                 batch = src[bi * BATCH:(bi + 1) * BATCH]
                 result = _retry(lambda: provider.translate_texts(
-                    batch, context=context, glossary=glossary), sleep=_sleep)
+                    batch, context=_batch_context(context, bi), glossary=glossary), sleep=_sleep)
                 if len(result) != len(batch):   # per-batch count guard, inside the task
                     raise RuntimeError(
                         f"Bộ dịch '{provider_name}' trả về {len(result)} dòng cho lô "
@@ -344,7 +351,8 @@ def translate_cues(
             def task(bi: int) -> tuple[list[str], Exception | None]:
                 cn_b = cn_src[bi * BATCH:(bi + 1) * BATCH]
                 vi_b = vi_draft[bi * BATCH:(bi + 1) * BATCH]
-                ctx_b = {**(context or {}), "_budgets": budgets[bi * BATCH:(bi + 1) * BATCH]}
+                ctx_b = {**(_batch_context(context, bi) or {}),
+                         "_budgets": budgets[bi * BATCH:(bi + 1) * BATCH]}
                 try:
                     return (_retry(lambda: provider.refine_texts(
                         cn_b, vi_b, context=ctx_b, glossary=glossary), sleep=_sleep), None)
@@ -581,11 +589,13 @@ def translate(
     force: bool = False,
     log: Callable[[str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    voice_hints: bool = False,
 ) -> Job:
     """Read ``job.cn_srt``, translate, write ``job.vi_srt``.
 
     ``glossary=None`` auto-loads the user's glossary files (see load_glossary);
-    pass an explicit dict (or {}) to override.
+    pass an explicit dict (or {}) to override. ``voice_hints``: each line's voice (man /
+    woman, from its pitch — ``voices.line_hints``) rides in the prompt to tell who speaks.
 
     ``vi.srt`` is THE file the human edit gate produces — an existing one is
     never silently overwritten: without ``force`` this raises before any paid
@@ -650,6 +660,15 @@ def translate(
             log("ℹ Dịch theo bộ phim của video này" + (" + vài câu cuối tập trước" if "_prev" in ser else ""))
     if glossary is None:
         glossary = load_glossary(job) or None
+    if voice_hints:
+        from app.pipeline import voices
+
+        tags = voices.line_hints(job, cues, log=log)
+        if tags:
+            context["_voices"] = tags
+            if log:
+                log(f"ℹ Nghe giọng từng câu: {tags.count('m')} câu giọng nam, "
+                    f"{tags.count('f')} câu giọng nữ — giúp chọn xưng hô")
     from app.pipeline.fit_estimate import job_rate
 
     rate = job_rate(job)                 # the speed this project / series is dubbed at

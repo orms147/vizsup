@@ -187,6 +187,25 @@ def guess_job(job: Job, *, overwrite: bool = False, log=None) -> dict | None:
     return rep
 
 
+def line_hints(job: Job, cues: list, *, log=None) -> list[str | None] | None:
+    """``m`` / ``f`` / None per Chinese cue for the TRANSLATOR — whose voice a line is tells
+    who speaks, and so the xưng hô (a Sonnet 5.5 review of 《末日校车》, 2026-11-01: most
+    remaining errors were a girl's line given the man's pronouns and back). None when the
+    audio says nothing useful: no audio, singing, or only one kind of voice. Never raises."""
+    from app.pipeline.speakers import singing
+
+    try:
+        src = _audio_source(job, log)
+        if src is None or singing(job) == "yes":
+            return None
+        tags = guess_cues(_decode(src), cues)
+    except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+        if log:
+            log(f"⚠ Không nghe được giọng nam/nữ ({type(exc).__name__}) — dịch như thường")
+        return None
+    return tags if set(TAGS) <= set(tags) else None
+
+
 def voice_name(voices: list[str], tag: str | None) -> str | None:
     """The provider voice for a tag ('f' → HoaiMy …), None when it has none."""
     from app.pipeline.speakers import voice_for
