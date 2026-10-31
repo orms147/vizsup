@@ -705,6 +705,18 @@ def _blur_band_filters(region: dict | None) -> tuple[str, str]:
     return "crop=iw:ih/3:0:ih*2/3", "overlay=0:main_h*2/3"
 
 
+BAND_CUT_FROM = 0.55     # a hardsub band starting below this (÷ height) can be cut off a 9:16
+
+
+def band_cut(region: dict | None) -> float | None:
+    """The fraction of the picture's height to KEEP when the Chinese band is cut off (9:16
+    with the dialogue in the bar): everything from just above the band down. None when no
+    band was measured or it is not near the bottom. Pure."""
+    if not region or region.get("h", 0) <= 0 or region.get("y", 0) < BAND_CUT_FROM:
+        return None
+    return round(max(0.5, float(region["y"]) - 0.01), 4)
+
+
 TIKTOK_W, TIKTOK_H = 1080, 1920
 
 
@@ -739,6 +751,7 @@ def _build_render(
     fill: str = "blur",        # 9:16 bars: "blur" (the picture, blurred, behind) | "black"
     loudness: bool = True,     # the final mix at FINAL_LUFS — episodes join without jumps
     canvas_ass: str | None = None,   # 9:16: a second .ass (PlayRes = canvas) burned AFTER the bars
+    cut: float | None = None,        # 9:16: keep this top fraction of the picture (band_cut)
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -917,13 +930,16 @@ def _build_render(
     if frame == "tiktok":
         # fit inside the 9:16 canvas BEFORE burning (sharper text, same layout as the
         # source render), then pad the bars — the cover/blur band stays on the picture
+        if cut:                    # the Chinese band cut off (the bars hold the dialogue)
+            parts.append(f"{vsrc}crop=iw:trunc(ih*{cut:.4f}/2)*2:0:0[vcut]")
+            vsrc = "[vcut]"
         if fill == "blur":
             # the bars become the same picture, zoomed to fill, blurred and a little
             # darker (cheap: blurred at quarter size, then scaled up)
             parts.append(f"{vsrc}split[vfi][vbgs]")
             qw, qh = max(2, cw // 4 // 2 * 2), max(2, ch // 4 // 2 * 2)
             parts.append(f"[vbgs]scale={qw}:{qh}:force_original_aspect_ratio=increase,"
-                         f"crop={qw}:{qh},boxblur=8:2,eq=brightness=-0.08,"
+                         f"crop={qw}:{qh},boxblur=16:3,eq=brightness=-0.22:saturation=0.55,"
                          f"scale={cw}:{ch},setsar=1[vbgfill]")
             vsrc = "[vfi]"
         parts.append(f"{vsrc}scale={cw}:{ch}:force_original_aspect_ratio=decrease"
@@ -1008,6 +1024,11 @@ def assemble(
     # cover, and the glass cover always gets text that reads on white
     if glass.is_glass(style):
         mode = "glass"
+    elif mode == "glass" and (style or {}).get("cover"):
+        # the series' render settings still say glass but the subtitle style now asks for
+        # its own cover (the "Truyện tranh" presets → blur): white outlined text is meant
+        # to sit on the blurred band, not on white glass
+        mode = str(style["cover"])
     if mode == "glass":
         style = glass.text_style(style)
     res = res if res in RESOLUTIONS else "source"
@@ -1041,7 +1062,12 @@ def assemble(
     if is_short and episode_card:        # a cut Short ends with "Xem full tập N", not "Còn tiếp"
         episode_card = {**episode_card, "end": ""}
     src_size = probe_size(job.source_video) if job.source_video.exists() else None
-    burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
+    # 9:16 with the dialogue in the bar: the Chinese band is cut off the picture instead of
+    # covered (an empty glass / blur box in the middle of a Short looked dirty, 2026-10-31)
+    cut = (band_cut(_load_region(job)) if frame == "tiktok" and canvas_text and bar_subs
+           and src_size else None)
+    pic_src = (src_size[0], int(src_size[1] * cut)) if cut and src_size else src_size
+    burn = burn_size(pic_src, frame, "source" if preview else res) or (1920, 1080)
     # 9:16 with bars: a second layer on the canvas carries the big text (chip, hook, end card and,
     # if asked, the dialogue); without bars — or without the option — nothing here changes
     clay = canvas_layer = None
@@ -1049,6 +1075,13 @@ def assemble(
         from app.pipeline import canvas_text as ct
 
         clay = ct.layout(tiktok_canvas("source" if preview else res), burn, safe_caption or "tiktok")
+    if cut and (clay is None or not clay.bottom):
+        # no bar to hold the dialogue: the picture stays whole (and its band covered)
+        cut = None
+        burn = burn_size(src_size, frame, "source" if preview else res) or (1920, 1080)
+        if canvas_text and frame == "tiktok" and src_size:
+            clay = ct.layout(tiktok_canvas("source" if preview else res), burn,
+                             safe_caption or "tiktok")
     title = compilation._job_title(job.work_dir) if (episode_card or is_short) else ""
     if clay is not None:
         chip, card_end = (disclosure.card_texts(episode_card, title) if episode_card else ("", ""))
@@ -1063,6 +1096,11 @@ def assemble(
         tags = list(overlays or [])
         if use_bar and mode == "box":        # the opaque box lived under the dialogue: use the band
             mode = "blur"
+        if use_bar and cut:                  # the band is cut off: nothing left to cover
+            mode = "off"
+        else:
+            cut = None
+        canvas_layer["style"] = {**(style or {}), "_size": size}
         bar_cues = cues_for_subs if use_bar else None
         if use_bar:
             cues_for_subs = []
@@ -1122,7 +1160,8 @@ def assemble(
                             # the exact size only for a real downscale: a source kept at its
                             # own (maybe odd, VP9) size keeps the even-rounding scale=-2
                             burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
-                            glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name)
+                            glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name,
+                            cut=cut if clay is not None else None)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]

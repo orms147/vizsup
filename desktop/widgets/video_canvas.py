@@ -192,7 +192,8 @@ class VideoCanvas(QWidget):
         """Height needed for the caption wrapped to ``width_px`` — so the box grows
         to fit 2+ lines instead of clipping them (anchored at the bottom)."""
         one = self._text_h_px()
-        if not self._caption or width_px <= 1:
+        caption = self._shown()
+        if not caption or width_px <= 1:
             return one * 1.35
         f = QFont(self._font)
         f.setPixelSize(max(8, int(one)))
@@ -200,8 +201,14 @@ class VideoCanvas(QWidget):
         f.setItalic(bool(self._style.get("italic")))
         fm = QFontMetrics(f)
         br = fm.boundingRect(QRect(0, 0, int(width_px), 100000),
-                             int(Qt.TextWordWrap | Qt.AlignHCenter), self._caption)
+                             int(Qt.TextWordWrap | Qt.AlignHCenter), caption)
         return max(one * 1.35, br.height() + one * 0.3)
+
+    def _shown(self) -> str:
+        """The caption as the render burns it ("CHỮ IN HOA")."""
+        from app.pipeline.srt import display_text
+
+        return display_text(self._caption, self._style)
 
     def _box_rect(self) -> QRectF:
         d = self._disp
@@ -298,9 +305,9 @@ class VideoCanvas(QWidget):
             p.setPen(QColor(self._style.get("outline", "#000000")))
             for dxo, dyo in ((-o, 0), (o, 0), (0, -o), (0, o),
                              (-o, -o), (o, -o), (-o, o), (o, o)):
-                p.drawText(rect.translated(dxo, dyo), flags, self._caption)
+                p.drawText(rect.translated(dxo, dyo), flags, self._shown())
         p.setPen(QColor(self._style.get("primary", "#ffffff")))
-        p.drawText(rect, flags, self._caption)
+        p.drawText(rect, flags, self._shown())
         p.restore()
 
     def glass_rect(self, fm: QFontMetrics) -> QRectF:

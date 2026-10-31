@@ -83,7 +83,8 @@ def test_build_puts_hook_and_chip_on_top_end_card_below_dialogue_in_the_bar():
     ev = {e[0]: e for e in _events(text)}
     lay = _lay()
     chip, hook = ev["CanvasChip"], ev["CanvasHook"]
-    assert (chip[1], chip[2]) == (0.0, ct.HOOK_SECONDS) and (hook[1], hook[2]) == (0.0, ct.HOOK_SECONDS)
+    assert (chip[1], chip[2]) == (0.0, 47.0)                         # the episode stays named
+    assert (hook[1], hook[2]) == (0.0, ct.HOOK_SECONDS)
     chip_y, hook_y = int(chip[3].split("/")[2]), int(hook[3].split("/")[2])
     assert lay.top[0] <= chip_y < hook_y < lay.top[1]                # chip above the hook, in the band
     end = ev["CanvasEnd"]
@@ -94,8 +95,8 @@ def test_build_puts_hook_and_chip_on_top_end_card_below_dialogue_in_the_bar():
     assert subs[1][2] == 44.0                                         # the second stops where it starts
     sub_style = next(ln for ln in text.splitlines() if ln.startswith("Style: CanvasSub"))
     fields = sub_style.split(",")
-    assert fields[18] == "2"                                          # bottom-aligned
-    assert int(fields[21]) == 1280 - lay.bottom[1]                    # its last line rests on the strip's edge
+    assert fields[18] == "8"                                          # top-aligned …
+    assert int(fields[21]) == lay.bottom[0] + round(ct.SUB_GAP * 1280)  # … just under the picture
     assert int(fields[20]) == lay.margin_r and int(fields[19]) == lay.margin_l
 
 
@@ -258,6 +259,20 @@ def test_real_render_text_lands_in_the_bars_not_on_the_picture_or_the_strip(tmp_
     top = [(a, b) for a, b in frames["hook"] if b < lay.pic_top]
     assert len(top) >= 2 and top[0][0] >= lay.top[0]                 # chip and hook: the top bar
     assert [(a, b) for a, b in frames["hook"] if a > lay.pic_bottom]  # (the dialogue is up too: below)
-    assert all(a > lay.pic_bottom for a, _b in frames["sub"])        # the dialogue: the bottom bar
-    assert all(a > lay.pic_bottom for a, _b in frames["end"])        # the end card: the bottom bar
-    assert not [1 for a, b in frames["end"] if b < lay.pic_top]      # no hook any more at the end
+    assert [1 for a, _b in frames["sub"] if a > lay.pic_bottom]      # the dialogue: the bottom bar
+    assert [1 for a, _b in frames["end"] if a > lay.pic_bottom]      # the end card: the bottom bar
+    top_end = [1 for a, b in frames["end"] if b < lay.pic_top]
+    assert 1 <= len(top_end) < len(top)                              # the chip stays, the hook went
+
+
+def test_bar_dialogue_takes_the_subtitle_look_and_capitals():
+    style = {"primary": "#FFFFFF", "outline": "#000000", "outline_w": 7, "shadow": 2,
+             "bold": False, "uppercase": True, "_size": 102}
+    text = ct.build(_lay(), cues=[Cue(1, 0.0, 2.0, "Ta sai rồi")], duration=10.0, style=style,
+                    font="Bangers")
+    (sub,) = [e for e in _events(text) if e[0] == "CanvasSub"]
+    assert sub[4] == "TA SAI RỒI"
+    line = next(ln for ln in text.splitlines() if ln.startswith("Style: CanvasSub"))
+    f = line.split(",")
+    assert f[1] == "Bangers" and f[7] == "0"                         # its font, not bold
+    assert int(f[16]) >= 3 and int(f[17]) >= 2                       # outline + shadow kept

@@ -444,6 +444,7 @@ class RenderView(QWidget):
         for text, key in COVERS:
             self.cover.addItem(text, key)
         self._glass_style = False
+        self._style_cover = "box"
         self._sync_cover()
         ll.addWidget(self.cover)
         # one click: 9:16 + blurred bars + the episode chip + subtitles above the platform's UI,
@@ -535,7 +536,7 @@ class RenderView(QWidget):
         # into one section with a one-line summary: it is set once per channel, not per episode
         ll.addWidget(_hline())
         st = store.load_ui_state()
-        self.post_section = Collapsible("Đăng tải & thương hiệu",
+        self.post_section = Collapsible("Watermark · ghi nguồn · nhãn AI · thẻ tập",
                                         expanded=bool(st.get("render_post_open", False)))
         self.post_section.toggled.connect(lambda on: store.update_ui_state(render_post_open=on))
         pb = self.post_section.body
@@ -1378,6 +1379,7 @@ class RenderView(QWidget):
     def set_style(self, style: dict, size_px: int, font: str) -> None:
         self.preview.set_style(style, size_px, font)
         self._glass_style = bool((style or {}).get("glass"))
+        self._style_cover = str((style or {}).get("cover") or "box")
         self._sync_cover()
 
     # --- the translator's own watermark (disclosure.watermark_events) -------------------
@@ -1532,8 +1534,9 @@ class RenderView(QWidget):
         else:
             self.cover.setEnabled(True)
             self.cover.setToolTip("")
-            if self.cover.currentData() == "glass":
-                self.cover.setCurrentIndex(self.cover.findData("box"))
+            if self.cover.currentData() == "glass":     # the style's own cover, else box
+                want = self._style_cover if self.cover.findData(self._style_cover) >= 0 else "box"
+                self.cover.setCurrentIndex(self.cover.findData(want))
 
     def _on_quality(self, *_a) -> None:
         store.update_ui_state(render_res=self.res.currentData(),

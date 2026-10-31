@@ -59,6 +59,22 @@ GLASS_LIGHT_TEXT_BELOW = 25
 TEXT_FADE_MAX = 90           # "Độ mờ chữ" stops here: a fully clear line is no subtitle
 LABEL_W = 92
 
+# Built-in "Mẫu kiểu": the fan-sub look the owner showed (2026-10-31) — white letters, a
+# thick black outline + a little shadow, no box, the Chinese band blurred behind ("cover").
+# Fonts are bundled (OFL, desktop/assets/fonts). "size" is the panel's px (×3 in the .ass).
+_COMIC = {"primary": "#FFFFFF", "outline": "#000000", "box": "#000000", "box_alpha": 255,
+          "text_alpha": 0, "border_style": 1, "shadow": 2, "italic": False, "alignment": 2,
+          "margin_l": 60, "margin_r": 60, "margin_v": 60, "line_mode": "Tự động", "pos": None,
+          "cover": "blur"}
+BUILTIN_PRESETS = {
+    "Truyện tranh · CHỮ IN HOA (Bangers)": {
+        "font": "Bangers", "size": 34,
+        "style": {**_COMIC, "outline_w": 7, "bold": False, "uppercase": True}},
+    "Tròn đậm · viền đen (Coiny)": {
+        "font": "Coiny", "size": 28,
+        "style": {**_COMIC, "outline_w": 6, "bold": False, "uppercase": False}},
+}
+
 
 def pct_to_alpha(pct: int) -> int:
     """"Độ mờ" 0 % (solid) … 100 % (clear) → ASS alpha 0 … 255. Pure."""
@@ -224,6 +240,8 @@ class StylePanel(QScrollArea):
 
     def __init__(self) -> None:
         super().__init__()
+        self._shadow = 0               # no slider: kept from the applied preset / style
+        self._cover = ""               # the cover a preset asks for ("blur")
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QFrame.NoFrame)
@@ -251,6 +269,10 @@ class StylePanel(QScrollArea):
         top.grid.addWidget(self.btn_reset_cue, top.grid.rowCount(), 1, 1, 2, Qt.AlignLeft)
         self.preset = NoWheelComboBox()
         self.preset.setToolTip("Mẫu kiểu dùng chung mọi dự án")
+        # long preset names must not widen the editor's side column (the list still shows
+        # them in full when opened)
+        self.preset.setMinimumContentsLength(4)
+        self.preset.setSizeAdjustPolicy(NoWheelComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.btn_save_preset = icon_button("Plus", "Lưu kiểu hiện tại thành mẫu")
         self.btn_del_preset = icon_button("Trash2", "Xóa mẫu đang chọn")
         self.btn_reset = icon_button("RefreshCw", "Cài lại (về mẫu đang chọn, hoặc mặc định)")
@@ -296,9 +318,11 @@ class StylePanel(QScrollArea):
         text.row("Độ mờ chữ", self.text_fade, v, tip="0% = chữ đặc, cao hơn = chữ trong hơn")
         self.bold = QPushButton("B")
         self.italic = QPushButton("I")
-        for b, tip in ((self.bold, "Chữ đậm"), (self.italic, "Chữ nghiêng")):
+        self.caps = QPushButton("AA")
+        for b, tip in ((self.bold, "Chữ đậm"), (self.italic, "Chữ nghiêng"),
+                       (self.caps, "CHỮ IN HOA — chỉ đổi chữ đốt lên video, phụ đề gốc giữ nguyên")):
             b.setCheckable(True)
-            b.setFixedSize(34, 30)
+            b.setFixedSize(32, 30)          # three fit the 1366 inspector (B · I · AA)
             b.setToolTip(tip)
             b.toggled.connect(self._changed)
         self.bold.setStyleSheet("QPushButton{font-weight:800;}")
@@ -307,11 +331,12 @@ class StylePanel(QScrollArea):
         brow.setSpacing(6)
         brow.addWidget(self.bold)
         brow.addWidget(self.italic)
+        brow.addWidget(self.caps)
         brow.addStretch(1)
         text.row("Kiểu", brow)
         self.c_outline = _ColorButton("#000000")
         text.row("Màu viền", self.c_outline, tip="Viền quanh từng chữ")
-        self.outline_w, v = self._slider(0, 6, 2, "")
+        self.outline_w, v = self._slider(0, 8, 2, "")    # one digit: the 1366 inspector stays unclipped
         text.row("Độ dày viền", self.outline_w, v)
         ll.addWidget(text)
 
@@ -618,9 +643,11 @@ class StylePanel(QScrollArea):
             "text_alpha": pct_to_alpha(self.text_fade.value()),
             "border_style": border_style,
             "outline_w": self.outline_w.value(),
-            "shadow": 0,
+            "shadow": self._shadow,
             "bold": self.bold.isChecked(),
             "italic": self.italic.isChecked(),
+            "uppercase": self.caps.isChecked(),
+            **({"cover": self._cover} if self._cover else {}),
             "alignment": 2,
             "margin_l": self.m_left.value(),
             "margin_r": self.m_right.value(),
@@ -645,6 +672,9 @@ class StylePanel(QScrollArea):
         self.text_fade.setValue(min(TEXT_FADE_MAX, alpha_to_pct(int(s.get("text_alpha") or 0))))
         self.bold.setChecked(bool(s.get("bold", False)))
         self.italic.setChecked(bool(s.get("italic", False)))
+        self.caps.setChecked(bool(s.get("uppercase", False)))
+        self._shadow = int(s.get("shadow") or 0)          # kept from a preset (no slider)
+        self._cover = str(s.get("cover") or "")           # the cover a preset asks for
         self.m_left.setValue(int(s.get("margin_l", 60)))
         self.m_right.setValue(int(s.get("margin_r", 60)))
         self.m_v.setValue(int(s.get("margin_v", 60)))
@@ -683,14 +713,17 @@ class StylePanel(QScrollArea):
         return Path(settings.vizsup_storage_dir) / "style_presets.json"
 
     def _load_presets(self) -> dict:
+        """The built-in looks first, then the user's own (a user preset of the same name
+        wins)."""
+        mine: dict = {}
         p = self._presets_file()
         if p.exists():
             try:
                 d = json.loads(p.read_text(encoding="utf-8"))
-                return d if isinstance(d, dict) else {}
+                mine = d if isinstance(d, dict) else {}
             except Exception:  # noqa: BLE001
-                return {}
-        return {}
+                mine = {}
+        return {**BUILTIN_PRESETS, **mine}
 
     def _refresh_presets(self, select: str | None = None) -> None:
         self.preset.blockSignals(True)
@@ -727,7 +760,7 @@ class StylePanel(QScrollArea):
         if not ok or not name.strip():
             return
         name = name.strip()
-        presets = self._load_presets()
+        presets = {k: v for k, v in self._load_presets().items() if k not in BUILTIN_PRESETS}
         presets[name] = {"font": self.get_font(), "size": self.get_size_px(), "style": self.get_style()}
         self._applied = presets[name]
         p = self._presets_file()
@@ -737,7 +770,9 @@ class StylePanel(QScrollArea):
 
     def _delete_preset(self) -> None:
         name = self.preset.currentText()
-        presets = self._load_presets()
+        if name in BUILTIN_PRESETS:
+            return                                  # the built-in looks can't be deleted
+        presets = {k: v for k, v in self._load_presets().items() if k not in BUILTIN_PRESETS}
         if name in presets:
             del presets[name]
             atomic_write_text(self._presets_file(), json.dumps(presets, ensure_ascii=False, indent=2),

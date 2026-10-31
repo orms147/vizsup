@@ -16,7 +16,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QRawFont
 from app import fontfiles
 from app.fsutil import atomic_write_text
 
-BUNDLED = ("Be Vietnam Pro",)
+BUNDLED = ("Be Vietnam Pro", "Bangers", "Coiny")   # OFL, desktop/assets/fonts
 UI_ONLY = ("JetBrains Mono",)      # bundled for the app's own numbers, not a subtitle face
 VI_SAMPLE = "ặẫểộữỹđƯơ"          # stacked marks + đ / ư / ơ
 _vi_cache: dict[str, bool] = {}

@@ -116,7 +116,19 @@ DEFAULT_STYLE = {
     "margin_r": 40,
     "pos": None,             # (nx, ny) in 0..1 → free \pos() placement; overrides alignment/margins
     "letter_spacing": 0,     # \fsp: +stretch / -compress letters (to fit 1–2 lines)
+    "uppercase": False,      # "CHỮ IN HOA": the burned line in capitals (vi.srt unchanged)
 }
+
+_KEEP = re.compile(r"(\{[^}]*\}|\\[Nnh])")   # override tags and \N \n \h stay as typed
+
+
+def display_text(text: str, style: dict | None) -> str:
+    """The cue text as it is burned: in capitals when the style says "uppercase" (Python's
+    upper() handles ặ → Ặ, đ → Đ, ư → Ư), override tags untouched. Pure."""
+    if not (style or {}).get("uppercase") or not text:
+        return text
+    return "".join(part if _KEEP.fullmatch(part) else part.upper()
+                   for part in _KEEP.split(text) if part)
 
 
 def _ass_colour(hex_str: str, alpha: int = 0) -> str:
@@ -198,11 +210,13 @@ def write_ass(
     default_name = name_for(base)
     cue_names: list[str] = []
     cue_prefixes: list[str] = []
+    cue_texts: list[str] = []
     for i, c in enumerate(cues):
         ov = (cue_styles or {}).get(i + 1)
         merged = {**base, **ov} if ov else base
         cue_names.append(name_for(merged) if ov else default_name)
         cue_prefixes.append(_inline_prefix(merged))
+        cue_texts.append(display_text(c.text, merged))
 
     style_block = "\n".join(_style_line(nm, st, font, size, cover_hardsubs) for nm, st in ordered)
     if extra:
@@ -227,8 +241,8 @@ def write_ass(
         style_block += "\n" + _style_line("Comment", note, font, size, cover_hardsubs)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
-    for c, nm, pfx in zip(cues, cue_names, cue_prefixes):
-        text = pfx + c.text.replace("\n", "\\N")
+    for c, nm, pfx, shown in zip(cues, cue_names, cue_prefixes, cue_texts):
+        text = pfx + shown.replace("\n", "\\N")
         lines.append(
             f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},{nm},,0,0,0,,{text}"
         )

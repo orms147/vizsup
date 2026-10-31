@@ -30,7 +30,8 @@ LINE_H = 1.22              # line height ÷ font size
 HOOK_MAX, HOOK_MIN = 0.075, 0.042      # hook font size ÷ canvas width: largest tried … smallest
 CHIP_SIZE = 0.058
 END_MAX = 0.066
-SUB_SIZE = 0.06
+SUB_SIZE = 0.068             # bar dialogue ÷ canvas width (≈ 73 px on 1080)
+SUB_GAP = 0.012              # its first line starts this far under the picture (÷ height)
 HOOK_SECONDS, END_SECONDS = 3.0, 3.0
 
 
@@ -93,14 +94,20 @@ def _esc(text: str) -> str:
     return "\\N".join(" ".join(p.split()) for p in t.split("\n")).strip()
 
 
+# faces whose letters are small for their size (narrow comic capitals): drawn wider / taller
+# on the canvas so a bar line reads like the others — (ScaleX %, ScaleY %)
+FACE_SCALE = {"bangers": (118, 124)}
+
+
 def _style(name: str, font: str, size: int, *, primary: str = "#FFFFFF", outline: str = "#000000",
            outline_w: float = 3, box: bool = False, align: int = 8, ml: int = 0, mr: int = 0,
-           mv: int = 0, bold: bool = True, box_alpha: int = 90) -> str:
+           mv: int = 0, bold: bool = True, box_alpha: int = 90, shadow: float = 0) -> str:
     border = 4 if box else 1
-    back = _ass_colour("#000000", box_alpha if box else 255)
+    back = _ass_colour("#000000", box_alpha if box else 120)
+    sx, sy = FACE_SCALE.get((font or "").strip().lower(), (100, 100))
     return (f"Style: {name},{font},{size},{_ass_colour(primary)},&H000000FF,"
-            f"{_ass_colour(outline)},{back},{-1 if bold else 0},0,0,0,100,100,0,0,{border},"
-            f"{max(0, round(outline_w))},0,{align},{ml},{mr},{mv},1")
+            f"{_ass_colour(outline)},{back},{-1 if bold else 0},0,0,0,{sx},{sy},0,0,{border},"
+            f"{max(0, round(outline_w))},{max(0, round(shadow))},{align},{ml},{mr},{mv},1")
 
 
 HEADER = ("[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nWrapStyle: 0\n"
@@ -115,10 +122,13 @@ EVENTS = ("\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR,
 def build(lay: Layout, *, font: str = "Be Vietnam Pro", chip: str = "", hook: str = "",
           end: str = "", duration: float = 0.0, cues: list[Cue] | None = None,
           style: dict | None = None, end_seconds: float = END_SECONDS) -> str | None:
-    """The canvas .ass text: ``chip`` + ``hook`` stacked in the top band for the first
-    HOOK_SECONDS, ``end`` in the bottom band for the last ``end_seconds``, and — when ``cues`` is
-    given — the dialogue in the bottom band (cut short where the end card starts). None when
-    there is nothing to draw. Pure."""
+    """The canvas .ass text: ``chip`` (the whole time) + ``hook`` (the first HOOK_SECONDS)
+    stacked in the top band, ``end`` in the bottom band for the last ``end_seconds``, and — when
+    ``cues`` is given — the dialogue in the bottom band right under the picture, in the
+    subtitle style's own look (cut short where the end card starts). None when there is
+    nothing to draw. Pure."""
+    from app.pipeline.srt import display_text
+
     cw, ch = lay.cw, lay.ch
     st = style or {}
     primary = st.get("primary") if st.get("primary") and not st.get("glass") else "#FFFFFF"
@@ -148,7 +158,8 @@ def build(lay: Layout, *, font: str = "Be Vietnam Pro", chip: str = "", hook: st
             styles.append(_style("CanvasChip", font, chip_px, box=True, outline_w=0.012 * cw,
                                  align=8, mv=top, bold=True, box_alpha=70,
                                  primary="#FFFFFF", outline="#000000"))
-            events.append(f"Dialogue: 2,{_fmt_ass_time(0.0)},{_fmt_ass_time(end_t)},CanvasChip,,"
+            chip_t = dur if dur > 1 else end_t           # the episode stays named all along
+            events.append(f"Dialogue: 2,{_fmt_ass_time(0.0)},{_fmt_ass_time(chip_t)},CanvasChip,,"
                           f"0,0,{top},,{_esc(chip)}")
         if hook:
             styles.append(_style("CanvasHook", font, hook_px, outline_w=max(3, 0.1 * hook_px),
@@ -170,21 +181,30 @@ def build(lay: Layout, *, font: str = "Be Vietnam Pro", chip: str = "", hook: st
     if lay.bottom and cues is not None:
         y0, y1 = lay.bottom
         avail = y1 - y0
-        size = min(round(SUB_SIZE * cw), int(avail / (2 * LINE_H)))
-        # bottom-aligned: the last line rests on the strip's edge, growing up into the bar
+        gap = round(SUB_GAP * ch)
+        # a bigger subtitle look (the comic presets: 84–102 vs the usual 60) reads bigger here
+        # too — narrow faces like Bangers need it — but never past 1.5×
+        grow = min(1.5, max(1.0, float(st.get("_size") or 66) / 66))
+        size = min(round(SUB_SIZE * cw * grow), int((avail - gap) / (2 * LINE_H)))
+        # top-aligned just under the picture (reads with it, clear of the platform's strip);
+        # the style's own outline weight / shadow, scaled from the 1080-line .ass to the canvas
+        k = size / max(1.0, float(st.get("_size") or size))
+        ow = max(3, round(float(st.get("outline_w") or 0) * k), round(0.09 * size))
         styles.append(_style("CanvasSub", font, size, primary=primary, outline=outline,
-                             outline_w=max(3, 0.09 * size), align=2, ml=lay.margin_l,
-                             mr=lay.margin_r, mv=ch - y1, bold=bold))
+                             outline_w=ow, align=8, ml=lay.margin_l, mr=lay.margin_r,
+                             mv=y0 + gap, bold=bold, shadow=max(2, round(float(
+                                 st.get("shadow") or 0) * k))))
         for c in cues:
             a, b = c.start, c.end
             if end_start is not None:
                 if a >= end_start:
                     continue
                 b = min(b, end_start)
-            text = _esc(c.text)
+            shown = display_text(c.text, st)               # "CHỮ IN HOA"
+            text = _esc(shown)
             if not text or b <= a:
                 continue
-            n = lines_needed(c.text, size, box_w)
+            n = lines_needed(shown, size, box_w)
             pre = ""
             if n > 2:                                        # a long line: smaller, not taller
                 pre = "{\\fs%d}" % max(round(size * 0.7), round(size * 2 / n))

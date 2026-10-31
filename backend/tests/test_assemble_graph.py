@@ -229,7 +229,8 @@ def test_tiktok_bars_are_the_blurred_picture_by_default(big_job):
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     split = graph.index("[0:v]split[vfi][vbgs]")
     bg = graph.index("[vbgs]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,"
-                     "boxblur=8:2,eq=brightness=-0.08,scale=1080:1920,setsar=1[vbgfill]")
+                     "boxblur=16:3,eq=brightness=-0.22:saturation=0.55,scale=1080:1920,"
+                     "setsar=1[vbgfill]")      # calmer bars (2026-10-31: the old ones looked dirty)
     fit = graph.index("[vfi]scale=1080:1920:force_original_aspect_ratio=decrease")
     burn = graph.index("[vfit]ass=subs.ass")
     over = graph.index("[vbgfill][v]overlay=(W-w)/2:(H-h)/2[vt]")
@@ -366,3 +367,4 @@ def test_duck_keeps_a_lower_bed_and_ducks_further_under_the_dub(big_job):
     assert _duck_bed(1.0) in script and "volume=1.000[bg]" not in script
     assert f"[bg][scpad]sidechaincompress={assemble.DUCK_SC}[duck]" in script
     assert "[duck][dubv]amix=inputs=2:normalize=0[outa]" in script
+

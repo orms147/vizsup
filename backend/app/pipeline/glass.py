@@ -60,6 +60,8 @@ MASK_FILE = "glass_mask.ass"
 _FONTS = Path(__file__).resolve().parents[3] / "desktop" / "assets" / "fonts"
 _FONT_FILES = {
     "be vietnam pro": ("BeVietnamPro-Regular.ttf", "BeVietnamPro-Bold.ttf"),
+    "bangers": ("Bangers-Regular.ttf", "Bangers-Regular.ttf"),
+    "coiny": ("Coiny-Regular.ttf", "Coiny-Regular.ttf"),
 }
 _SYSTEM = {
     "arial": ("arial.ttf", "arialbd.ttf"),
@@ -229,12 +231,14 @@ def plan(cues: list[Cue], *, W: float, H: float, font: str, size: int, style: di
     pad_x, pad_y = PAD_X * px, PAD_Y * px
     cn = cn_cues or []
     events: list[dict] = []
+    from app.pipeline.srt import display_text
+
     for i, c in enumerate(cues):
-        text = (c.text or "").strip()
-        if not text:
-            continue
         ov = (cue_styles or {}).get(i + 1)
         st = {**base, **ov} if ov else base
+        text = display_text((c.text or "").strip(), st)
+        if not text:
+            continue
         tx, ty, tw, th = text_rect(text, st, W=W, H=H, font=font, size=size)
         vi = (tx - pad_x, ty - pad_y, tw + 2 * pad_x, th + 2 * pad_y)
         rects = [vi] if with_text else []
