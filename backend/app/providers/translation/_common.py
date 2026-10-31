@@ -31,6 +31,9 @@ _FORMAT_RULES = (
     "- A line whose Chinese is \"—\", empty, exactly the previous line again, or unreadable\n"
     "  noise (stray characters read off the picture, not a sentence): output `n| …` and fill it\n"
     "  with nothing — never invent a sentence from noise.\n"
+    "- Noise INSIDE a line (stray characters or digits around a readable clause, e.g.\n"
+    "  \"135 完了 我撞人了\"): translate only the readable clause; never turn the noise into a\n"
+    "  name, place, number or action.\n"
 )
 
 _TRANSLATION_RULES = (
@@ -57,7 +60,13 @@ _TRANSLATION_RULES = (
     "- Speaker first: decide who speaks to whom before choosing pronouns; choose by the\n"
     "  listener's gender and relation — never \"anh\"/\"chú\" for a woman or girl. Use matching\n"
     "  pairs only (tao–mày, tôi–cô/cậu/anh, em–anh, tớ–cậu); never mix them (tao–cô). Never add\n"
-    "  kinship words (con/chú/cháu/bác) the Chinese does not imply.\n"
+    "  kinship words (con/chú/cháu/bác/thầy) the Chinese does not imply.\n"
+    "- A pair works in both directions: when A says \"em\" to B's \"anh\", B says \"anh\" to A's\n"
+    "  \"em\". Adjacent lines of the same speaker keep the same self-pronoun.\n"
+    "- Keep the logic: a negation stays a negation (我也不强制你们… → \"tôi cũng không ép các\n"
+    "  cô…\", never an invitation), a condition without 如果 stays a condition (现在不X，等下别Y →\n"
+    "  \"giờ mà không X thì lát nữa đừng hòng Y\"), a question stays a question, and a thought\n"
+    "  said to nobody addresses nobody.\n"
     "- The Chinese comes from OCR / speech recognition and can be wrong: a line that reverses\n"
     "  what the speaker plainly means (我同意 in the middle of an objection — a dropped 不), or a\n"
     "  name written with a homophone, is translated the way the surrounding lines and the\n"
@@ -84,6 +93,9 @@ REFINE_SYSTEM_PROMPT = (
     "VERIFY BEFORE POLISHING: check that the draft's names, numbers and key nouns belong to\n"
     "THIS line's Chinese. A draft that belongs to a neighbouring line (it lags or runs ahead)\n"
     "is discarded and the Chinese line translated afresh — never polish a mismatched draft.\n"
+    "CHECK THE PRONOUNS: for every line decide speaker → listener, compare the draft's pair\n"
+    "with the brief / series sheet (in both directions) and rewrite any line that deviates —\n"
+    "the draft's xưng hô is the most frequent error you are here to fix.\n"
     "Do not add jokes, emphasis or details the Chinese lacks; keep a joke's target (whose\n"
     "sausage, whose brain) when the Chinese has one.\n\n"
     + _FORMAT_RULES + "\n" + _TRANSLATION_RULES

@@ -43,6 +43,8 @@ def test_huge_number_is_read_digit_by_digit():
     ("12,5%", "mười hai phẩy năm phần trăm"),
     ("từ 5-10 người", "từ năm đến mười người"),
     ("-5 độ", "âm năm độ"),
+    ("Điểm sinh tồn +2", "Điểm sinh tồn cộng hai"),
+    ("hảo cảm -999", "hảo cảm âm chín trăm chín mươi chín"),
     ("0912345678", "không chín một hai ba bốn năm sáu bảy tám"),     # a phone number
     ("192.168.1.1", "một trăm chín mươi hai chấm một trăm sáu mươi tám chấm một chấm một"),
     ("10k người", "mười nghìn người"),

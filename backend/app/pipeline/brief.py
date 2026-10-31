@@ -60,6 +60,8 @@ BRIEF_INSTRUCTION = (
     "  the song) — a cover singer's gender may differ from it.\n"
     "- A SERIES SHEET, when present, is fixed for every episode: copy its names and xưng hô\n"
     "  exactly (only the USER NOTE may override it) and add only people new in this episode.\n"
+    "  A rarely seen name one character away from a sheet name (小裴 next to 小飞) is that\n"
+    "  name misread off the picture — use the sheet's name, never list a new person.\n"
     "- If the OBSERVED notes say the gender is uncertain (CHƯA CHẮC / không rõ), use neutral\n"
     "  forms (mình / bạn, or the name) unless the lines themselves make it clear.\n"
     "- Under xưng hô, state the concrete Vietnamese pronouns to use and keep them fixed, e.g.\n"

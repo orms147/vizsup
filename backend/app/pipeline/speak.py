@@ -150,7 +150,7 @@ def _alt(keys) -> str:
 
 
 _NUMBER_RE = re.compile(
-    rf"{_LETTER_BEFORE}(?P<neg>(?<![\w.,)])-(?=\d))?(?P<num>{_NUM})"
+    rf"{_LETTER_BEFORE}(?P<neg>(?<![\w.,)])[-+](?=\d))?(?P<num>{_NUM})"
     rf"(?:[  ]?(?P<u1>{_alt(_UNITS_SPACED)})|(?P<u2>{_alt(_UNITS_GLUED)}))?"
     rf"{_LETTER_AFTER}")
 
@@ -281,8 +281,8 @@ def _ranges(s: str) -> str:
 def _numbers(s: str) -> str:
     def one(m: re.Match[str]) -> str:
         words = read_token(m["num"])
-        if m["neg"]:
-            words = "âm " + words
+        if m["neg"]:                    # "-5 độ"; "+2" = a game's points ("Điểm sinh tồn +2")
+            words = ("âm " if m["neg"] == "-" else "cộng ") + words
         unit = m["u1"] or m["u2"]
         if unit:
             words += " " + (_UNITS_SPACED.get(unit) or _UNITS_GLUED[unit])
