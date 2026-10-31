@@ -110,8 +110,10 @@ def _cn_number(text: str) -> int | None:
 
 # "第3集 | 《末日校车》1-5 …" / "第4集 | 《末日校车》06 …": 第N集 counts the uploader's POSTS;
 # the number (or range) right after the series name in 《》 is the story's episode —
-# post 3 holds episodes 1–5, post 4 episode 6 (real titles, 2026-10-28). It wins.
-_AFTER_SERIES = re.compile(r"》\s*[:：]?\s*([0-9]{1,4})(?:\s*[-–~～至到]\s*([0-9]{1,4}))?(?![0-9])")
+# post 3 holds episodes 1–5, post 4 episode 6 (real titles, 2026-10-28). It wins — also as
+# "》P1-4" / "》p30" / "》EP12" (《萧族降世》P1-4 is a 1–4 compilation, 2026-10-31).
+_AFTER_SERIES = re.compile(r"》\s*[:：]?\s*(?:[Ee][Pp]|[Pp])?\s*([0-9]{1,4})"
+                           r"(?:\s*[-–~～至到]\s*([0-9]{1,4}))?(?![0-9])")
 
 
 def episode_range(title: str | None) -> tuple[int, int] | None:

@@ -111,6 +111,23 @@ def test_format_preview_lists_pages_and_what_would_be_fetched():
     assert "Tập 10" in text and text.rstrip().endswith("lần kiểm tra sau")
     none = sd.format_preview({"sources": [], "new": [], "last": 8}, name="末日校车", cap=3)
     assert "Không có tập mới" in none and "tập 8" in none
+    mix = {"id": "7699176142011385907", "name": "《末日校车》",
+           "url": "https://www.douyin.com/collection/7699176142011385907"}
+    text = sd.format_preview({"sources": [{"url": "https://v", "n": 7, "error": "", "mix": mix}],
+                              "new": [], "last": 9}, name="末日校车", cap=3)
+    assert "đọc được 7 video — 合集 《末日校车》" in text
+
+
+def test_mix_sources_swaps_an_episode_link_for_its_mix():
+    mix = {"id": "1", "name": "《末日校车》", "url": "https://www.douyin.com/collection/7699176142011385907"}
+    ep8 = "https://www.douyin.com/video/7699919082623110419"
+    ep9 = "https://www.douyin.com/video/7699919754521283890"
+    user = "https://www.douyin.com/user/MS4wLjABAAAA-fjbtESaHwMcQ7"
+    res = {"sources": [{"url": ep8, "n": 7, "error": "", "mix": mix},
+                       {"url": ep9, "n": 7, "error": "", "mix": mix},
+                       {"url": user, "n": 30, "error": ""}]}
+    assert sd.mix_sources([ep8, user, ep9], res) == [mix["url"], user]
+    assert sd.mix_sources([user], {"sources": []}) == [user]
 
 
 # --- the dialog: the tab -------------------------------------------------------------------------

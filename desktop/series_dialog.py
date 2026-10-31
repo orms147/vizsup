@@ -88,6 +88,21 @@ def parse_sources(text: str) -> list[str]:
     return out
 
 
+def mix_sources(sources: list[str], res: dict) -> list[str]:
+    """``sources`` with each episode link that led to a 合集 replaced by that 合集's link (the
+    surest page to follow), once each. Pure."""
+    from app.pipeline import watch
+
+    found = {s["url"]: s["mix"]["url"] for s in res.get("sources") or []
+             if (s.get("mix") or {}).get("url") and watch.source_kind(s["url"]) == "douyin_video"}
+    out: list[str] = []
+    for u in sources:
+        u = found.get(u, u)
+        if u not in out:
+            out.append(u)
+    return out
+
+
 def apply_watch(p: series.Profile, *, on: bool, sources: list[str], every_h: int) -> series.Profile:
     """The profile with its watch settings replaced; other autopilot keys are kept."""
     p.autopilot = series.normalize_autopilot({**p.autopilot, "on": on, "sources": sources,
@@ -104,8 +119,10 @@ def format_preview(res: dict, *, name: str, cap: int) -> str:
     episodes the next check would fetch (at most ``cap`` now, the rest later)."""
     lines = []
     for s in res.get("sources") or []:
+        mix = s.get("mix") or {}
         lines.append(f"✗ {s['url']}: {s['error']}" if s.get("error")
-                     else f"✓ {s['url']}: đọc được {s['n']} video")
+                     else f"✓ {s['url']}: đọc được {s['n']} video"
+                     + (f" — 合集 {mix['name'] or mix['url']}" if mix else ""))
     new = res.get("new") or []
     last = res.get("last")
     if not new:
@@ -290,12 +307,17 @@ class SeriesDialog(QDialog):
         hint = QLabel(f"vizsup xem các trang dưới đây theo lịch. Video có 《{self.profile.name}》 "
                       "và số tập sau tập mới nhất đã có sẽ được tải, làm phụ đề và dịch tới bước "
                       "duyệt — không tự duyệt, không tự dựng. Mỗi lần lấy tối đa "
-                      f"{ap['max_per_check']} tập.")
+                      f"{ap['max_per_check']} tập. Douyin: nên theo dõi 合集 của phim — dán link "
+                      "một tập bất kỳ rồi bấm «Kiểm tra ngay», app tự tìm 合集 (trang người đăng "
+                      "có khi không hiện đủ các tập).")
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addWidget(QLabel("Trang theo dõi (mỗi dòng một link):"))
-        self.watch_sources = QPlainTextEdit("\n".join(ap["sources"]))
-        self.watch_sources.setPlaceholderText("https://www.douyin.com/user/…\n"
+        # nothing followed yet: offer the newest downloaded episode (its 合集 gets followed)
+        sources = ap["sources"] or [s for s in [watch.suggested_source(self.profile.slug)] if s]
+        self.watch_sources = QPlainTextEdit("\n".join(sources))
+        self.watch_sources.setPlaceholderText("https://www.douyin.com/video/… (một tập trong 合集)\n"
+                                              "https://www.douyin.com/user/…\n"
                                               "https://space.bilibili.com/…")
         self.watch_sources.setMaximumHeight(90)
         v.addWidget(self.watch_sources)
@@ -430,6 +452,10 @@ class SeriesDialog(QDialog):
 
     def _checked(self, res: dict) -> None:
         self.watch_check.setEnabled(True)
+        typed = parse_sources(self.watch_sources.toPlainText())
+        better = mix_sources(typed, res)
+        if better != typed:                        # an episode link → follow its 合集
+            self.watch_sources.setPlainText("\n".join(better))
         cap = series.autopilot_of(self.profile)["max_per_check"]
         self.watch_status.setText("Xong — chưa tải gì.")
         self.watch_result.setPlainText(format_preview(res, name=self.profile.name, cap=cap))

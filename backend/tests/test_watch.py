@@ -51,7 +51,11 @@ def storage(tmp_path, monkeypatch):
     (USER + "?from_tab_name=main&vid=7699919082623110419", "douyin_user"),
     ("https://www.iesdouyin.com/share/user/MS4wLjABAAAA-fjbtESaHwMcQ7", "douyin_user"),
     ("https://www.douyin.com/user/self?showTab=like", ""),
-    ("https://www.douyin.com/video/7699919082623110419", ""),
+    ("https://www.douyin.com/video/7699919082623110419", "douyin_video"),
+    ("https://www.iesdouyin.com/share/video/7699919082623110419/", "douyin_video"),
+    ("https://www.douyin.com/collection/7699176142011385907", "douyin_mix"),
+    ("https://www.iesdouyin.com/share/mix/detail/7699176142011385907/", "douyin_mix"),
+    ("https://www.douyin.com/jingxuan", ""),
     ("https://space.bilibili.com/3985676", "bilibili_space"),
     ("https://space.bilibili.com/3985676/video", "bilibili_space"),
     ("https://space.bilibili.com/3985676/upload/video", "bilibili_space"),
@@ -71,11 +75,15 @@ def test_source_kind(url, kind):
 def test_normalize_drops_the_douyin_tracking_query():
     assert watch.normalize_source(USER + "?from_tab_name=main") == USER
     assert watch.normalize_source(" https://space.bilibili.com/1 ") == "https://space.bilibili.com/1"
+    assert watch.normalize_source("https://www.iesdouyin.com/share/mix/detail/7699176142011385907/"
+                                  "?u_code=x") == "https://www.douyin.com/collection/7699176142011385907"
+    assert watch.normalize_source("https://www.iesdouyin.com/share/video/7699919082623110419/?x=1") \
+        == "https://www.douyin.com/video/7699919082623110419"
 
 
 def test_list_videos_refuses_a_page_it_cannot_read():
     with pytest.raises(ValueError, match="trang người đăng"):
-        watch.list_videos("https://www.douyin.com/video/7699919082623110419")
+        watch.list_videos("https://www.douyin.com/jingxuan?modal=1")
 
 
 # --- new episodes ----------------------------------------------------------------------------
@@ -173,6 +181,75 @@ def test_douyin_listing_runs_the_browser_in_list_mode(browser):
     assert calls["kw"]["timeout"] == watch.LIST_TIMEOUT_S
 
 
+# 《末日校车》's 合集 as Douyin answered on 2026-10-31 (the 合集's order: oldest first); 09 is not
+# on the creator page (PAGE) at all
+MIX_ID = "7699176142011385907"
+MIX = [("7697700401310666010", "《末日校车》02" + TAIL, 1792276200, 1),
+       ("7698219205040016678", "《末日校车》03" + TAIL, 1792381336, 2),
+       ("7698601409347996928", "《末日校车》1-5" + TAIL, 1792470333, 3),
+       ("7698967392357076265", "《末日校车》06" + TAIL, 1792555538, 4),
+       ("7699345563585678602", "《末日校车》07" + TAIL, 1792643589, 5),
+       ("7699919082623110419", "《末日校车》08" + TAIL, 1792794600, 6),
+       ("7699919754521283890", "《末日校车》09" + TAIL, 1792881000, 7)]
+
+
+def mix_page(rows, **extra):
+    return {"status": 200, "code": 0, "items": [{"id": i, "title": t, "published": p, "index": n}
+                                                for i, t, p, n in rows], **extra}
+
+
+def test_merge_mix_keeps_the_mix_order_once_each_and_the_newest():
+    pages = [mix_page(MIX[4:]), mix_page(MIX[:5])]           # answers in any order, one overlap
+    got = douyin_capture.merge_mix(pages)
+    assert [v["index"] for v in got] == [1, 2, 3, 4, 5, 6, 7]
+    assert got[-1] == {"id": "7699919754521283890",
+                       "url": "https://www.douyin.com/video/7699919754521283890",
+                       "title": " ".join(("《末日校车》09" + TAIL).split()),
+                       "published": 1792881000, "pinned": False, "index": 7}
+    assert [v["index"] for v in douyin_capture.merge_mix(pages, limit=2)] == [6, 7]
+    no_index = [{"items": [{"id": "b", "index": None}, {"id": "a", "index": 1}, {"id": ""}]}]
+    assert [v["id"] for v in douyin_capture.merge_mix(no_index)] == ["b", "a"]   # as answered
+
+
+def test_mix_ask_js_asks_one_page_of_that_mix_only():
+    js = douyin_capture.mix_ask_js(MIX_ID, 20)
+    assert f"mix_id={MIX_ID}&cursor=20&count={douyin_capture.MIX_PAGE}" in js
+    assert "__" not in js.replace("__vzMixPage", "")
+    with pytest.raises(ValueError):
+        douyin_capture.mix_ask_js("1'); alert(1); ('")
+
+
+def test_douyin_mix_listing_runs_the_browser_in_mix_mode(browser):
+    calls, answer = browser
+    answer({"videos": douyin_capture.merge_mix([mix_page(MIX)]),
+            "mix": {"id": MIX_ID, "name": "《末日校车》", "total": 7}, "error": ""})
+    got = watch.list_videos("https://www.iesdouyin.com/share/video/7699919082623110419/?u=1")
+    cmd = calls["cmd"]
+    assert cmd[1:5] == ["-m", "app.douyin_capture", "--mix",
+                        "https://www.douyin.com/video/7699919082623110419"]
+    assert cmd[-1] == str(watch.MIX_LIMIT) and calls["kw"]["timeout"] == watch.MIX_TIMEOUT_S
+    assert [v["id"] for v in got][:2] == ["7699919754521283890", "7699919082623110419"]  # newest first
+    assert got[0]["mix"] == {"id": MIX_ID, "name": "《末日校车》",
+                             "url": f"https://www.douyin.com/collection/{MIX_ID}"}
+    p = series.Profile(slug="末日校车", name="末日校车", match="末日校车")
+    res = watch.find_new(p, [f"https://www.douyin.com/collection/{MIX_ID}"],
+                         state={"sources": {}, "series": {}}, lister=lambda s, limit: got)
+    assert res["sources"][0]["mix"]["url"].endswith(MIX_ID)
+    assert [v["episode"] for v in res["new"]] == [2, 3, 6, 7, 8, 9]
+    # the creator page would never have offered 09
+    assert 9 not in [v["episode"] for v in watch.new_episodes(p, videos(), set())]
+
+
+def test_douyin_mix_listing_errors(browser):
+    _calls, answer = browser
+    for data, msg in (({"videos": [], "error": "no_mix"}, "không nằm trong 合集"),
+                      ({"videos": [], "error": "captcha"}, "captcha"),
+                      ({"videos": [], "error": "no_answer"}, "không trả lời")):
+        answer(data)
+        with pytest.raises(RuntimeError, match=msg):
+            watch.list_videos(f"https://www.douyin.com/collection/{MIX_ID}")
+
+
 def test_douyin_listing_reports_a_captcha_an_empty_page_and_a_dead_browser(browser, monkeypatch):
     _calls, answer = browser
     answer({"videos": [], "captcha": True})
@@ -261,11 +338,24 @@ def test_bilibili_space_reads_vlist_newest_first(monkeypatch):
     assert got[0]["url"] == f"https://www.bilibili.com/video/{_bv(9)}"
 
 
-def test_bilibili_rate_limit_is_explained(monkeypatch):
-    fake_ytdlp(monkeypatch, key="BilibiliSpaceVideo", pages=[], entries=[],
-               error=RuntimeError("Request is blocked by server (412), please wait"))
+def test_bilibili_rate_limit_is_tried_once_more_then_explained(monkeypatch):
+    seen = fake_ytdlp(monkeypatch, key="BilibiliSpaceVideo", pages=[], entries=[],
+                      error=RuntimeError("Request is blocked by server (412), please wait"))
+    waits = []
+    monkeypatch.setattr(watch.time, "sleep", waits.append)
     with pytest.raises(RuntimeError, match="tạm chặn"):
         watch.list_videos("https://space.bilibili.com/5")
+    assert waits == [watch.BILI_RETRY_S] and seen["url"] == "https://space.bilibili.com/5"
+
+
+def test_a_number_inside_the_series_name_is_no_episode():
+    p = series.Profile(slug="暖家奇遇第二部", name="暖家奇遇第二部", match="暖家奇遇第二部")
+    rows = [("1", "【AI漫剧】《暖家奇遇第二部》", 100), ("2", "《暖家奇遇第二部》第3集", 200)]
+    assert [v["episode"] for v in watch.new_episodes(p, videos(rows), set())] == [3]
+    q = series.Profile(slug="萧族降世", name="萧族降世", match="萧族降世")
+    rows = [("4", "《萧族降世》P1-4 九星斗圣萧玄穿越千年 15分钟合集", 300),   # a compilation
+            ("5", "《萧族降世》p05", 400)]
+    assert [v["episode"] for v in watch.new_episodes(q, videos(rows), set())] == [5]
 
 
 # --- state -----------------------------------------------------------------------------------------
@@ -329,6 +419,16 @@ def test_library_knows_the_last_episode_and_the_ids(storage):
     assert lib["last"] == 6
     assert lib["ids"] == {"7698967392357076265", "7698601409347996928", "BV1o84y1y7Hd"}
     assert watch.library("none")["last"] is None
+
+
+def test_suggested_source_is_the_newest_douyin_episode_of_that_series(storage):
+    assert watch.suggested_source("s") is None
+    _project(storage, "a", slug="s", ep=8, video_id="7699919082623110419")
+    _project(storage, "b", slug="s", ep=9, video_id="7699919754521283890")
+    _project(storage, "c", slug="other", ep=40, video_id="7799919754521283890")
+    _project(storage, "d", slug="s", ep=2, video_id="BV1o84y1y7Hd")              # Bilibili: not this
+    assert watch.suggested_source("s") == "https://www.douyin.com/video/7699919754521283890"
+    assert watch.source_kind(watch.suggested_source("s")) == "douyin_video"
 
 
 def test_ids_in_links_and_bare_ids():

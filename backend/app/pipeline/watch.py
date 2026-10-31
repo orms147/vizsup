@@ -3,11 +3,15 @@
 The owner translates Chinese AI-anime series episode by episode from a few creators. A
 series profile (``series.json``) names the pages to follow; ``list_videos`` reads one:
 
+- **Douyin 合集** ``https://www.douyin.com/collection/<mix_id>``, or the link of any episode in
+  it (``douyin.com/video/<id>``: its 合集 is looked up) — the surest source: a 合集 lists every
+  episode in order (``app.douyin_capture --mix``), while a creator page leaves some posts out
+  (2026-10-31: 《末日校车》09 was public and in its 合集 but not on 阿熊动漫's page).
 - **Douyin** creator page ``https://www.douyin.com/user/<sec_uid>`` — Douyin blocks yt-dlp's
   API, so the page is opened in the embedded browser (``app.douyin_capture --list``, its own
   process, the same persistent profile as the video capture). Without a login Douyin shows
-  the newest 18 posts (pinned one included), then asks to log in — plenty for a check every
-  few hours; the login is never worked around.
+  the newest 18–36 posts (pinned one included), then may ask to log in — plenty for a check
+  every few hours; the login is never worked around.
 - **Bilibili** space ``https://space.bilibili.com/<mid>`` (newest first), a season /
   collection ``…/lists/<sid>?type=season`` · ``…/channel/collectiondetail?sid=<sid>`` (the
   uploader's order, so the LAST ``limit`` items are taken) or a series ``…?type=series`` /
@@ -44,25 +48,35 @@ from app.fsutil import atomic_write_text
 DIR = "_autopilot"
 FILE = "watch.json"
 LIMIT = 30
+MIX_LIMIT = 300            # a 合集 is read whole (its order is the episode order)
 LIST_TIMEOUT_S = 150       # the browser process gives up by itself after ~90 s
+MIX_TIMEOUT_S = 180        # … a 合集 after ~120 s
 MAX_TRIES = 3              # a video whose run failed this often is not tried again
+BILI_RETRY_S = 20.0        # Bilibili's 412 (too many calls) passes in a while: one more try
 
 _DOUYIN_USER = re.compile(r"/(?:share/)?user/([A-Za-z0-9_\-.]{10,})")
 _BILI_LIST = re.compile(r"/lists/(\d+)")
 _BILI_SPACE = re.compile(r"/\d+(?:/upload)?(?:/video)?/?")
 _BV = re.compile(r"BV[0-9A-Za-z]{10}")
 _DOUYIN_VIDEO = re.compile(r"/(?:video|note)/(\d{8,})")
+_DOUYIN_MIX = re.compile(r"/(?:collection|mix/detail)/(\d{8,})")
+_DOUYIN_HOSTS = ("douyin.com", "iesdouyin.com")
 
 
 # --- sources ---------------------------------------------------------------------------------
 
 def source_kind(url: str) -> str:
-    """"douyin_user" | "bilibili_space" | "bilibili_season" | "bilibili_series" | "" (not a
-    page this watcher can read). Pure."""
+    """"douyin_mix" | "douyin_video" (its 合集 is read) | "douyin_user" | "bilibili_space" |
+    "bilibili_season" | "bilibili_series" | "" (not a page this watcher can read). Pure."""
     u = urlparse((url or "").strip())
     host = (u.hostname or "").lower()
-    if host.endswith("douyin.com") and _DOUYIN_USER.search(u.path) and "/user/self" not in u.path:
+    douyin = host.endswith(_DOUYIN_HOSTS)
+    if douyin and _DOUYIN_MIX.search(u.path):
+        return "douyin_mix"
+    if douyin and _DOUYIN_USER.search(u.path) and "/user/self" not in u.path:
         return "douyin_user"
+    if douyin and _DOUYIN_VIDEO.search(u.path):
+        return "douyin_video"
     if host == "space.bilibili.com":
         kind = (parse_qs(u.query).get("type") or [""])[0]
         if "seriesdetail" in u.path or (_BILI_LIST.search(u.path) and kind == "series"):
@@ -75,12 +89,20 @@ def source_kind(url: str) -> str:
 
 
 def normalize_source(url: str) -> str:
-    """A Douyin creator link without its tracking query (the default tab = their posts). Pure."""
+    """A Douyin link without its tracking query (a creator's default tab = their posts). Pure."""
     url = (url or "").strip()
-    if source_kind(url) == "douyin_user":
-        m = _DOUYIN_USER.search(urlparse(url).path)
-        return f"https://www.douyin.com/user/{m.group(1)}"
+    kind, path = source_kind(url), urlparse(url).path
+    if kind == "douyin_user":
+        return f"https://www.douyin.com/user/{_DOUYIN_USER.search(path).group(1)}"
+    if kind == "douyin_mix":
+        return mix_url(_DOUYIN_MIX.search(path).group(1))
+    if kind == "douyin_video":
+        return f"https://www.douyin.com/video/{_DOUYIN_VIDEO.search(path).group(1)}"
     return url
+
+
+def mix_url(mix_id: str) -> str:
+    return f"https://www.douyin.com/collection/{mix_id}"
 
 
 def _resolve_short(url: str) -> str:
@@ -105,11 +127,13 @@ def list_videos(source_url: str, *, limit: int = LIMIT) -> list[dict]:
     kind = source_kind(url)
     if kind == "douyin_user":
         return _douyin_list(normalize_source(url), limit)
+    if kind in ("douyin_mix", "douyin_video"):
+        return _douyin_mix(normalize_source(url), max(limit, MIX_LIMIT))
     if kind.startswith("bilibili_"):
         return _bilibili_list(url, limit, kind)
-    raise ValueError("Không đọc được link này — cần trang người đăng Douyin "
-                     "(douyin.com/user/…) hoặc Bilibili (space.bilibili.com/…, danh sách / "
-                     "tuyển tập).")
+    raise ValueError("Không đọc được link này — cần 合集 Douyin (douyin.com/collection/… hoặc "
+                     "link một tập trong 合集), trang người đăng Douyin (douyin.com/user/…) "
+                     "hoặc Bilibili (space.bilibili.com/…, danh sách / tuyển tập).")
 
 
 def _child_env() -> dict:
@@ -124,7 +148,8 @@ def _child_env() -> dict:
     return env
 
 
-def _douyin_list(url: str, limit: int) -> list[dict]:
+def _browse(mode: str, url: str, limit: int, timeout: float) -> dict:
+    """Run app.douyin_capture ``mode`` on ``url`` in its own process → the JSON it wrote."""
     from app.pipeline import download
 
     if not download.web_available():
@@ -133,9 +158,9 @@ def _douyin_list(url: str, limit: int) -> list[dict]:
     out = d / f"list-{hashlib.sha1(url.encode()).hexdigest()[:10]}.json"
     out.unlink(missing_ok=True)                       # never read an older listing
     try:
-        r = subprocess.run([sys.executable, "-m", "app.douyin_capture", "--list", url, str(out),
+        r = subprocess.run([sys.executable, "-m", "app.douyin_capture", mode, url, str(out),
                             str(d / "profile"), str(limit)], capture_output=True, text=True,
-                           timeout=LIST_TIMEOUT_S, encoding="utf-8", errors="replace",
+                           timeout=timeout, encoding="utf-8", errors="replace",
                            env=_child_env())
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Trang Douyin mở quá lâu — thử lại sau.") from exc
@@ -145,6 +170,11 @@ def _douyin_list(url: str, limit: int) -> list[dict]:
         data = json.loads(out.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise RuntimeError("Trình duyệt nhúng trả về dữ liệu hỏng.") from exc
+    return data if isinstance(data, dict) else {}
+
+
+def _douyin_list(url: str, limit: int) -> list[dict]:
+    data = _browse("--list", url, limit, LIST_TIMEOUT_S)
     videos = [_clean(v) for v in data.get("videos") or [] if isinstance(v, dict)]
     videos = [v for v in videos if v][:limit]
     if not videos:
@@ -153,6 +183,29 @@ def _douyin_list(url: str, limit: int) -> list[dict]:
         raise RuntimeError("Trang Douyin không hiện video nào (tài khoản riêng tư / đã xóa, "
                            "hoặc Douyin đòi đăng nhập).")
     return videos
+
+
+def _douyin_mix(url: str, limit: int) -> list[dict]:
+    """A 合集 (or the 合集 of a video) → its episodes, newest first; each carries ``mix``
+    {id, name, url} so the owner sees which 合集 a video link led to."""
+    data = _browse("--mix", url, limit, MIX_TIMEOUT_S)
+    videos = [_clean(v) for v in data.get("videos") or [] if isinstance(v, dict)]
+    videos = [v for v in videos if v]
+    if not videos:
+        err = data.get("error")
+        if err == "captcha" or data.get("captcha"):
+            raise RuntimeError("Douyin đòi xác minh (captcha) — thử lại sau.")
+        if err == "no_mix":
+            raise RuntimeError("Video này không nằm trong 合集 nào — dán link trang người đăng "
+                               "(douyin.com/user/…) hoặc link 合集.")
+        raise RuntimeError("Không đọc được danh sách 合集 (Douyin không trả lời) — thử lại sau.")
+    mix = data.get("mix") if isinstance(data.get("mix"), dict) else {}
+    info = None
+    if re.fullmatch(r"\d{6,}", str(mix.get("id") or "")):
+        info = {"id": str(mix["id"]), "name": str(mix.get("name") or "").strip(),
+                "url": mix_url(str(mix["id"]))}
+    videos.reverse()                                  # the 合集's order is oldest first
+    return [{**v, "mix": info} if info else v for v in videos[:limit]]
 
 
 def _clean(v: dict) -> dict | None:
@@ -211,16 +264,21 @@ def _bilibili_list(url: str, limit: int, kind: str) -> list[dict]:
         opts["playlist_items"] = f"-{limit}:"         # the uploader's order: newest are last
     else:
         opts["playlistend"] = limit                   # newest first
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            _record_pages(ydl, pages)
-            info = ydl.extract_info(url, download=False)
-            entries = [e for e in (info or {}).get("entries") or [] if isinstance(e, dict)]
-    except Exception as exc:  # noqa: BLE001
-        msg = str(exc)
-        if "412" in msg or "352" in msg:
-            raise RuntimeError("Bilibili tạm chặn vì gọi nhiều — thử lại sau ít phút.") from exc
-        raise RuntimeError(f"Không đọc được danh sách Bilibili: {msg[:200]}") from exc
+    for attempt in range(2):
+        pages.clear()
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                _record_pages(ydl, pages)
+                info = ydl.extract_info(url, download=False)
+                entries = [e for e in (info or {}).get("entries") or [] if isinstance(e, dict)]
+            break
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            if "412" not in msg and "352" not in msg:
+                raise RuntimeError(f"Không đọc được danh sách Bilibili: {msg[:200]}") from exc
+            if attempt:
+                raise RuntimeError("Bilibili tạm chặn vì gọi nhiều — thử lại sau ít phút.") from exc
+            time.sleep(BILI_RETRY_S)
     meta: dict[str, dict] = {}
     for p in pages:
         for row in _page_items(p):
@@ -241,6 +299,9 @@ def _bilibili_list(url: str, limit: int, kind: str) -> list[dict]:
 
 
 # --- which videos are new episodes -----------------------------------------------------------
+
+_IN_NAME = re.compile(r"《[^》]*》")
+
 
 def _nfkc(s: str | None) -> str:
     return unicodedata.normalize("NFKC", s or "")
@@ -273,7 +334,8 @@ def new_episodes(profile, videos: list[dict], seen, *, after: int | None = None)
         vid = str(v.get("id") or "")
         if not vid or vid in seen or not belongs(profile, v.get("title")):
             continue
-        r = episode_range(v.get("title"))
+        # a number inside the 《…》 name is the name's ("《暖家奇遇第二部》" is no episode 2)
+        r = episode_range(_IN_NAME.sub("《》", _nfkc(v.get("title"))))
         if r is None or r[0] != r[1] or (after is not None and r[0] <= after):
             continue                    # no number, a "1-5" compilation, or already done
         old = best.get(r[0])
@@ -395,12 +457,35 @@ def library(slug: str) -> dict:
     return {"last": last, "ids": ids}
 
 
+def suggested_source(slug: str) -> str | None:
+    """A page to follow for a series that has none yet: the link of its newest Douyin episode
+    in the library (the watcher reads that video's 合集). None without one."""
+    from app.pipeline import series
+
+    best: int | None = None
+    try:
+        dirs = [d for d in Path(settings.vizsup_storage_dir).iterdir()
+                if d.is_dir() and not d.name.startswith(("_", "."))]
+    except OSError:
+        dirs = []
+    for d in dirs:
+        lk = series.link_of(d)
+        if not lk or lk.get("slug") != slug:
+            continue
+        meta = _read_json(d / "metadata.json")
+        for v in (meta.get("webpage_url"), meta.get("video_id")):
+            for i in ids_in(v):
+                if i.isdigit() and (best is None or int(i) > best):
+                    best = int(i)                 # a Douyin id grows with its upload time
+    return f"https://www.douyin.com/video/{best}" if best is not None else None
+
+
 # --- one series: list its sources, keep the new episodes ----------------------------------------
 
 def find_new(profile, sources: list[str], *, state: dict | None = None, log=None,
              limit: int = LIMIT, lister=None) -> dict:
     """List ``sources`` and keep ``profile``'s new episodes (not seen, not in the library,
-    above its last episode). Changes nothing on disk. → {"sources": [{url, n, error, note}],
+    above its last episode). Changes nothing on disk. → {"sources": [{url, n, error, mix?}],
     "new": [video + episode], "last": int | None}."""
     lister = lister or list_videos
     state = state if state is not None else load_state()
@@ -409,7 +494,9 @@ def find_new(profile, sources: list[str], *, state: dict | None = None, log=None
     for src in sources:
         try:
             got = lister(src, limit=limit)
-            rows.append({"url": src, "n": len(got), "error": ""})
+            mix = next((v["mix"] for v in got if v.get("mix")), None)
+            rows.append({"url": src, "n": len(got), "error": "",
+                         **({"mix": mix} if mix else {})})
         except Exception as exc:  # noqa: BLE001 - one bad page must not stop the others
             rows.append({"url": src, "n": 0, "error": str(exc)})
             if log:

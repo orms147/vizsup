@@ -22,6 +22,23 @@ Platform facts (checked 2026-10-31, re-check before relying on them):
   contents from other platforms to TikTok"); the rights note (`rights.json`) stays visible.
 - A platform that is not connected still gets its post as a package in `storage/_posts`.
 
+## Watch sources — re-verified 2026-10-31 (real pages, read-only)
+- Douyin creator page 阿熊动漫: 30–36 posts read in 7–10 s without login. **《末日校车》09 (public,
+  2026-10-25) is NOT on the creator page** — neither in its cards nor in the post-list answers —
+  but it is in the series' 合集. Simulated "library stops at 8": the creator page would fetch
+  nothing, the 合集 fetches 09. → new source kind: Douyin 合集 (`collection/<mix_id>` or any
+  episode link; `douyin_capture --mix` asks the page's own `aweme/v1/web/mix/aweme`, 20 per
+  answer by cursor; 7 episodes in 9–12 s, 《暴击契约》 28 episodes in 2 answers, a video in no
+  合集 → a clear error). Theo dõi pre-fills the newest downloaded episode's link and
+  «Kiểm tra ngay» swaps an episode link for its 合集 link.
+- A video page sometimes never reports loadFinished (its stream keeps loading) and twice answered
+  "This site can't be reached" while curl got 200: mix mode starts once the page's own detail
+  answer is seen; a failed check is simply retried at the next one.
+- Bilibili: a season list (panfood, 125 items) in 1.7 s; the space API answered 412 right after a
+  burst of my API calls and was fine minutes later (2.5 s) → one automatic retry after 20 s.
+  Titles like 【AI漫剧】《暖家奇遇第二部》 are whole seasons: a number inside 《…》 is not an
+  episode; 《萧族降世》P1-4 is now a 1–4 compilation (skipped), not episode 1.
+
 ## Flow
 ```
 watch (6 h) ─┐

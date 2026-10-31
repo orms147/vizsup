@@ -18,6 +18,15 @@ A script injected at document creation also keeps the post-list answers the page
 fetches (exact titles + publish times). Checked 2026-10-31 on 阿熊动漫: without a login
 Douyin shows the first 18 posts (pinned one included), then "登录后查看更多作品" — that is
 reported as ``login_wall``, never worked around.
+
+Mix mode (``python -m app.douyin_capture --mix <page> <out.json> <profile> [limit]``): a 合集
+https://www.douyin.com/collection/<mix_id> (Douyin opens its first episode there) or any video
+of one. A creator page does not show every post — checked 2026-10-31 on 阿熊动漫: 《末日校车》09
+is public and in the 合集 but missing from the creator page — while a 合集 lists all of its
+episodes in order. The video's own detail answer (caught by the same hook) names its 合集 when
+the link is a video; the episode list is then asked from inside the page, the web API its 合集
+panel uses (``aweme/v1/web/mix/aweme``, 20 per answer, by cursor) — Douyin's own script on the
+page handles the request like any of its own.
 """
 from __future__ import annotations
 
@@ -38,6 +47,14 @@ LIST_STEP_S = 1.5      # one look / scroll per step
 LIST_SCROLLS = 6       # at most this many scrolls for more cards
 LIST_CAPTCHA_S = 20.0  # a captcha still on screen after this long: stop waiting for cards
 LIST_HARD_S = 90.0
+
+# mix mode (a 合集)
+MIX_PAGE = 20          # episodes per answer (the 合集 panel's own page size)
+MIX_PAGES = 15         # at most 300 episodes
+MIX_SETTLE_S = 3.0     # after the page loaded, let Douyin's script set up before asking
+MIX_ANSWER_S = 10.0    # an answer that has not come in this time is asked again
+MIX_TRIES = 3
+MIX_HARD_S = 120.0
 
 
 def _profile(profile_dir: Path):
@@ -126,8 +143,16 @@ _POSTS_HOOK_JS = r"""
   window.__vzPosts = [];
   function take(u, text) {
     try {
-      if (!/aweme\/v1\/web\/aweme\/post/.test(String(u))) return;
+      var detail = /aweme\/v1\/web\/aweme\/detail/.test(String(u));
+      if (!detail && !/aweme\/v1\/web\/aweme\/post/.test(String(u))) return;
       var d = typeof text === 'string' ? JSON.parse(text) : text;
+      if (detail) {                    // mix mode: which 合集 this video belongs to
+        var a = (d && d.aweme_detail) || {}, m = a.mix_info || null;
+        if (a.aweme_id) window.__vzDetail = {id: String(a.aweme_id), mix: m && m.mix_id ? {
+          id: String(m.mix_id), name: m.mix_name || '',
+          total: (m.statis || {}).updated_to_episode || null} : null};
+        return;
+      }
       (d && d.aweme_list || []).forEach(function (a) {
         window.__vzPosts.push({id: String(a.aweme_id || ''), title: a.desc || '',
                                published: a.create_time || null});
@@ -350,7 +375,203 @@ def list_main(url: str, out: Path, profile_dir: Path, limit: int = 30) -> int:
     return 0 if videos else 2
 
 
+# --- mix mode: a 合集 -----------------------------------------------------------------------
+
+_MIX_ID = re.compile(r"/(?:collection|mix/detail)/(\d{8,})")
+
+_MIX_ASK_JS = r"""
+(function () {
+  window.__vzMixPage = null;
+  var x = new XMLHttpRequest();
+  x.open('GET', '/aweme/v1/web/mix/aweme/?device_platform=webapp&aid=6383'
+    + '&channel=channel_pc_web&mix_id=__MIX__&cursor=__CUR__&count=__N__');
+  x.onload = function () {
+    var r = {status: x.status, code: null, more: 0, cursor: 0, items: [], mix: null};
+    try {
+      var d = JSON.parse(x.responseText);
+      r.code = d.status_code; r.more = d.has_more ? 1 : 0; r.cursor = d.cursor || 0;
+      (d.aweme_list || []).forEach(function (a) {
+        var m = a.mix_info || {}, s = m.statis || {};
+        r.items.push({id: String(a.aweme_id || ''), title: a.desc || '',
+                      published: a.create_time || null, index: s.current_episode || null});
+        if (!r.mix && m.mix_id) r.mix = {id: String(m.mix_id), name: m.mix_name || '',
+                                         total: s.updated_to_episode || null};
+      });
+    } catch (e) {}
+    window.__vzMixPage = r;
+  };
+  x.onerror = function () { window.__vzMixPage = {status: -1, items: []}; };
+  x.send();
+  return 1;
+})()
+"""
+_MIX_STATE_JS = r"""
+JSON.stringify({detail: window.__vzDetail || null, page: window.__vzMixPage || null,
+  captcha: Array.prototype.some.call(document.querySelectorAll(
+    '#captcha_container, .captcha_verify_container, iframe[src*="captcha"], '
+    + 'iframe[src*="verifycenter"]'), function (e) {
+      var r = e.getBoundingClientRect();
+      return r.width > 50 && r.height > 50 && getComputedStyle(e).display !== 'none'; })})
+"""
+
+
+def mix_ask_js(mix_id: str, cursor: int = 0) -> str:
+    """The request for one answer of a 合集's episode list. Pure."""
+    if not re.fullmatch(r"\d{6,}", str(mix_id)):
+        raise ValueError(f"not a mix id: {mix_id!r}")
+    return (_MIX_ASK_JS.replace("__MIX__", str(mix_id)).replace("__CUR__", str(int(cursor)))
+            .replace("__N__", str(MIX_PAGE)))
+
+
+def merge_mix(pages: list, limit: int = MIX_PAGE * MIX_PAGES) -> list[dict]:
+    """A 合集's answers → its episodes in the 合集's order (oldest first, by ``index`` when
+    every one has it), once each, the LAST ``limit`` (the newest) → [{id, url, title,
+    published, pinned, index}]. Pure."""
+    rows: dict[str, dict] = {}
+    for page in pages or []:
+        for it in (page or {}).get("items") or []:
+            vid = str((it or {}).get("id") or "")
+            if not vid or vid in rows:
+                continue
+            pub, idx = it.get("published"), it.get("index")
+            rows[vid] = {"id": vid, "url": f"https://www.douyin.com/video/{vid}",
+                         "title": " ".join(str(it.get("title") or "").split()),
+                         "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None,
+                         "pinned": False, "index": idx if isinstance(idx, int) else None}
+    out = list(rows.values())
+    if out and all(r["index"] is not None for r in out):
+        out.sort(key=lambda r: r["index"])
+    return out[-max(1, limit):]
+
+
+def mix_main(url: str, out: Path, profile_dir: Path, limit: int = MIX_PAGE * MIX_PAGES) -> int:
+    """Open a 合集 (or one of its videos), read its whole episode list, write {videos, mix,
+    captcha, error} to ``out`` — error: "" | "no_mix" (the video is in no 合集) | "no_answer".
+    Exit code 2 when no video was read."""
+    from PySide6.QtCore import Qt, QTimer, QUrl
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWidgets import QApplication
+
+    profile_dir = profile_dir.resolve()
+    app = QApplication(sys.argv[:1])
+    profile = _profile(profile_dir)
+    page = QWebEnginePage(profile)
+    hook = QWebEngineScript()
+    hook.setName("vizsup-posts")
+    hook.setSourceCode(_POSTS_HOOK_JS)
+    hook.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    hook.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    hook.setRunsOnSubFrames(False)
+    page.scripts().insert(hook)
+    page.setAudioMuted(True)
+    view = QWebEngineView()                  # a 合集 opens its first video: a real viewport
+    view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    view.resize(1280, 900)
+    view.setPage(page)
+    view.show()
+    t0 = time.time()
+    m = _MIX_ID.search(url)
+    st: dict = {"busy": False, "loaded": None, "mix": {"id": m.group(1)} if m else None,
+                "asked": None, "cursor": 0, "tries": 0, "pages": [], "error": "",
+                "captcha": False, "done": False}
+
+    def log(msg: str) -> None:
+        print(f"{msg} after {time.time() - t0:.1f}s", file=sys.stderr, flush=True)
+
+    def finish(error: str = "") -> None:
+        if not st["done"]:
+            st["done"], st["error"] = True, error
+            timer.stop()
+            log(f"{sum(len(p.get('items') or []) for p in st['pages'])} episodes"
+                + (f" ({error})" if error else ""))
+            app.quit()
+
+    def ask() -> None:
+        st["asked"] = time.time()
+        page.runJavaScript(mix_ask_js(st["mix"]["id"], st["cursor"]))
+
+    def seen(result) -> None:
+        st["busy"] = False
+        try:
+            info = json.loads(result or "{}")
+        except ValueError:
+            info = {}
+        st["captcha"] = bool(info.get("captcha"))
+        now = time.time()
+        d = info.get("detail")
+        if d and st["loaded"] is None:
+            st["loaded"] = now           # the page's own scripts run (a video page may never
+                                         # report loadFinished while its stream keeps loading)
+        if st["mix"] is None:
+            if d and not d.get("mix"):
+                finish("no_mix")
+            elif d:
+                st["mix"] = d["mix"]
+            elif now - t0 > LIST_WAIT_S or (st["captcha"] and now - t0 > LIST_CAPTCHA_S):
+                finish("captcha" if st["captcha"] else "no_mix")
+            return
+        if st["asked"] is None:
+            if st["loaded"] is not None and now - st["loaded"] >= MIX_SETTLE_S:
+                ask()
+            elif now - t0 > LIST_WAIT_S:
+                finish("captcha" if st["captcha"] else "no_answer")
+            return
+        ans = info.get("page")
+        if ans is None:
+            if now - st["asked"] > MIX_ANSWER_S:
+                st["tries"] += 1
+                if st["tries"] < MIX_TRIES:
+                    ask()
+                else:
+                    finish("no_answer")
+            return
+        if ans.get("status") != 200 or ans.get("code") not in (0, None) or not ans.get("items"):
+            st["tries"] += 1
+            if st["tries"] >= MIX_TRIES:
+                finish("" if st["pages"] else "no_answer")
+            else:
+                st["asked"] = None                   # ask again after the settle time
+                st["loaded"] = now
+            return
+        st["pages"].append(ans)
+        if ans.get("mix"):
+            st["mix"] = {**st["mix"], **ans["mix"]}
+        if ans.get("more") and len(st["pages"]) < MIX_PAGES and ans.get("cursor"):
+            st["cursor"], st["tries"] = int(ans["cursor"]), 0
+            ask()
+        else:
+            finish()
+
+    def tick() -> None:
+        if not st["busy"] and not st["done"]:
+            st["busy"] = True
+            page.runJavaScript(_MIX_STATE_JS, 0, seen)
+
+    def loaded(ok: bool) -> None:
+        log(f"loaded={ok}")
+        if ok and st["loaded"] is None:
+            st["loaded"] = time.time()
+
+    page.loadFinished.connect(loaded)
+    page.load(QUrl(url))
+    timer = QTimer()
+    timer.timeout.connect(tick)
+    timer.start(int(LIST_STEP_S * 1000))
+    QTimer.singleShot(int(MIX_HARD_S * 1000), lambda: finish(st["error"] or (
+        "" if st["pages"] else "no_answer")))
+    app.exec()
+    videos = merge_mix(st["pages"], limit)
+    out.write_text(json.dumps({"videos": videos, "mix": st["mix"], "captcha": st["captcha"],
+                               "error": "" if videos else st["error"] or "no_answer"},
+                              ensure_ascii=False), encoding="utf-8")
+    return 0 if videos else 2
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--mix"]:
+        sys.exit(mix_main(sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]),
+                          int(sys.argv[5]) if len(sys.argv) > 5 else MIX_PAGE * MIX_PAGES))
     if sys.argv[1:2] == ["--list"]:
         sys.exit(list_main(sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]),
                            int(sys.argv[5]) if len(sys.argv) > 5 else 30))
