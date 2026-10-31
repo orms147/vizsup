@@ -72,6 +72,7 @@ CATEGORY = "1"                       # Film & Animation
 CHUNK = 32 * 256 * 1024              # 8 MiB — a multiple of 256 KiB
 MAX_FAILS = 8
 SCHEDULE_MIN_AHEAD = 300             # nearer than 5 min → just post now
+PLAYLIST_WAITS = (2.0, 5.0, 10.0)    # playlistItems.insert 409 "operation aborted" → try again
 _MIME = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
          ".mkv": "video/x-matroska", ".webm": "video/webm"}
 
@@ -433,10 +434,16 @@ class YouTubePublisher(PublishProvider):
     def _add_to_playlist(self, c: httpx.Client, acc: dict, title: str, vid: str) -> str:
         for fresh in (False, True):
             pid = self._playlist_id(c, acc, title, fresh=fresh)
-            r = c.post(f"{API}/playlistItems", params={"part": "snippet"},
-                       headers=self._auth(self._token(c, acc)),
-                       json={"snippet": {"playlistId": pid,
-                                         "resourceId": {"kind": "youtube#video", "videoId": vid}}})
+            for wait in (*PLAYLIST_WAITS, None):
+                r = c.post(f"{API}/playlistItems", params={"part": "snippet"},
+                           headers=self._auth(self._token(c, acc)),
+                           json={"snippet": {"playlistId": pid, "resourceId": {
+                               "kind": "youtube#video", "videoId": vid}}})
+                # a playlist made a moment ago (or a busy backend) answers 409
+                # SERVICE_UNAVAILABLE "The operation was aborted" — seen 2026-10-31
+                if r.status_code != 409 or wait is None:
+                    break
+                time.sleep(wait)
             if r.status_code in (200, 201):
                 return f"đã thêm vào danh sách phát “{title}”"
             if r.status_code != 404:

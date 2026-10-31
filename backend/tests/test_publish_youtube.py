@@ -35,7 +35,8 @@ class FakeGoogle:
     """Enough of oauth2.googleapis.com + the YouTube Data API for the publisher."""
 
     def __init__(self, *, listed_privacy=None, fail_put_once=False, quota=False,
-                 refresh_error=None, expire_session_once=False):
+                 refresh_error=None, expire_session_once=False, playlist_busy=0):
+        self.playlist_busy = playlist_busy          # playlistItems answers 409 this many times
         self.listed_privacy = listed_privacy
         self.fail_put_once = fail_put_once
         self.quota = quota
@@ -110,6 +111,10 @@ class FakeGoogle:
             pl = {"id": f"PL{len(self.playlists) + 1}", "snippet": body["snippet"]}
             self.playlists.append(pl)
             return httpx.Response(200, json=pl)
+        if u.path == "/youtube/v3/playlistItems" and self.playlist_busy:
+            self.playlist_busy -= 1
+            return httpx.Response(409, json={"error": {"code": 409, "message": "The operation was aborted.",
+                                                       "errors": [{"reason": "SERVICE_UNAVAILABLE"}]}})
         if u.path == "/youtube/v3/playlistItems":
             self.playlist_items.append(json.loads(req.content))
             return httpx.Response(200, json={"id": "PI1"})
@@ -286,6 +291,20 @@ def test_publish_uploads_in_chunks_resumes_after_a_5xx_and_adds_playlist_and_thu
     fake2 = FakeGoogle()
     res2 = _pub(fake2).publish(video, PostMeta(title="Tập 2", playlist="Bộ Phim"))
     assert res2.ok and not fake2.playlists and fake2.playlist_items[0]["snippet"]["playlistId"] == "PL1"
+
+
+def test_a_busy_playlist_is_tried_again(env, monkeypatch):
+    """2026-10-31, the first real upload: a playlist made a moment ago answered 409
+    SERVICE_UNAVAILABLE "The operation was aborted" — the insert is tried again."""
+    monkeypatch.setattr(yt.time, "sleep", lambda _s: None)
+    _connected(env)
+    fake = FakeGoogle(playlist_busy=2)
+    res = _pub(fake).publish(_video(env, 1000), PostMeta(title="Tập 1", playlist="Bộ Phim"))
+    assert res.ok and "đã thêm vào danh sách phát" in res.message, res.message
+    assert len(fake.playlist_items) == 1
+    fake = FakeGoogle(playlist_busy=9)                       # never frees → said, not raised
+    res = _pub(fake).publish(_video(env, 1000), PostMeta(title="Tập 1", playlist="Bộ Phim"))
+    assert res.ok and "chưa thêm được vào danh sách phát" in res.message
 
 
 def test_a_short_gets_the_shorts_url(env):
