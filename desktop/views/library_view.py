@@ -191,6 +191,7 @@ class _Row(QFrame):
     externalRequested = Signal(str)
     chaptersRequested = Signal(str)
     shortRequested = Signal(str)           # «Cắt Short…» on this approved episode
+    fastApproveRequested = Signal(str)     # «Duyệt nhanh…» (autopilot) on an unapproved episode
 
     def __init__(self, item: dict, busy: str | None) -> None:
         super().__init__()
@@ -325,7 +326,11 @@ class _Row(QFrame):
                              lambda: self.chaptersRequested.emit(iid))
             ch.setEnabled(bool(item.get("chapters")))
         self.short_act = None
+        self.fast_act = None
         if item.get("kind") == "job":
+            self.fast_act = m.addAction("Duyệt nhanh (rồi tự dựng, tự đăng)…",
+                                        lambda: self.fastApproveRequested.emit(iid))
+            self.fast_act.setEnabled(False)          # until the details say "not approved"
             self.short_act = m.addAction("Cắt Short (30–60 giây, 9:16)…",
                                          lambda: self.shortRequested.emit(iid))
             self._set_short_enabled(None)
@@ -343,6 +348,14 @@ class _Row(QFrame):
         al.addWidget(folder)
         al.addWidget(more)
         h.addWidget(acts)
+
+    def _set_fast_enabled(self, d: dict | None) -> None:
+        a = self.fast_act
+        if a is not None:
+            ok = bool(d) and bool(self.item.get("has_vi")) and not d.get("approved") \
+                and not self.item.get("short")
+            a.setEnabled(ok)
+            a.setToolTip("" if ok else "Chỉ cho tập đã có phụ đề và chưa duyệt.")
 
     def _set_short_enabled(self, d: dict | None) -> None:
         """«Cắt Short» needs an APPROVED episode with its source video; a Short is not cut again."""
@@ -390,6 +403,7 @@ class _Row(QFrame):
                              "Không còn file nặng nào để dọn")
         self.set_status(item_status(self.item, d))
         self._set_short_enabled(d)
+        self._set_fast_enabled(d)
 
     def apply_thumb(self, path: str | None) -> None:
         pm = _thumb_pixmap(path, self._playable)
@@ -464,6 +478,7 @@ class LibraryView(QWidget):
     changed = Signal()                     # something went to the Recycle Bin
     message = Signal(str, str)             # status bar text, kind
     compileRequested = Signal(dict)        # CompileDialog.spec() → main window runs the join
+    fastApproveRequested = Signal(str)     # «Duyệt nhanh» → the main window approves + autopilot
     compileCancelRequested = Signal()
     batchRequested = Signal(dict)          # BatchDialog.spec() → main window queues the renders
     batchCancelRequested = Signal()
@@ -507,6 +522,10 @@ class LibraryView(QWidget):
                                       "chương)")
         self.compose_btn.clicked.connect(lambda: self.compose(self.selected()))
         head.addWidget(self.compose_btn)
+        self.auto_btn = button("Tự động đăng", "Clock3", small=True,
+                               tip="Lịch tự dựng + tự đăng cho từng bộ phim, và hàng đăng")
+        self.auto_btn.clicked.connect(self.open_autopilot)
+        head.addWidget(self.auto_btn)
         self.batch_btn = button("Dựng hàng loạt", "MonitorPlay", small=True,
                                 tip="Dựng lần lượt các video đã duyệt, chạy nền")
         self.batch_btn.clicked.connect(lambda: self.open_batch(self.selected()))
@@ -727,6 +746,7 @@ class LibraryView(QWidget):
             row.externalRequested.connect(self._external)
             row.chaptersRequested.connect(self._copy_chapters)
             row.shortRequested.connect(self._cut_short)
+            row.fastApproveRequested.connect(self.fastApproveRequested)
             row.deleteRequested.connect(lambda iid: self.delete_items([self._item(iid)]))
             row.cleanRequested.connect(
                 lambda iid: self.delete_items([self._item(iid)], heavy_only=True))
@@ -952,6 +972,14 @@ class LibraryView(QWidget):
             self.setFocus(Qt.OtherFocusReason)
 
     # --- «Cắt Short» (app/pipeline/clipshort.py) ---------------------------------------------
+    def open_autopilot(self, slug: str | None = None) -> None:
+        from desktop.widgets.autopilot_dialogs import AutopilotDialog
+
+        dlg = AutopilotDialog(self.window(), slug=slug)
+        if self._run_dialog(dlg):
+            dlg.save()
+            self.message.emit("Đã lưu lịch tự động đăng.", "ok")
+
     def _cut_short(self, iid: str) -> None:
         from app.models import Job
         from app.pipeline import clipshort

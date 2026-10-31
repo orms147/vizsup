@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         # Dựng hàng loạt: approved projects rendered one by one in the SECOND slot, so the
         # editor stays usable for the next episode meanwhile
         self.library.batchRequested.connect(self._start_batch)
+        self.library.fastApproveRequested.connect(self._fast_approve)
         self.library.batchCancelRequested.connect(self._cancel_batch)
         self.library.batch_queued = self._batch_ids
         self.render.renderLaterRequested.connect(self._render_later)
@@ -171,6 +172,10 @@ class MainWindow(QMainWindow):
         self._tray = self._make_tray()
         QTimer.singleShot(1500, self._offer_recovery)
         self._bg = BgRunner(self)
+        self._posting = False                  # autopilot: one post upload at a time
+        self._post_timer = QTimer(self)
+        self._post_timer.timeout.connect(self._post_due)
+        self._post_timer.start(60_000)         # posting slots are minutes apart
         QTimer.singleShot(8000, self._check_catalog)   # newer models, once a day
         self._app_shortcuts()
         self._toast = Toast(self)
@@ -517,6 +522,7 @@ class MainWindow(QMainWindow):
                 self.editor.refresh_approval()
                 self._learn_from_approval()
                 self.status.set_status("Đã duyệt phụ đề — chọn âm thanh rồi dựng video.", "ok")
+                self._autopilot_after_approve(self.job)
             self.render.set_voices(voices)
             self._sync_render_page()                    # set_job first: voice.json is per job
             self.render.select_voice(_default_voice(self.job, voices, self.opts))
@@ -524,6 +530,136 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(RENDER)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"● Lỗi: {exc}")
+
+    # --- autopilot (docs/plan/J-autopilot.md): approve once -> render -> Short -> post ----------
+    def _autopilot_plan(self, job):
+        from app.pipeline import autopilot, series
+
+        p = series.profile_of(job)
+        plan = autopilot.load_plan(p.slug) if p is not None else None
+        return p, (plan if plan and plan.get("on") else None)
+
+    def _fast_approve(self, iid: str) -> None:
+        """Thư viện -> «Duyệt nhanh»: the flagged lines only + one button. The gate is this click."""
+        from app.pipeline import approval, autopilot
+        from app.pipeline.compilation import _job_title, clean_title
+        from app.pipeline.srt import parse_srt
+        from desktop.widgets.autopilot_dialogs import FastApproveDialog
+
+        loaded = store.load_job(iid)
+        if loaded is None or not loaded[0].vi_srt.exists():
+            self.status.set_status("Dự án này chưa có phụ đề.", "warn")
+            return
+        job = loaded[0]
+        try:
+            flagged = store.flagged_lines(job)
+        except Exception:  # noqa: BLE001 - flags are a help; the owner can still open the editor
+            flagged = []
+        p, plan = self._autopilot_plan(job)
+        if plan is None:
+            after = ("Bộ phim này chưa bật Tự động đăng (Thư viện -> Tự động đăng): duyệt xong "
+                     "bạn tự dựng như thường.")
+        elif autopilot.render_opts(job) is None:
+            after = ("Duyệt xong app CHƯA tự dựng được: bộ phim chưa có tập nào dựng — dựng tay "
+                     "một tập để app học cài đặt.")
+        else:
+            after = ("Duyệt xong app tự dựng theo cài đặt của bộ phim"
+                     + (", tự cắt 1 Short" if plan.get("auto_short") else "")
+                     + " rồi " + autopilot.summary(p.slug).replace("Tự đăng: ", "đăng lên ") + ".")
+        title = clean_title(_job_title(job.work_dir), 80)
+        dlg = FastApproveDialog(self, title=title, cues=len(parse_srt(job.vi_srt)),
+                                flagged=flagged, after=after)
+        ok = dlg.exec()
+        if dlg.edit_requested:
+            self._resume(iid)
+            return
+        if not ok:
+            return
+        approval.approve(job)
+        self.status.set_status("Đã duyệt " + title[:40], "ok")
+        self._autopilot_after_approve(job)
+
+    def _autopilot_after_approve(self, job) -> None:
+        """A series with Tự động đăng on: queue the episode's render with its settings."""
+        from app.pipeline import autopilot
+
+        _p, plan = self._autopilot_plan(job)
+        if plan is None:
+            return
+        opts = autopilot.render_opts(job)
+        if opts is None:
+            self.status.set_status("Tự động đăng: bộ phim chưa có tập nào dựng — dựng tay một "
+                                   "tập để app học cài đặt.", "warn")
+            return
+        title = job.metadata.get("title") or job.id
+        if self._batch_add([{"id": job.id, "opts": opts, "title": title, "autopilot": "long"}]):
+            self.status.set_status("Tự động: đang dựng rồi lên lịch đăng — " + title[:40], "busy")
+
+    def _autopilot_rendered(self, item: dict) -> None:
+        """A batch item made by the autopilot finished: queue its posts; after an episode, cut
+        the Short (carrying the approval only when its lines are exactly approved lines)."""
+        import time as _t
+
+        from app.pipeline import approval, autopilot
+
+        loaded = store.load_job(item["id"])
+        if loaded is None:
+            return
+        job = loaded[0]
+        kind = item.get("autopilot") or "long"
+        new = autopilot.plan_posts(job, kind)
+        if new:
+            first = min(p["slot"] for p in new)
+            self._notify("Đã lên lịch đăng", f"{len(new)} bài · bài đầu lúc "
+                         f"{_t.strftime('%H:%M %d/%m', _t.localtime(first))}")
+        _p, plan = self._autopilot_plan(job)
+        if kind != "long" or plan is None or not plan.get("auto_short"):
+            return
+
+        def done(child):
+            if child is None:
+                return
+            if not approval.is_approved(child):
+                self._notify("Short cần duyệt", "Short tự cắt có câu khác bản đã duyệt — mở "
+                             "Thư viện để duyệt.", "err")
+                return
+            opts = autopilot.render_opts(child, "short")
+            if opts:
+                self._batch_add([{"id": child.id, "opts": opts,
+                                  "title": child.metadata.get("title") or child.id,
+                                  "autopilot": "short"}])
+
+        self._bg.run(lambda: autopilot.auto_short(job), done,
+                     lambda m: self.status.set_status(f"Short tự cắt lỗi: {m}", "warn"))
+
+    def _post_due(self) -> None:
+        """Every minute: publish the next post whose slot has come (one at a time, off the GUI
+        thread); results go to the post queue and a notification."""
+        from app.pipeline import autopilot
+
+        if self._posting or self._closing:
+            return
+        due = autopilot.due()
+        if not due:
+            return
+        post = due[0]
+        self._posting = True
+
+        def done(res):
+            from desktop.widgets.autopilot_dialogs import PLATFORM_NAMES
+
+            self._posting = False
+            autopilot.record(post["id"], res)
+            where = PLATFORM_NAMES.get(post["platform"], post["platform"])
+            self._notify(f"{where}: " + ("đã đăng" if res.ok else "đăng lỗi"),
+                         res.message or res.url or post["job"], "ok" if res.ok else "err")
+
+        def failed(msg):
+            from app.providers.base import PostResult
+
+            done(PostResult(False, "failed", message=msg))
+
+        self._bg.run(lambda: autopilot.publish(post), done, failed)
 
     def _show_lines(self, rows: list, why: str) -> None:
         """Render page's "Xem N câu": back to the editor with only those lines listed."""
@@ -983,6 +1119,8 @@ class MainWindow(QMainWindow):
     def _batch_item_done(self, item: dict, path: str) -> None:
         self._batch_ok.append(item["title"])
         self._batch_after(item)
+        if item.get("autopilot"):
+            self._autopilot_rendered(item)
         shown = getattr(self.render, "_job", None)
         if self.job is not None and self.job.id == item["id"] and shown is not None                 and getattr(shown, "id", None) == item["id"]:
             self.render.show_done(path)
