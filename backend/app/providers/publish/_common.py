@@ -133,11 +133,12 @@ class LoopbackReceiver:
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 - http.server API
                 parts = urlsplit(self.path)
-                if parts.path.rstrip("/") != receiver.path.rstrip("/"):
-                    self.send_response(404)
+                params = dict(parse_qsl(parts.query, keep_blank_values=True))
+                if (parts.path.rstrip("/") != receiver.path.rstrip("/")
+                        or not ("code" in params or "error" in params)):
+                    self.send_response(404)       # favicon, a reload … — not the redirect
                     self.end_headers()
                     return
-                params = dict(parse_qsl(parts.query, keep_blank_values=True))
                 failed = "error" in params
                 body = _DONE_PAGE.format(
                     title="Chưa kết nối được" if failed else "Đã nhận đăng nhập",
