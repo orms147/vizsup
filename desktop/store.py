@@ -461,6 +461,46 @@ def batch_candidates() -> tuple[list[dict], int]:
     return ready, waiting
 
 
+def gate_waiting(*, flags: bool = False) -> list[dict]:
+    """Projects waiting at the approval gate — «Duyệt hàng loạt»: subtitles ready (vi.srt) and
+    not approved (or edited since), a split video's parts included. A «Cắt Short» project is
+    left out: «Duyệt nhanh» skips it too (its after-approve step would queue a long render).
+    Each: id, title, duration, mtime. ``flags``: also ``cues``, ``flagged`` (flagged_lines —
+    None when they could not be read: never counted as clean), ``after`` (what approving does)
+    and ``auto`` (its series has Tự động đăng on). The running/queued ones are the main
+    window's to filter (MainWindow._processing). Blocking (reads every project's files)."""
+    from app.pipeline import approval, autopilot
+    from app.pipeline.srt import parse_srt
+
+    out = []
+    for j in _plain_jobs():
+        if not j.get("has_vi") or j.get("short"):
+            continue
+        d = Path(j["dirs"][0])
+        job = Job(id=d.name, work_dir=d)
+        try:
+            if approval.is_approved(job):
+                continue
+        except Exception:  # noqa: BLE001 - a status must never break the list
+            continue
+        row = {"id": j["id"], "title": j.get("title") or j["id"],
+               "duration": j.get("duration") or 0.0, "mtime": j.get("mtime") or 0.0}
+        if flags:
+            try:
+                row["cues"] = len(parse_srt(job.vi_srt))
+                row["flagged"] = flagged_lines(job)
+            except Exception:  # noqa: BLE001 - the owner can still open it in the editor
+                row.setdefault("cues", 0)
+                row["flagged"] = None
+            try:
+                row["after"] = autopilot.after_approve_text(job)
+                row["auto"] = autopilot.plan_of(job)[1] is not None
+            except Exception:  # noqa: BLE001
+                row["after"], row["auto"] = "", False
+        out.append(row)
+    return out
+
+
 def batch_templates() -> list[dict]:
     """Rendered projects whose settings can be copied, newest render first."""
     from app.pipeline import batch

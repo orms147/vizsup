@@ -483,6 +483,7 @@ class LibraryView(QWidget):
     message = Signal(str, str)             # status bar text, kind
     compileRequested = Signal(dict)        # CompileDialog.spec() → main window runs the join
     fastApproveRequested = Signal(str)     # «Duyệt nhanh» → the main window approves + autopilot
+    batchApproveRequested = Signal()       # «Duyệt hàng loạt» → the main window's dialog
     rereadRequested = Signal(str)          # «Đọc lại phụ đề» → the main window re-runs it
     compileCancelRequested = Signal()
     batchRequested = Signal(dict)          # BatchDialog.spec() → main window queues the renders
@@ -498,6 +499,10 @@ class LibraryView(QWidget):
         self._thumbs: dict[str, str | None] = {}
         self._checked: set[str] = set()
         self._guard: Callable[[dict], str | None] = lambda _it: None
+        # set by the main window: why a project can't be approved now (running / queued) —
+        # those are not counted as waiting at the gate
+        self.processing: Callable[[str], str | None] = lambda _id: None
+        self._waiting: list[str] = []          # ids waiting at the gate («Duyệt hàng loạt (N)»)
         self._sort = "new"
         self._chip = "all"                    # the status chip filtering the list
         self._cur: str | None = None          # the keyboard cursor row (↑/↓, Enter, Space, Delete)
@@ -687,6 +692,15 @@ class LibraryView(QWidget):
             row.addWidget(b)
         self.chip_btns["all"].setChecked(True)
         row.addStretch(1)
+        # here, not in the header: the header is the page's widest row already
+        self.approve_btn = button("Duyệt hàng loạt", "ShieldCheck", variant="primary", small=True,
+                                  icon_size=14,
+                                  tip="Mọi video đang chờ duyệt trên một màn hình: đọc nhanh các "
+                                      "câu được đánh dấu, duyệt từng video hoặc duyệt một lần "
+                                      "các video không còn câu cần xem")
+        self.approve_btn.clicked.connect(self.batchApproveRequested)
+        self.approve_btn.setVisible(False)       # until the count says someone waits
+        row.addWidget(self.approve_btn)
         self._update_chips()
         return row
 
@@ -773,6 +787,30 @@ class LibraryView(QWidget):
                          lambda r, g=gen: self._apply_details(g, r), lambda _m: None)
             self._bg.run(lambda: store.library_thumbs(items),
                          lambda r, g=gen: self._apply_thumbs(g, r), lambda _m: None)
+        self.refresh_waiting()
+
+    # --- «Duyệt hàng loạt»: how many wait at the approval gate ---------------------------
+    def refresh_waiting(self) -> None:
+        """Count the projects waiting at the gate again (off the GUI thread) — after a refresh,
+        or when a queued run reaches the gate while the library is showing."""
+        gen = self._gen
+        if not self._items:
+            self._apply_waiting(gen, [])
+            return
+        self._bg.run(store.gate_waiting, lambda r, g=gen: self._apply_waiting(g, r),
+                     lambda _m: None)
+
+    def _apply_waiting(self, gen: int, rows: list[dict]) -> None:
+        if gen != self._gen:
+            return
+        self._waiting = [r["id"] for r in rows if not self.processing(r["id"])]
+        n = len(self._waiting)
+        self.approve_btn.setText(f"Duyệt hàng loạt ({n})")
+        self.approve_btn.setVisible(n > 0)
+
+    def waiting(self) -> list[str]:
+        """Ids waiting at the gate (not running / queued), as last counted."""
+        return list(self._waiting)
 
     def _apply_details(self, gen: int, result: dict) -> None:
         self._details.update(result)

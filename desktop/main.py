@@ -148,6 +148,12 @@ class MainWindow(QMainWindow):
         # editor stays usable for the next episode meanwhile
         self.library.batchRequested.connect(self._start_batch)
         self.library.fastApproveRequested.connect(self._fast_approve)
+        # Duyệt hàng loạt: every project waiting at the gate on one screen, each approval
+        # still the owner's click (the same path as Duyệt nhanh: _approve_listed)
+        self.library.batchApproveRequested.connect(self._batch_approve)
+        self.library.processing = self._processing
+        self._edit_asked: str | None = None   # «Sửa trong editor»: no Duyệt nhanh popping over it
+        self._batch_reading = False            # its list is being read (off the GUI thread)
         self.library.rereadRequested.connect(self._reread)
         self.library.batchCancelRequested.connect(self._cancel_batch)
         self.library.batch_queued = self._batch_ids
@@ -407,9 +413,12 @@ class MainWindow(QMainWindow):
             store.debug("on_gate: switched to editor")
             from app.pipeline import approval
 
-            if self._autopilot_plan(self.job)[1] is not None and not approval.is_approved(self.job):
+            asked, self._edit_asked = self._edit_asked == self.job.id, None
+            if self._autopilot_plan(self.job)[1] is not None and not approval.is_approved(self.job) \
+                    and not asked:
                 # Tự động đăng: straight to the one-click review (paste link → approve) — never
-                # for an episode already approved (opening one to look popped it up, 2026-11-01)
+                # for an episode already approved (opening one to look popped it up, 2026-11-01),
+                # nor right after «Sửa trong editor» of that review (it popped up again)
                 QTimer.singleShot(400, lambda jid=self.job.id: self._fast_approve(jid))
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
             import traceback as _tb
@@ -594,7 +603,7 @@ class MainWindow(QMainWindow):
 
     def _fast_approve(self, iid: str) -> None:
         """Thư viện -> «Duyệt nhanh»: the flagged lines only + one button. The gate is this click."""
-        from app.pipeline import approval, autopilot
+        from app.pipeline import autopilot
         from app.pipeline.compilation import _job_title, clean_title
         from app.pipeline.srt import parse_srt
         from desktop.widgets.autopilot_dialogs import FastApproveDialog
@@ -614,24 +623,116 @@ class MainWindow(QMainWindow):
                                 flagged=flagged, after=after)
         ok = dlg.exec()
         if dlg.edit_requested:
-            if self.job is None or self.job.id != iid:
-                self._resume(iid)
-            self.stack.setCurrentIndex(EDITOR)
+            self._open_for_edit(iid)
             return
-        if not ok:
-            return
-        if self.job is not None and self.job.id == job.id:
-            self.editor.save_now()             # the open editor's text is what gets approved
+        if ok:
+            self._approve_listed(job, title)
+
+    def _processing(self, job_id: str) -> str | None:
+        """Why a project can't be approved now — it is being processed or rendered, or waits in
+        a queue to be — else None. «Duyệt nhanh» / «Duyệt hàng loạt» refuse it and the waiting
+        list leaves it out (an approval must hash files no worker is still writing)."""
+        def same(j) -> bool:
+            return j is not None and j.id == job_id
+
+        if same(self._gate_job):
+            return "đang xử lý"
+        if same(self._queue_job) and self._queue_opts is not None:   # not yet at the gate
+            return "đang xử lý trong hàng đợi"
+        if any(o.get("_job_id") == job_id for o in self._queue):
+            return "đang chờ trong hàng đợi"
+        if same(self._batch_job) or (self._render_item or {}).get("id") == job_id:
+            return "đang dựng"
+        if any(b["id"] == job_id for b in self._batch):
+            return "đang chờ dựng"
+        return None
+
+    def _approve_listed(self, job, title: str) -> str | None:
+        """The owner's click in «Duyệt nhanh» / «Duyệt hàng loạt» — ONE path for both: refuse a
+        project still being processed, save the open editor first when it is this project (its
+        text is what gets approved), approve, refresh the editor's lock, then the after-approve
+        step (render queue, Short, posts). None when the project is approved now — also when an
+        approval landed meanwhile (the bot's ✅), without running the after-step twice — else
+        why it was not approved."""
+        from app.pipeline import approval
+
+        why = self._processing(job.id)
+        if why:
+            self.status.set_status(f"Chưa duyệt — video này {why}: " + title[:40], "warn")
+            return why
+        open_here = self.job is not None and self.job.id == job.id
+        if open_here:
+            try:
+                self.editor.save_now()         # the open editor's text is what gets approved
+            except Exception as exc:  # noqa: BLE001 - never approve what could not be saved
+                self.status.set_status(f"Chưa duyệt — không lưu được bản đang mở: {exc}", "warn")
+                return "không lưu được bản đang mở"
         if approval.is_approved(job):
             # approved meanwhile (the Telegram bot's ✅ while this dialog was open): the
             # after-approve step already ran once — never queue the render twice
             self.status.set_status("Đã duyệt rồi (từ Telegram) — " + title[:40], "ok")
-            return
+            return None
         approval.approve(job)
-        if self.job is not None and self.job.id == job.id:
+        if open_here:
             self.editor.refresh_approval()
         self.status.set_status("Đã duyệt " + title[:40], "ok")
         self._autopilot_after_approve(job)
+        return None
+
+    def _open_for_edit(self, iid: str) -> None:
+        """«Sửa trong editor» of Duyệt nhanh / Duyệt hàng loạt: that project in the editor."""
+        if self.job is not None and self.job.id == iid:
+            self.stack.setCurrentIndex(EDITOR)
+            return
+        self._edit_asked = iid                 # opening it must not pop Duyệt nhanh back up
+        self._resume(iid)
+        if (self.job is None or self.job.id != iid) and \
+                (self._gate_job is None or self._gate_job.id != iid):
+            self._edit_asked = None            # refused (busy): nothing will open it now
+
+    def _batch_approve(self) -> None:
+        """Thư viện → «Duyệt hàng loạt»: every project waiting at the gate on one screen. The
+        gate stays the owner's click — each approval is one in the dialog, through
+        _approve_listed like «Duyệt nhanh». The flags are read off the GUI thread (~30 ms a
+        project: a few seconds for a big batch)."""
+        if self._batch_reading:
+            return
+        self.editor.flush()        # the open project's newest edit counts (no-op when saved)
+        self._batch_reading = True
+        self.status.set_status("Đang đọc các video chờ duyệt…", "busy")
+
+        def failed(msg: str) -> None:
+            self._batch_reading = False
+            self.status.set_status(f"Chưa đọc được các video chờ duyệt: {msg}", "warn")
+
+        self._bg.run(lambda: store.gate_waiting(flags=True), self._batch_approve_open, failed)
+
+    def _batch_approve_open(self, rows: list[dict]) -> None:
+        from app.pipeline.compilation import _job_title, clean_title
+        from desktop.widgets.batch_approve_dialog import BatchApproveDialog
+
+        self._batch_reading = False
+        rows = [r for r in rows if not self._processing(r["id"])]    # as of now, not of the read
+        if not rows:
+            self.status.set_status("Không có video nào đang chờ duyệt.", "ok")
+            self.library.refresh()
+            return
+
+        def approve(iid: str) -> str | None:
+            loaded = store.load_job(iid)
+            if loaded is None or not loaded[0].vi_srt.exists():
+                return "không còn trên máy"
+            job = loaded[0]
+            return self._approve_listed(job, clean_title(_job_title(job.work_dir), 80))
+
+        dlg = BatchApproveDialog(self, rows, approve=approve)
+        self.status.set_status(PAGE_IDLE.get(self.stack.currentIndex(), "Sẵn sàng"))
+        dlg.exec()
+        if dlg.approved:
+            self.library.refresh()
+            self.input.refresh_recent()
+        if dlg.edit_id:
+            self._open_for_edit(dlg.edit_id)
 
     def _autopilot_after_approve(self, job) -> None:
         """A series with Tự động đăng on: queue the episode's render with its settings."""
@@ -1385,6 +1486,8 @@ class MainWindow(QMainWindow):
         self.input.set_done()
         store.save_job(job, opts, "await_edit")
         self.input.refresh_recent()
+        if self.stack.currentIndex() == LIBRARY:
+            self.library.refresh_waiting()  # «Duyệt hàng loạt (N)»: one more waits at the gate
         title = (job.metadata.get("title") or job.id).split("#")[0].strip()
         self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
         self.remote.gate(job)               # the bot: the flagged lines + [✅ Duyệt]

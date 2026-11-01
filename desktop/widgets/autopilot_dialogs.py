@@ -37,6 +37,36 @@ def _mmss(t: float) -> str:
     return f"{int(t // 60):02d}:{int(t % 60):02d}"
 
 
+def flag_table(flagged: list[dict] | None = None) -> QTableWidget:
+    """The flagged lines (store.flagged_lines rows): Lúc · Tiếng Trung · Tiếng Việt · Cần xem vì.
+    «Duyệt nhanh» shows one; «Duyệt hàng loạt» refills its own per video (``fill_flags``)."""
+    t = QTableWidget(0, 4)
+    t.setHorizontalHeaderLabels(["Lúc", "Tiếng Trung", "Tiếng Việt", "Cần xem vì"])
+    t.verticalHeader().setVisible(False)
+    # rows follow the columns' width (sized before the dialog showed they kept the first guess);
+    # the theme's item padding can still cut a long line's last words: full text in the tooltip
+    t.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+    t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    t.setWordWrap(True)
+    h = t.horizontalHeader()
+    h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+    for c in (1, 2, 3):
+        h.setSectionResizeMode(c, QHeaderView.Stretch)
+    fill_flags(t, flagged or [])
+    return t
+
+
+def fill_flags(t: QTableWidget, flagged: list[dict]) -> None:
+    t.setRowCount(len(flagged))
+    for r, row in enumerate(flagged):
+        for c, text in enumerate((_mmss(row["start"]), row["zh"], row["vi"],
+                                  ", ".join(row["flags"]))):
+            it = QTableWidgetItem(text)
+            if c:
+                it.setToolTip(text)
+            t.setItem(r, c, it)
+
+
 class FastApproveDialog(VzDialog):
     """``after``: one line saying what the app does once approved (from autopilot.summary)."""
 
@@ -48,20 +78,7 @@ class FastApproveDialog(VzDialog):
             self.body.addWidget(label(f"{cues} câu · {len(flagged)} câu được đánh dấu cần xem — "
                                       "đọc nhanh các câu dưới đây; cần sửa thì mở editor.",
                                       "secondary", wrap=True))
-            t = QTableWidget(len(flagged), 4)
-            t.setHorizontalHeaderLabels(["Lúc", "Tiếng Trung", "Tiếng Việt", "Cần xem vì"])
-            t.verticalHeader().setVisible(False)
-            t.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            t.setWordWrap(True)
-            for r, row in enumerate(flagged):
-                for c, text in enumerate((_mmss(row["start"]), row["zh"], row["vi"],
-                                          ", ".join(row["flags"]))):
-                    t.setItem(r, c, QTableWidgetItem(text))
-            h = t.horizontalHeader()
-            h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            for c in (1, 2, 3):
-                h.setSectionResizeMode(c, QHeaderView.Stretch)
-            t.resizeRowsToContents()
+            t = flag_table(flagged)
             t.setMinimumHeight(min(360, 40 + 34 * len(flagged)))
             self.table = t
             self.body.addWidget(t)
@@ -69,7 +86,7 @@ class FastApproveDialog(VzDialog):
             self.table = None
             self.body.addWidget(label(f"{cues} câu · không có câu nào bị đánh dấu.", "secondary"))
         self.body.addWidget(label(after, "small", wrap=True))
-        edit = self.add_button("Sửa trong editor", icon_name="Pencil")
+        edit = self.add_button("Sửa trong editor", icon_name="Captions")   # no Pencil icon bundled
         edit.clicked.connect(self._edit)
         self.approve_btn = self.add_button("Duyệt", icon_name="ShieldCheck", primary=True,
                                            accept=True)
