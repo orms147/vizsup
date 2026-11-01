@@ -37,6 +37,20 @@ class VzDialog(QDialog):
         self._buttons.addStretch(1)
         v.addLayout(self._buttons)
 
+    def showEvent(self, e) -> None:  # noqa: N802
+        """Tall enough for its wrapped text at the width it opens with. Qt sizes the window by
+        the layout's minimum, which a word-wrapped label underestimates at a wider width: in
+        "Dịch một loạt video" the "Chọn tất cả" row sat 30 px over the bottom of the list."""
+        super().showEvent(e)
+        lay = self.layout()
+        if e.spontaneous() or lay is None or not lay.hasHeightForWidth():
+            return
+        need = lay.totalHeightForWidth(self.width())
+        if need > self.height():
+            screen = self.screen()
+            room = screen.availableGeometry().height() - 60 if screen is not None else need
+            self.resize(self.width(), max(self.height(), min(need, room)))
+
     def add_button(self, text: str, *, icon_name: str | None = None, primary: bool = False,
                    accept: bool = False):
         b = button(text, icon_name, variant="primary" if primary else "")

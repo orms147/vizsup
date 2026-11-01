@@ -104,6 +104,7 @@ def cjk_font() -> str:
 def qss() -> str:
     sans, mono = fonts()
     v = V2
+    spin = (Path(__file__).parent / "assets" / "spin").as_posix()   # spin box step arrows
     return f"""
 * {{ outline: none; }}
 QWidget {{
@@ -183,6 +184,12 @@ QPushButton#ghost:hover, QToolButton#ghost:hover {{ background:{v['raised']}; co
 QPushButton#ghost:checked, QToolButton#ghost:checked {{ color:{v['purple_bright']};
     background:{v['purple_soft']}; border-color:{v['purple_line']}; }}
 QPushButton#danger {{ background:{v['red_soft']}; border-color:{v['red_line']}; color:{v['red']}; }}
+/* an id rule outranks the plain :disabled one above: without these a disabled ghost / danger /
+   link button looked exactly like a live one (Thư viện "Xóa dự án đã chọn" with nothing ticked) */
+QPushButton#ghost:disabled, QToolButton#ghost:disabled, QPushButton#link:disabled {{
+    color:{v['dim']}; background:transparent; border-color:transparent; }}
+QPushButton#danger:disabled {{ background:{v['panel']}; border-color:{v['line_soft']};
+    color:{v['dim']}; }}
 QPushButton#active, QToolButton#active, QPushButton:checked {{ color:{v['purple_bright']};
     background:{v['purple_soft']}; border-color:{v['purple_line']}; }}
 QPushButton#small, QToolButton#small, QPushButton[small="true"] {{ min-height:27px;
@@ -222,6 +229,19 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {{
     selection-background-color:{v['purple_soft']}; selection-color:{v['text']};
 }}
 QTextEdit, QPlainTextEdit {{ padding:9px 11px; }}
+/* the step arrows: unstyled they were black on the near-black field (Bộ phim → Theo dõi
+   "Kiểm tra mỗi", Tự động đăng "mỗi ngày", Nhạc "fade") — the wheel never steps a value
+   here (no_wheel), so the arrows are the only mouse way to change it */
+QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {{ width:18px; border:none; background:transparent; }}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {{ background:{v['raised']}; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image:url({spin}/up.svg); width:10px; height:10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image:url({spin}/down.svg); width:10px;
+    height:10px; }}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{ image:url({spin}/up-off.svg); }}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+    image:url({spin}/down-off.svg); }}
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QSpinBox:focus {{
     border-color:{v['purple']}; }}
 QLineEdit:disabled, QPlainTextEdit:disabled {{ color:{v['dim']}; border-color:{v['line_soft']}; }}
@@ -296,6 +316,13 @@ QCheckBox::indicator {{ border:1px solid {v['field_line']}; border-radius:4px; b
 QCheckBox::indicator:checked {{ background:{v['purple']}; border-color:{v['purple']}; }}
 QRadioButton::indicator {{ border:1px solid {v['field_line']}; border-radius:7px; background:{v['input']}; }}
 QRadioButton::indicator:checked {{ background:{v['purple']}; border-color:{v['purple']}; }}
+/* tick boxes inside lists (Dịch một loạt, Ghép video, Dựng hàng loạt): the default one was a
+   near-black square on the near-black list — the owner could not see what was ticked */
+QTreeView::indicator, QListView::indicator {{ width:14px; height:14px; border:1px solid {v['dim']};
+    border-radius:4px; background:{v['input']}; }}
+QTreeView::indicator:checked, QListView::indicator:checked {{ background:{v['purple']};
+    border-color:{v['purple']}; }}
+QTreeView::indicator:disabled, QListView::indicator:disabled {{ border-color:{v['line']}; }}
 
 /* splitter */
 QSplitter::handle {{ background:transparent; }}
