@@ -274,7 +274,7 @@ class PipelineWorker(QObject):
                 out_dir, sources, title=spec.get("title") or compilation.default_title(sources),
                 log=self.log.emit, progress=lambda f, m: self.progress.emit(f, m),
                 cancel=lambda: self._cancel)
-            if spec.get("vertical", store.load_ui_state().get("render_vertical")):
+            if spec.get("vertical", store.load_ui_state().get("render_vertical", True)):
                 from app.pipeline import vertical    # "Dựng thêm bản dọc 9:16" also for a join
 
                 if vertical.is_horizontal(out):

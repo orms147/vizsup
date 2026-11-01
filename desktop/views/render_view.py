@@ -497,7 +497,7 @@ class RenderView(QWidget):
         self.vertical_cb.setToolTip(
             "Dựng xong bản ngang thì làm thêm output.vertical.mp4: cùng video, phụ đề và giọng, "
             "đặt giữa khung 1080×1920 trên nền hình mờ. Chỉ mã hóa thêm, không lồng tiếng lại.")
-        self.vertical_cb.setChecked(bool(store.load_ui_state().get("render_vertical")))
+        self.vertical_cb.setChecked(bool(store.load_ui_state().get("render_vertical", True)))
         self.vertical_cb.toggled.connect(lambda on: store.update_ui_state(render_vertical=on))
         self.frame.currentIndexChanged.connect(
             lambda _i: self.vertical_cb.setVisible(self.frame.currentData() == "source"))
@@ -851,9 +851,15 @@ class RenderView(QWidget):
         self.post_btn = button("Mô tả đăng bài", "Copy",
                                tip="Mô tả có ghi nguồn + nhãn AI, và danh sách kiểm tra trước khi đăng")
         self.post_btn.clicked.connect(self._show_post)
+        # "Dựng thêm bản dọc 9:16" left an output.vertical.mp4: look at either in the pane
+        self.orient_btn = button("Xem bản dọc", "Smartphone",
+                                 tip="Chuyển khung xem giữa bản ngang và bản dọc 9:16 vừa dựng")
+        self.orient_btn.clicked.connect(self._toggle_result_orient)
+        self.orient_btn.setVisible(False)
+        self._viewing_vertical = False
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
-        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn):
+        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn, self.orient_btn):
             al.addWidget(b)
         al.addStretch(1)
         # a long "N câu lồng tiếng vào trễ…" line used to sit in the button row and made the
@@ -887,6 +893,7 @@ class RenderView(QWidget):
             if out is not None and Path(out).exists():
                 self._out = str(out)
                 self.result.load(Path(out))
+            self._sync_orient_btn()
             self.again_lbl.setVisible(bool(self._out))
             self._right_stack.setCurrentIndex(2 if self._out else 0)
         self._job = job
@@ -1799,10 +1806,33 @@ class RenderView(QWidget):
             spent = usage.label(self._job.work_dir)     # E-14
         self.out_meta.setText(" · ".join(p for p in (Path(path).name, dur, size, spent) if p))
         self.result.load(Path(path))
+        self._sync_orient_btn()
         self._right_stack.setCurrentIndex(2)
         self.again_lbl.setVisible(True)
         self.render_btn.setEnabled(True)
         self._update_lock()
+
+    def _vertical_out(self) -> Path | None:
+        """The 9:16 copy made with the shown output (never for a quick preview)."""
+        from app.pipeline.vertical import VERTICAL
+
+        if not self._out or self._showing_quick:
+            return None
+        v = Path(self._out).with_name(VERTICAL)
+        return v if v.exists() else None
+
+    def _sync_orient_btn(self) -> None:
+        self._viewing_vertical = False
+        self.orient_btn.setText("Xem bản dọc")
+        self.orient_btn.setVisible(self._vertical_out() is not None)
+
+    def _toggle_result_orient(self) -> None:
+        v = self._vertical_out()
+        if v is None:
+            return
+        self._viewing_vertical = not self._viewing_vertical
+        self.result.load(v if self._viewing_vertical else Path(self._out))
+        self.orient_btn.setText("Xem bản ngang" if self._viewing_vertical else "Xem bản dọc")
 
     def _show_result_kind(self, *, quick: bool) -> None:
         """The result pane shows either the real output or a quick preview; saving and
@@ -1913,19 +1943,29 @@ class RenderView(QWidget):
         if dest is None:
             return
         src = self._out
+        from app.pipeline.vertical import VERTICAL
+
+        vsrc = Path(src).with_name(VERTICAL)          # "Dựng thêm bản dọc 9:16" made one too
+        vdest = dest.with_name(f"{dest.stem} (dọc 9x16).mp4") if vsrc.exists() else None
         self.save_btn.setEnabled(False)
         self.res_status.setText("Đang lưu…")
+
+        def work():
+            _link_or_copy(Path(src), dest)
+            if vdest is not None:
+                _link_or_copy(vsrc, vdest)
+            return str(dest)
 
         def done(p):
             self._saved = p
             self.save_btn.setEnabled(True)
-            self.res_status.setText(f"Đã lưu: {Path(p).name}")
+            self.res_status.setText(f"Đã lưu: {Path(p).name}" + (" + bản dọc 9:16" if vdest else ""))
 
         def fail(msg):
             self.save_btn.setEnabled(True)
             self.res_status.setText(f"Không lưu được: {msg}")
 
-        self._bg.run(lambda: str(shutil.copyfile(src, dest)), done, fail)
+        self._bg.run(work, done, fail)
 
     def _export(self, kind: str) -> None:
         if self._job is None:
@@ -2010,6 +2050,18 @@ def _read_project_file(job) -> dict:
     except (OSError, ValueError, AttributeError):
         return {}
     return d if isinstance(d, dict) else {}
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    """``dest`` as a hard link to ``src`` (same drive: instant, no extra space — a later render
+    replaces output.mp4 with a new file, so the saved one never changes), else a copy."""
+    import os
+
+    dest.unlink(missing_ok=True)                    # the save dialog already asked to replace
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copyfile(src, dest)
 
 
 def _update_project_file(job, **fields) -> None:

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from desktop import store
 from desktop.cuemodel import fmt_time
-from desktop.icons import pixmap
+from desktop.icons import icon, pixmap
 from desktop.theme import V2
 from desktop.ui_thread import BgRunner
 from desktop.widgets.chrome import (
@@ -516,14 +516,21 @@ class InputView(QWidget):
         self.refine = ProviderCombo(providers["translation"], allow_none=True, require="can_refine")
         self.asr = ProviderCombo(providers["asr"])
         self.tts = ProviderCombo(providers["tts"])
-        g.addLayout(_field("Bộ dịch bản nháp", self.draft), 3, 0)
-        g.addLayout(_field("Tinh chỉnh · tùy chọn", self.refine), 3, 1)
+        engine_fields = []
+        for title, combo, row, col in (("Bộ dịch bản nháp", self.draft, 3, 0),
+                                       ("Tinh chỉnh · tùy chọn", self.refine, 3, 1),
+                                       ("Bộ giọng đọc mặc định", self.tts, 4, 1)):
+            f = QWidget()
+            f.setObjectName("bare")
+            f.setLayout(_field(title, combo))
+            f.layout().setContentsMargins(0, 0, 0, 0)
+            g.addWidget(f, row, col)
+            engine_fields.append(f)
         self._asr_field = QWidget()
         self._asr_field.setObjectName("bare")
         self._asr_field.setLayout(_field("Nhận dạng giọng nói", self.asr))
         self._asr_field.layout().setContentsMargins(0, 0, 0, 0)
         g.addWidget(self._asr_field, 4, 0)
-        g.addLayout(_field("Giọng lồng tiếng", self.tts), 4, 1)
 
         self.auto_context = QCheckBox("Tự đọc ngữ cảnh video")
         self.auto_context.setToolTip(
@@ -638,6 +645,40 @@ class InputView(QWidget):
         self._series_field = sf
         g.addWidget(sf, 11, 0, 1, 2)
         self.refresh_series()
+        # Basic (always shown): where the Chinese comes from, the series, the OCR band. The
+        # engines and the toggles — all with sensible defaults — fold under "Tùy chọn nâng
+        # cao" (the owner, 2026-11-01: the panel was too busy to use)
+        advanced = [self._ocr_field, self._ocr_engine_field, *engine_fields, self._asr_field,
+                    self.auto_context, self.auto_snap, self.extract_terms, self.ocr_proofread,
+                    self.ai_review, self.ai_frames, self.split_long, self.ocr_fast,
+                    self.clause_split, self.timing_pass, self.asr_note, self.vi_lint,
+                    self.voice_guess, self.pron_check, self.voice_hints]
+        adv = QWidget()
+        adv.setObjectName("bare")
+        ga = QGridLayout(adv)
+        ga.setContentsMargins(0, 4, 0, 0)
+        ga.setHorizontalSpacing(14)
+        ga.setVerticalSpacing(12)
+        for w in advanced:
+            r, c, rs, cs = g.getItemPosition(g.indexOf(w))
+            g.removeWidget(w)
+            ga.addWidget(w, r, c, rs, cs)
+        for w, row in ((sf, 1), (self.pick_area, 2), (self._srt_field, 3)):
+            g.removeWidget(w)
+            g.addWidget(w, row, 0, 1, 2)
+        self.adv_btn = button("Tùy chọn nâng cao", "ChevronDown", variant="ghost", small=True,
+                              checkable=True)
+        self.adv_btn.setToolTip("Bộ đọc chữ, bộ dịch, giọng mặc định và các bước tự động — "
+                                "đã đặt sẵn hợp lý, ít khi cần đổi")
+        self.adv_btn.toggled.connect(lambda on: (adv.setVisible(on), self.adv_btn.setIcon(
+            icon("ChevronUp" if on else "ChevronDown", V2["secondary"], 14)),
+            store.update_ui_state(options_advanced=on)))
+        g.addWidget(self.adv_btn, 4, 0, 1, 2, Qt.AlignLeft)
+        g.addWidget(adv, 5, 0, 1, 2)
+        self._advanced = adv
+        on = bool(store.load_ui_state().get("options_advanced", False))
+        self.adv_btn.setChecked(on)
+        adv.setVisible(on)
         for w in (self.source, self.ocr_region, self.ocr_engine, self.draft, self.refine,
                   self.asr, self.tts):
             compact_combo(w, 14)          # long engine names elide, never widen the panel
@@ -717,7 +758,13 @@ class InputView(QWidget):
         def name(combo) -> str:
             return combo.currentText().split(" — ")[0].split(" · ")[0].strip()
 
-        parts = [src, name(self.draft), name(self.tts)]
+        # the voice the render page will use (the user's last pick), not the engine list
+        st = store.load_ui_state()
+        voice = str(st.get("render_voice") or "").split(":", 1)[-1]
+        voice = voice.replace("vi-VN-", "").replace("Neural", "")
+        pitch = int(st.get("render_pitch") or 0)
+        spoken = f"giọng {voice}" + (f" {pitch:+d}" if pitch else "") if voice else name(self.tts)
+        parts = [src, name(self.draft), spoken]
         self.defaults.setText("   ·   ".join(p for p in parts if p))
 
     def _pick_srt(self) -> None:

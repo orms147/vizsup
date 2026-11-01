@@ -405,8 +405,11 @@ class MainWindow(QMainWindow):
             self._notify("Phụ đề đã sẵn sàng",
                          f"{len(self.editor.cues)} câu · {self.editor.pending_count()} câu cần xem lại")
             store.debug("on_gate: switched to editor")
-            if self._autopilot_plan(self.job)[1] is not None:
-                # Tự động đăng: straight to the one-click review (paste link → approve)
+            from app.pipeline import approval
+
+            if self._autopilot_plan(self.job)[1] is not None and not approval.is_approved(self.job):
+                # Tự động đăng: straight to the one-click review (paste link → approve) — never
+                # for an episode already approved (opening one to look popped it up, 2026-11-01)
                 QTimer.singleShot(400, lambda jid=self.job.id: self._fast_approve(jid))
         except Exception as exc:  # noqa: BLE001 - never let editor-load kill the app
             import traceback as _tb

@@ -51,7 +51,7 @@ _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "r
                   "render_quality", "render_split", "recent_colors", "watermark", "render_fill",
                   "episode_card", "voice_by_gender", "cue_density", "safe_zone", "render_post_open",
                   "render_vertical", "render_voice", "render_rate", "render_audio",
-                  "render_pitch")
+                  "render_pitch", "options_advanced")
 
 
 def update_ui_state(**kv) -> None:

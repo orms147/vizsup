@@ -170,11 +170,12 @@ def test_option_checkboxes_and_notes_never_overlap(view):
     from PySide6.QtCore import QRect
 
     view.opt_btn.setChecked(True)           # narrow layout: the panel shows when its button is on
+    view.adv_btn.setChecked(True)           # the engines + toggles fold under "nâng cao"
     view.resize(1200, 1000)
     view.show()
     QApplication.processEvents()
     names = ("auto_context", "auto_snap", "clause_split", "timing_pass", "vi_lint", "voice_guess",
-             "series_combo", "ai_review", "ai_frames",
+             "series_combo", "pick_area", "pron_check", "voice_hints", "ai_review", "ai_frames",
              "extract_terms", "ocr_proofread", "split_long", "ocr_fast", "asr_note")
     rects = {}
     for n in names:
@@ -184,3 +185,22 @@ def test_option_checkboxes_and_notes_never_overlap(view):
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             assert not rects[a].intersects(rects[b]), f"{a} overlaps {b}"
+
+
+def test_advanced_options_fold_and_the_choice_is_remembered(view):
+    """The basics stay; the engines and toggles fold under "Tùy chọn nâng cao" (2026-11-01)."""
+    from desktop import store
+
+    view.opt_btn.setChecked(True)
+    view.resize(1200, 1000)
+    view.show()
+    view.adv_btn.setChecked(False)
+    QApplication.processEvents()
+    for n in ("source", "series_combo", "pick_area", "adv_btn"):
+        assert getattr(view, n).isVisibleTo(view), n
+    for n in ("draft", "auto_context", "pron_check"):
+        assert not getattr(view, n).isVisibleTo(view), n
+    view.adv_btn.setChecked(True)
+    QApplication.processEvents()
+    assert view.pron_check.isVisibleTo(view)
+    assert store.load_ui_state().get("options_advanced") is True
