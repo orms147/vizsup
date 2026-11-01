@@ -681,7 +681,8 @@ def _playable(path: Path) -> bool:
 def _user_message(exc: Exception) -> str:
     """What the error card shows: our own messages are already Vietnamese sentences
     ("Máy chủ giọng đọc đang giới hạn …") — "RuntimeError:" in front only scares; a
-    foreign exception keeps its type name, which is what makes it debuggable."""
-    if type(exc) in (RuntimeError, ValueError) and str(exc).strip():
-        return str(exc)
-    return f"{type(exc).__name__}: {exc}"
+    foreign exception keeps its type name, which is what makes it debuggable; the network, a
+    refused key and a busy server read in plain Vietnamese (desktop/errors.py)."""
+    from desktop.errors import user_message
+
+    return user_message(exc)

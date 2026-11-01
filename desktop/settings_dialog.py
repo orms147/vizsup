@@ -145,7 +145,7 @@ OPTIONS = [
 ]
 OPT_ATTR_BY_ENV = {env: attr for env, _n, attr, _k, _h, _c in OPTIONS}
 GROUPS = (("keys", "Khóa API", "KeyRound"), ("download", "Tải video", "Download"),
-          ("ai", "AI và mô hình", "Sparkles"), ("paths", "Đường dẫn", "HardDrive"),
+          ("ai", "AI và mô hình", "Sparkles"), ("paths", "Thư mục và công cụ", "HardDrive"),
           ("accounts", "Đăng video", "Upload"), ("check", "Kiểm tra", "ShieldCheck"))
 # doctor status → (icon, theme colour) for the Kiểm tra rows
 _CHECK_STYLE = {"ok": ("CircleCheck", "green"), "warn": ("TriangleAlert", "amber"),

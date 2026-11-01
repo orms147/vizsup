@@ -114,7 +114,9 @@ class _Task(QObject):
         try:
             result = self._fn()
         except Exception as exc:  # noqa: BLE001
-            emit_quietly(self.failed, f"{type(exc).__name__}: {exc}")
+            from desktop.errors import user_message
+
+            emit_quietly(self.failed, user_message(exc))      # "mất mạng", not APIConnectionError
             return
         emit_quietly(self.done, result)
 

@@ -28,7 +28,7 @@ from desktop.audio import follow_default_output
 from desktop.cuemodel import fmt_time
 from desktop.icons import icon
 from desktop.theme import V2
-from desktop.widgets.chrome import badge, button, icon_button, icon_label, label
+from desktop.widgets.chrome import badge, button, icon_button, label
 from desktop.widgets import safe_zones
 from desktop.widgets.video_canvas import VideoCanvas
 
@@ -248,7 +248,10 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._scrub, 1)
         if not scrub:
             ctl.addStretch(1)
-        self._vol_icon = icon_label("Volume2", V2["secondary"], 16)
+        # the speaker mutes / unmutes: on a narrow panel it stays alone so the seek bar keeps
+        # its length (the editor's was ~60 px at 1366×768, 2026-11-01)
+        self._vol_icon = icon_button("Volume2", "Tắt / bật tiếng", checkable=True)
+        self._vol_icon.toggled.connect(self._on_mute)
         ctl.addWidget(self._vol_icon)
         self._vol = QSlider(Qt.Horizontal)
         self._vol.setFixedWidth(96)
@@ -327,11 +330,9 @@ class VideoPanel(QFrame):
         super().resizeEvent(ev)
         # a 9:16 video gets a ~300 px column: the transport keeps play / loop / time / speed and
         # drops the volume slider (it needs ~130 px) until the panel is wider again
-        wide = self.width() >= VOLUME_MIN_PANEL
-        self._vol.setVisible(wide)
-        self._vol_icon.setVisible(wide)
-        # the seek bar gets the room: a narrow panel (the editor's) keeps a short volume
-        self._vol.setFixedWidth(96 if self.width() >= VOLUME_WIDE_PANEL else 56)
+        self._vol_icon.setVisible(self.width() >= VOLUME_MIN_PANEL)
+        # the seek bar gets the room: below VOLUME_WIDE_PANEL only the mute button stays
+        self._vol.setVisible(self.width() >= VOLUME_WIDE_PANEL)
 
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:
@@ -493,6 +494,11 @@ class VideoPanel(QFrame):
     def _on_volume(self, v: int) -> None:
         if self._audio is not None:
             self._audio.setVolume(v / 100.0)
+
+    def _on_mute(self, on: bool) -> None:
+        if self._audio is not None:
+            self._audio.setMuted(on)
+        self._vol_icon.setIcon(icon("VolumeX" if on else "Volume2", V2["secondary"], 16))
 
     def _on_speed(self, i: int) -> None:
         if self._player:

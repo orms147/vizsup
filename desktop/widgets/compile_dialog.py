@@ -29,6 +29,7 @@ from app.pipeline import compilation as comp
 from app.pipeline.compilation import Source
 from desktop.theme import V2
 from desktop.widgets.chrome import button, icon_label, label
+from desktop import store
 from desktop.widgets.dialogs import VzDialog
 from desktop.widgets.recent_projects import duration_label
 
@@ -55,8 +56,12 @@ class _PickDialog(VzDialog):
         self.list = QListWidget()
         self.list.setMinimumHeight(320)
         self.list.setStyleSheet("QListWidget::item{padding:5px 6px;}")
+        # long titles elide instead of scrolling sideways; a named series reads in Vietnamese
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.ElideRight)
         for s in comp.order(sources):
-            it = QListWidgetItem(f"{_row_text(s)}   ·   {comp.clean_title(s.title, 50)}   ·   "
+            name = store.friendly_title(s.id, s.title) or comp.clean_title(s.title, 50)
+            it = QListWidgetItem(f"{_row_text(s)}   ·   {name}   ·   "
                                  f"{_length(s)}" if s.kind != "compilation" else
                                  f"{_row_text(s)}   ·   {_length(s)}")
             it.setData(ROLE, s.id)

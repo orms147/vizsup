@@ -65,14 +65,18 @@ class BatchDialog(VzDialog):
         for text, state in (("Chọn tất cả", Qt.Checked), ("Bỏ chọn", Qt.Unchecked)):
             b = button(text, variant="ghost", small=True)
             b.clicked.connect(lambda _=False, st=state: self._set_all(st))
+            b.setVisible(bool(candidates))        # nothing to pick: no empty list, no buttons
             row.addWidget(b)
+        self.list.setVisible(bool(candidates))
         row.addStretch(1)
         if waiting:
             row.addWidget(label(f"{waiting} video khác chưa duyệt — mở để duyệt rồi thêm sau",
                                 "small"))
         self.body.addLayout(row)
         if not candidates:
-            self.body.addWidget(label("Chưa có video nào đã duyệt mà chưa dựng.", "small"))
+            self.body.addWidget(label("Không có video nào cần dựng: mọi video đã duyệt đều đã "
+                                      "dựng xong. Duyệt thêm video rồi mở lại.", "secondary",
+                                      wrap=True))
 
         trow = QHBoxLayout()
         trow.setSpacing(10)

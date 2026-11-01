@@ -2064,6 +2064,10 @@ class RenderView(QWidget):
         target = self._saved if self._saved and os.path.exists(self._saved) else shown
         if target and os.path.exists(target):
             subprocess.Popen(["explorer", "/select,", os.path.normpath(target)])  # noqa: S603,S607
+        elif self._job is not None and Path(self._job.work_dir).is_dir():
+            # the video is gone (deleted, or "Chỉ xóa file nặng"): the project folder, not nothing
+            subprocess.Popen(["explorer", os.path.normpath(str(self._job.work_dir))])  # noqa: S603,S607
+            self.res_status.setText("Không thấy tệp video — đã mở thư mục dự án.")
 
     def shutdown(self) -> None:
         self._bg.shutdown()
