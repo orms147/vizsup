@@ -1,4 +1,4 @@
-# vizsup — hướng dẫn dùng (bàn giao, 31/10/2026)
+# vizsup — hướng dẫn dùng (bàn giao 31/10/2026, cập nhật 01/11/2026)
 
 Một trang cho chủ máy: cài một lần, rồi mỗi ngày chỉ cần **bấm duyệt**.
 Chi tiết từng phần nằm ở các tài liệu được nhắc tên bên dưới.
@@ -25,6 +25,23 @@ Tập mới trên Douyin / Bilibili (hoặc bạn gửi link cho bot / dán vào
 - **Bước duyệt luôn là của bạn.** Chưa duyệt thì app không đọc lồng tiếng, không dựng, không
   đăng gì.
 - Muốn sửa kỹ một tập: mở tập đó trong app, sửa, rồi duyệt như cũ.
+
+## Mới (01/11/2026)
+
+- **Mỗi lần dựng ra cả hai bản**: ngang (YouTube / Facebook) và dọc 9:16 1080×1920
+  (TikTok / Reels / Shorts) — ô «Dựng thêm bản dọc 9:16» ở màn Dựng, bật sẵn; «Ghép video»
+  cũng ra bản dọc. «Lưu video…» lưu cả hai, «Xem bản dọc» xem ngay trong app.
+- **Mặc định theo lựa chọn của bạn**: kiểu chữ mẫu «Default», giọng Ngọc Huyền ×1.3, thanh
+  mới **«Cao độ giọng»** (+2 gần giọng review phim), giữ âm gốc + lồng tiếng, 1080p «Nét»,
+  watermark «Hải Thanh Review». Lần sau app nhớ giọng / tốc độ / cao độ / âm thanh bạn chọn.
+- **Màn Bắt đầu gọn hơn**: chỉ còn Nguồn phụ đề, Bộ phim, Khoanh vùng chữ Trung; phần còn lại
+  ở «Tùy chọn nâng cao».
+- **Soát xưng hô cả video** (bật sẵn): AI đọc cả tập để biết ai nói với ai, rồi sửa chữ tự
+  xưng sai cặp (nữ sinh nói với anh Cố «tôi» → «em»).
+- **Đăng bài**: YouTube tự gắn nhãn «Tạo bằng AI»; tiêu đề tự động
+  «Tập N | Chuyến Xe Tận Thế | Hải Thanh Review», mô tả có hashtag + «Bộ phim:» + ghi nguồn.
+  Video đã xuất + mô tả soạn sẵn: `C:\Users\Admin\Videos\Chuyến Xe Tận Thế\`.
+- **Thư viện** ghi «Chuyến Xe Tận Thế · Tập 9» thay tiêu đề tiếng Trung dài.
 
 ## Cài một lần
 
