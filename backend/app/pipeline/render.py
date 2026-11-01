@@ -202,6 +202,15 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
         bar_subs=bool(o.get("bar_subs")),         # … and the dialogue in the bottom bar
     )
     review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
-    progress(1.0, "Hoàn tất")
     log(f"✓ Xuất: {out}")
+    # "Dựng thêm bản dọc 9:16": the finished horizontal video in a 9:16 frame, one encode
+    from app.pipeline import vertical
+
+    if vertical.wanted(o) and vertical.is_horizontal(Path(out)):
+        check()
+        vertical.make_vertical(
+            Path(out), preset=o.get("preset"), log=log,
+            progress=lambda f: progress(0.99, f"Đang dựng bản dọc 9:16 · {int(f * 100)}%"),
+            cancel=(lambda: bool(cancel and cancel())))
+    progress(1.0, "Hoàn tất")
     return Path(out)

@@ -76,6 +76,27 @@ BUILTIN_PRESETS = {
 }
 
 
+DEFAULT_PRESET_NAMES = ("default", "mặc định")
+
+
+def default_preset() -> dict | None:
+    """The user's own Mẫu kiểu named "Default" / "Mặc định" (any case) — the look a new
+    project starts with (the owner saved one, 2026-11-01). None when there is none."""
+    from pathlib import Path
+
+    from app.config import settings
+
+    try:
+        mine = json.loads((Path(settings.vizsup_storage_dir) / "style_presets.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for name, look in (mine.items() if isinstance(mine, dict) else ()):
+        if str(name).strip().casefold() in DEFAULT_PRESET_NAMES and isinstance(look, dict):
+            return look
+    return None
+
+
 def pct_to_alpha(pct: int) -> int:
     """"Độ mờ" 0 % (solid) … 100 % (clear) → ASS alpha 0 … 255. Pure."""
     return max(0, min(255, round(int(pct) * 255 / 100)))

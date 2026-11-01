@@ -1414,6 +1414,10 @@ class EditorView(QWidget):
         from app.pipeline import approval
 
         st = self._load_style(job)
+        if not st and not approval.is_approved(job):
+            from desktop.widgets.style_panel import default_preset
+
+            st = default_preset()        # the user's "Default" Mẫu kiểu starts a new project
         if st:
             self.style_panel.set_from(st)
         elif (_has_hardsubs(job) and self.style_panel.box_style.currentText() != COVER_STYLE

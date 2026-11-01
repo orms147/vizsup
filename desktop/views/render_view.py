@@ -89,10 +89,14 @@ SEP_FALLBACK = ("Chưa có bộ tách giọng — khi dựng sẽ tự dùng “
                 "(nhạc, hiệu ứng vẫn còn).")
 
 
-def default_audio_mode(separation: bool) -> str:
-    """The audio card a project starts on: keep the original music + effects either way —
-    without the Chinese voice when a separation engine is installed, else the whole
-    original sound ducked under the dub. Pure."""
+def default_audio_mode(separation: bool, preferred: str | None = None) -> str:
+    """The audio card a project starts on: the user's own default (``render_audio`` in
+    ui_state, set by clicking a card — the owner keeps the whole original sound under the
+    dub, 2026-11-01), else keep the original music + effects either way — without the
+    Chinese voice when a separation engine is installed, else the whole original sound
+    ducked under the dub. Pure."""
+    if preferred in {k for k, *_ in MODES} and (preferred != "keep_music" or separation):
+        return preferred
     return "keep_music" if separation else "duck"
 
 
@@ -480,6 +484,17 @@ class RenderView(QWidget):
             lambda _i: self.fill.setVisible(self.frame.currentData() == "tiktok"))
         self.fill.setVisible(self.frame.currentData() == "tiktok")
         ll.addWidget(self.fill)
+        # a horizontal render also gets its 9:16 copy (pipeline/vertical.py), one more encode
+        self.vertical_cb = QCheckBox("Dựng thêm bản dọc 9:16 (TikTok / Reels)")
+        self.vertical_cb.setToolTip(
+            "Dựng xong bản ngang thì làm thêm output.vertical.mp4: cùng video, phụ đề và giọng, "
+            "đặt giữa khung 1080×1920 trên nền hình mờ. Chỉ mã hóa thêm, không lồng tiếng lại.")
+        self.vertical_cb.setChecked(bool(store.load_ui_state().get("render_vertical")))
+        self.vertical_cb.toggled.connect(lambda on: store.update_ui_state(render_vertical=on))
+        self.frame.currentIndexChanged.connect(
+            lambda _i: self.vertical_cb.setVisible(self.frame.currentData() == "source"))
+        self.vertical_cb.setVisible(self.frame.currentData() == "source")
+        ll.addWidget(self.vertical_cb)
         self.safe_cb = QCheckBox("Phụ đề nằm trên vùng ứng dụng che (TikTok / Reels / Shorts)")
         self.safe_cb.setToolTip(
             "Đặt phụ đề phía trên dải tên + mô tả ở đáy và tránh cột nút bên phải, theo bảng "
@@ -1182,14 +1197,16 @@ class RenderView(QWidget):
         that never chose to the new best default."""
         self._sep_ok = bool(on)
         if not self._mode_saved and self._audio_mode() != "original":
-            self.mode_cards[default_audio_mode(self._sep_ok)].setChecked(True)
+            self.mode_cards[default_audio_mode(
+                self._sep_ok, store.load_ui_state().get("render_audio"))].setChecked(True)
         self._show_separation()
 
     def _restore_audio_mode(self) -> None:
         """The project's saved choice (voice.json), else the default for this machine."""
         saved = saved_audio_mode(self._job) if self._job is not None else None
         self._mode_saved = saved in self.mode_cards
-        key = saved if self._mode_saved else default_audio_mode(self._sep_ok)
+        key = saved if self._mode_saved else default_audio_mode(
+            self._sep_ok, store.load_ui_state().get("render_audio"))
         if not (self._suggested and not self._mode_saved):     # keep E-8's "original"
             self.mode_cards[key].setChecked(True)
         self._show_separation()
@@ -1198,6 +1215,8 @@ class RenderView(QWidget):
         self._mode_saved = True
         if self._job is not None:
             _update_project_file(self._job, audio_mode=self._audio_mode())
+        if self._audio_mode() != "original":          # a dubbed choice is the next default
+            store.update_ui_state(render_audio=self._audio_mode())
         self._show_separation()
 
     def _show_separation(self) -> None:
@@ -1231,7 +1250,7 @@ class RenderView(QWidget):
         for key, card in self.mode_cards.items():
             if card.isChecked():
                 return key
-        return default_audio_mode(self._sep_ok)
+        return default_audio_mode(self._sep_ok, store.load_ui_state().get("render_audio"))
 
     def set_voices(self, voices: list[str]) -> None:
         self.voice.blockSignals(True)
@@ -1248,7 +1267,8 @@ class RenderView(QWidget):
             self.voice.blockSignals(True)
             self.voice.setCurrentIndex(i)
             self.voice.blockSignals(False)
-        rate = saved_rate(self._job) if self._job is not None else None
+        rate = (saved_rate(self._job) if self._job is not None else None) \
+            or store.load_ui_state().get("render_rate")      # the user's usual speed
         self.speed.blockSignals(True)                 # restoring is not a new choice
         self.speed.setValue(int(round((rate or 1.0) * 100)))
         self.speed.blockSignals(False)
@@ -1257,10 +1277,14 @@ class RenderView(QWidget):
         self._update_summary()
 
     def _remember_voice(self, *_a) -> None:
-        """The user's voice and speed stick to this project (voice.json) across restarts."""
+        """The user's voice and speed stick to this project (voice.json) across restarts,
+        and become the default of the next new project (ui_state render_voice / render_rate;
+        restoring a project's own pick blocks the signals, so only a real choice gets here)."""
         if self._job is not None and self._has_real_voices:
             _update_project_file(self._job, voice=self.voice.currentData(),
                                  rate=self.speed.value() / 100)
+            store.update_ui_state(render_voice=self.voice.currentData(),
+                                  render_rate=self.speed.value() / 100)
 
     def _update_fit_hint(self) -> None:
         from app.pipeline import fit_estimate
@@ -1654,6 +1678,7 @@ class RenderView(QWidget):
             "cover_mode": self.cover.currentData(),
         }
         opts["frame"] = self.frame.currentData()   # E-16
+        opts["also_vertical"] = opts["frame"] == "source" and self.vertical_cb.isChecked()
         opts["tiktok_fill"] = self.fill.currentData() or "blur"
         opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
         opts["preset"] = self.preset.currentData()

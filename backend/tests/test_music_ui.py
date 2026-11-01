@@ -109,6 +109,10 @@ def test_default_mode_pure():
 
     assert default_audio_mode(True) == "keep_music"
     assert default_audio_mode(False) == "duck"
+    # the user's own default (ui_state render_audio) wins; keep_music needs the engine
+    assert default_audio_mode(True, "duck") == "duck"
+    assert default_audio_mode(False, "keep_music") == "duck"
+    assert default_audio_mode(True, "bogus") == "keep_music"
 
 
 def test_without_separation_defaults_to_keeping_the_original_and_says_why(rv, tmp_path):
@@ -164,7 +168,7 @@ def test_choice_is_remembered_per_project(rv, tmp_path):
     saved = json.loads((a.work_dir / render_view.VOICE_FILE).read_text(encoding="utf-8"))
     assert saved == {"voice": "v", "rate": 1.2, "audio_mode": "replace"}   # merged, not lost
     rv.set_job(b, cues=1)
-    assert rv._audio_mode() == "duck"                      # b never chose
+    assert rv._audio_mode() == "replace"                   # b never chose: the last choice
     rv.set_job(a, cues=1)
     assert rv._audio_mode() == "replace"
     rv.suggest_original("yes")                             # a saved choice beats E-8

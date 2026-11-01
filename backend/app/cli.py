@@ -310,6 +310,11 @@ def cmd_compile(args: argparse.Namespace) -> int:
         shutil.rmtree(storage / cid, ignore_errors=True)
         return 2
     print(f"[compile] done -> {out} (+ vi.srt, {compilation.CHAPTERS_TXT})")
+    if getattr(args, "vertical", False):
+        from app.pipeline import vertical
+
+        if vertical.is_horizontal(out):
+            vertical.make_vertical(out, log=lambda m: print(f"[compile] {m}"))
     return 0
 
 
@@ -673,6 +678,8 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--title", default="", help="video title (default: Tổng hợp tập A–B)")
     cp.add_argument("--keep-order", action="store_true",
                     help="join in the given order (default: by episode number in the titles)")
+    cp.add_argument("--vertical", action="store_true",
+                    help="also write a 9:16 copy (output.vertical.mp4: the video on blurred bars)")
     cp.add_argument("--storage", default="", help="storage folder (default: the app's)")
     cp.set_defaults(func=cmd_compile)
 
