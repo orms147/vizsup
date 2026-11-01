@@ -41,6 +41,85 @@ except Exception:  # noqa: BLE001
 
 SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 VOLUME_MIN_PANEL = 400      # below this width the volume slider is hidden
+FS_SEEK = 5.0               # ←/→ in full screen
+
+
+class PanelFullscreen:
+    """Moves a VideoPanel alone onto the whole screen and back (⤢ / F / Esc; Space plays,
+    ←/→ seek). The render page had only "hide the options column" behind a button that
+    said "Toàn màn hình" (the owner, 2026-11-01); the editor keeps its own host."""
+
+    def __init__(self) -> None:
+        self._host: QWidget | None = None
+        self._panel: "VideoPanel | None" = None
+        self._spot: tuple | None = None
+
+    def active(self) -> bool:
+        return self._host is not None
+
+    def toggle(self, panel: "VideoPanel") -> None:
+        if self._host is not None:
+            self.exit()
+            return
+        lay = panel.parentWidget().layout()
+        idx = lay.indexOf(panel)
+        stretch = lay.stretch(idx) if hasattr(lay, "stretch") else 0
+        self._spot, self._panel = (lay, idx, stretch), panel
+        host = _FsHost(self)
+        host.layout().addWidget(panel)                   # reparents it out of the page
+        panel.set_fullscreen_icon(True)
+        self._host = host
+        host.showFullScreen()
+        host.activateWindow()
+        host.setFocus()
+
+    def exit(self) -> None:
+        if self._host is None:
+            return
+        host, panel, (lay, idx, stretch) = self._host, self._panel, self._spot
+        self._host = self._panel = self._spot = None
+        lay.insertWidget(idx, panel, stretch) if stretch else lay.insertWidget(idx, panel)
+        panel.set_fullscreen_icon(False)
+        host.hide()
+        host.deleteLater()
+        panel.show()
+
+    def key(self, k) -> bool:
+        panel = self._panel
+        if panel is None:
+            return False
+        if k in (Qt.Key_Escape, Qt.Key_F):
+            self.exit()
+        elif k == Qt.Key_Space:
+            panel.toggle()
+        elif k in (Qt.Key_Left, Qt.Key_Right):
+            step = FS_SEEK if k == Qt.Key_Right else -FS_SEEK
+            panel.seek_seconds(panel.current_time() + step)
+        else:
+            return False
+        return True
+
+
+class _FsHost(QWidget):
+    def __init__(self, owner: PanelFullscreen) -> None:
+        super().__init__(None, Qt.Window)
+        self._owner = owner
+        self.setWindowTitle("vizsup — video")
+        self.setStyleSheet("background:#000;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def keyPressEvent(self, ev) -> None:  # noqa: N802
+        if not self._owner.key(ev.key()):
+            super().keyPressEvent(ev)
+
+    def closeEvent(self, ev) -> None:  # noqa: N802
+        if self._owner.active():                    # closed from the taskbar / Alt+F4
+            ev.ignore()
+            self._owner.exit()
+            return
+        super().closeEvent(ev)
 
 
 class VideoPanel(QFrame):
