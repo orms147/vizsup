@@ -53,9 +53,10 @@ def _video(n: int, published: int | None = None) -> dict:
 PAGE = [_video(n, 1792800000 + n * 86400) for n in range(14, 0, -1)]   # newest first
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def lister(monkeypatch):
-    """The page lister is always a fake here (the real one opens Douyin / calls yt-dlp)."""
+    """The page lister is ALWAYS a fake here (the real one opens Douyin in the embedded
+    browser / calls yt-dlp) — every test, whether it asks for it or not."""
     calls: list[str] = []
     page = list(PAGE)
 
