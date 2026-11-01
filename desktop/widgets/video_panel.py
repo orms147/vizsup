@@ -41,6 +41,7 @@ except Exception:  # noqa: BLE001
 
 SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 VOLUME_MIN_PANEL = 400      # below this width the volume slider is hidden
+VOLUME_WIDE_PANEL = 720     # below this width it shrinks so the seek bar keeps its length
 FS_SEEK = 5.0               # ←/→ in full screen
 
 
@@ -100,6 +101,21 @@ class PanelFullscreen:
         return True
 
 
+class _SeekSlider(QSlider):
+    """The seek bar under the video: a click anywhere jumps there (a plain QSlider only
+    steps a page), then dragging goes on as usual."""
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() == Qt.LeftButton and self.maximum() > self.minimum():
+            from PySide6.QtWidgets import QStyle
+
+            v = QStyle.sliderValueFromPosition(self.minimum(), self.maximum(),
+                                               int(ev.position().x()), max(1, self.width()))
+            self.setValue(v)
+            self.sliderMoved.emit(v)
+        super().mousePressEvent(ev)
+
+
 class _FsHost(QWidget):
     def __init__(self, owner: PanelFullscreen) -> None:
         super().__init__(None, Qt.Window)
@@ -133,7 +149,7 @@ class VideoPanel(QFrame):
     dimsChanged = Signal(int, int)           # source frame size (w, h)
     safeZoneChanged = Signal(str)            # platform key, "" = off
 
-    def __init__(self, title: str = "Video nguồn", *, scrub: bool = False) -> None:
+    def __init__(self, title: str = "Video nguồn", *, scrub: bool = True) -> None:
         super().__init__()
         self.setObjectName("panel")
         self._dur = 0.0
@@ -208,11 +224,12 @@ class VideoPanel(QFrame):
         tl = QVBoxLayout(bar)
         tl.setContentsMargins(12, 8, 12, 8)
         tl.setSpacing(6)
-        self._scrub = QSlider(Qt.Horizontal)
+        self._scrub = _SeekSlider(Qt.Horizontal)
         self._scrub.setRange(0, 0)
+        self._scrub.setToolTip("Bấm hoặc kéo để tua video")
         self._scrub.sliderMoved.connect(self._on_scrub)
         self._scrub.setVisible(scrub)
-        tl.addWidget(self._scrub)
+        self._scrub.setMinimumWidth(60)
         ctl = QHBoxLayout()
         ctl.setSpacing(8)
         self._play = button("", "Play", variant="primary", tip="Phát / dừng (Space)")
@@ -226,7 +243,11 @@ class VideoPanel(QFrame):
         ctl.addWidget(self._play)
         ctl.addWidget(self._loop)
         ctl.addWidget(self._time)
-        ctl.addStretch(1)
+        # the seek bar sits in the control row (no extra height; the owner could not scrub
+        # the render result or the editor's source video, 2026-11-01)
+        ctl.addWidget(self._scrub, 1)
+        if not scrub:
+            ctl.addStretch(1)
         self._vol_icon = icon_label("Volume2", V2["secondary"], 16)
         ctl.addWidget(self._vol_icon)
         self._vol = QSlider(Qt.Horizontal)
@@ -309,6 +330,8 @@ class VideoPanel(QFrame):
         wide = self.width() >= VOLUME_MIN_PANEL
         self._vol.setVisible(wide)
         self._vol_icon.setVisible(wide)
+        # the seek bar gets the room: a narrow panel (the editor's) keeps a short volume
+        self._vol.setFixedWidth(96 if self.width() >= VOLUME_WIDE_PANEL else 56)
 
     # --- public API ----------------------------------------------------------
     def load(self, path: Path | None) -> None:

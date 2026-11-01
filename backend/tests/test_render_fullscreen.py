@@ -49,3 +49,24 @@ def test_the_source_preview_too_and_f_toggles(rv, qapp):
     qapp.processEvents()
     assert panel.parentWidget() is home
     assert not rv._fs.key(Qt.Key_A)                         # other keys are not taken
+
+
+def test_every_video_has_a_seek_bar_and_a_click_jumps(qapp):
+    """The render result and the editor's source video had no seek bar (2026-11-01)."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    from desktop.widgets.video_panel import VideoPanel
+
+    p = VideoPanel("Bản tiếng Việt")
+    p.resize(900, 600)
+    p.show()
+    qapp.processEvents()
+    bar = p._scrub
+    assert bar.isVisibleTo(p)
+    bar.setRange(0, 10_000)
+    jumped = []
+    bar.sliderMoved.connect(jumped.append)
+    QTest.mouseClick(bar, Qt.LeftButton, Qt.NoModifier, QPoint(int(bar.width() * 0.75), bar.height() // 2))
+    assert jumped and abs(jumped[0] - 7_500) < 600            # jumps where clicked, not a page step
+    p.close()

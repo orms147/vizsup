@@ -89,18 +89,23 @@ def test_video_priority_layout_gives_the_picture_the_room(qapp):
     assert editor_view.split_sizes(1400, "video", 385)[2] == 0
 
 
-def test_render_page_expand_hides_and_restores_the_options(qapp):
+def test_render_page_expand_goes_full_screen_and_back(qapp):
+    """⤢ used to hide the options column only; it now moves the video to a full-screen
+    window (2026-11-01) and the options stay where they are."""
     from desktop.views import render_view
 
     v = render_view.RenderView()
     v.resize(1500, 800)
     v.show()
     QApplication.processEvents()
-    assert not v._split.widget(0).isHidden()
     v.result.expandRequested.emit()                 # ⤢ on the result video
-    assert v._split.widget(0).isHidden()
-    v.preview.expandRequested.emit()                # ⤢ again (either video) brings them back
-    assert not v._split.widget(0).isHidden()
+    QApplication.processEvents()
+    assert v._fs.active() and v.result.window() is not v.window()
+    assert not v._split.widget(0).isHidden()        # the options are not touched
+    v.result.expandRequested.emit()                 # ⤢ again brings it back
+    QApplication.processEvents()
+    assert not v._fs.active() and v.result.window() is v.window()
+    v.close()
 
 
 def test_video_canvas_scales_smoothly(qapp):
