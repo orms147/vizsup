@@ -240,6 +240,7 @@ class PipelineWorker(QObject):
             out = split.join(gdir, settings.vizsup_storage_dir, log=self.log.emit,
                              progress=lambda f, m: self.progress.emit(f, m),
                              cancel=lambda: self._cancel)
+            self._cover(gdir)
             self.progress.emit(1.0, "Hoàn tất")
             self.render_done.emit(str(out))
         except (_Cancelled, InterruptedError):
@@ -274,6 +275,7 @@ class PipelineWorker(QObject):
                 out_dir, sources, title=spec.get("title") or compilation.default_title(sources),
                 log=self.log.emit, progress=lambda f, m: self.progress.emit(f, m),
                 cancel=lambda: self._cancel)
+            self._cover(out_dir, spec.get("thumbnail"))
             if spec.get("vertical", store.load_ui_state().get("render_vertical", True)):
                 from app.pipeline import vertical    # "Dựng thêm bản dọc 9:16" also for a join
 
@@ -291,6 +293,17 @@ class PipelineWorker(QObject):
             if not (out_dir / compilation.COMP_FILE).exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
             self.finished.emit()
+
+    def _cover(self, work_dir: Path, wanted: bool | None = None) -> None:
+        """"Ảnh bìa tự động" for a joined video (pipeline/thumbnail.py), like a render's: on
+        unless the render page's "Tạo ảnh bìa" is off; the owner's own choice is kept."""
+        from app.pipeline import thumbnail
+
+        if wanted is None:
+            wanted = store.load_ui_state().get("render_thumbnail", True)
+        if wanted:
+            self.progress.emit(0.99, "Đang tạo ảnh bìa…")
+            thumbnail.make_auto(work_dir, log=self.log.emit, cancel=lambda: self._cancel)
 
     def _resilient(self, body) -> None:
         """Run ``body``; when it fails because the internet dropped, show it, wait for the

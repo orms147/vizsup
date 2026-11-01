@@ -206,8 +206,14 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
     )
     review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
     log(f"✓ Xuất: {out}")
+    # "Ảnh bìa tự động": thumb.jpg (YouTube's custom thumbnail) from the finished video —
+    # a few seconds, never over the owner's own choice, a failure only warns
+    from app.pipeline import thumbnail, vertical
+
+    if thumbnail.wanted(o):
+        progress(0.99, "Đang tạo ảnh bìa…")
+        thumbnail.make_auto(job.work_dir, log=log, cancel=(lambda: bool(cancel and cancel())))
     # "Dựng thêm bản dọc 9:16": the finished horizontal video in a 9:16 frame, one encode
-    from app.pipeline import vertical
 
     if vertical.wanted(o) and vertical.is_horizontal(Path(out)):
         check()

@@ -69,7 +69,7 @@ _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "r
                   "render_quality", "render_split", "recent_colors", "watermark", "render_fill",
                   "episode_card", "voice_by_gender", "cue_density", "safe_zone", "render_post_open",
                   "render_vertical", "render_voice", "render_rate", "render_audio",
-                  "render_pitch", "options_advanced")
+                  "render_pitch", "options_advanced", "render_thumbnail")
 
 
 def update_ui_state(**kv) -> None:
@@ -227,12 +227,15 @@ def known_urls() -> set[str]:
     return out
 
 
+LIST_THUMB = "list_thumb.jpg"   # thumb.jpg is the video's cover now (pipeline/thumbnail.py)
+
+
 def thumbnail(job_dir: Path, *, width: int = 120) -> Path | None:
-    """A small JPEG frame of the project's source (cached as thumb.jpg). Blocking —
+    """A small JPEG frame of the project's source (cached as list_thumb.jpg). Blocking —
     call off the GUI thread."""
     import subprocess
 
-    out = job_dir / "thumb.jpg"
+    out = job_dir / LIST_THUMB
     if out.exists():
         return out
     # the source may have been cleaned away ("Chỉ xóa file nặng"): any video will do
@@ -676,7 +679,7 @@ def _probe_length(item: dict) -> float | None:
 
 
 def library_thumbs(items: list[dict]) -> dict[str, str | None]:
-    """Thumbnail per item (cached thumb.jpg, else one ffmpeg frame). Blocking."""
+    """Thumbnail per item (cached list_thumb.jpg, else one ffmpeg frame). Blocking."""
     out: dict[str, str | None] = {}
     for it in items:
         dirs = [Path(p["dirs"][0]) for p in it.get("parts") or []] or \

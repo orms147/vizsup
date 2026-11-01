@@ -197,11 +197,13 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
         " ".join(tags)) if x) + "\n"
     if kind == "short":
         tags = [*tags, "#shorts"]
-    thumb = job.work_dir / "thumb.jpg"
+    from app.pipeline import thumbnail
+
     private = bool(plan.get("private"))
     return PostMeta(title=title, description=desc, tags=tags, kind=kind,
                     publish_at=None if private else publish_at,
-                    thumbnail=thumb if thumb.exists() else None, playlist=name, private=private)
+                    thumbnail=thumbnail.cover(job.work_dir),   # never the library's 120-px frame
+                    playlist=name, private=private)
 
 
 def plan_posts(job: Job, kind: str, *, now: float | None = None) -> list[dict]:

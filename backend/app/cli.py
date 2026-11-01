@@ -280,7 +280,18 @@ def cmd_join(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(f"[join] done -> {out} (+ {gdir / 'vi.srt'})")
+    _cover(gdir, args, "join")
     return 0
+
+
+def _cover(work_dir: Path, args: argparse.Namespace, tag: str) -> None:
+    """"Ảnh bìa tự động" for a finished video (pipeline/thumbnail.py) unless --no-thumbnail;
+    a user-chosen thumb.jpg is kept, a failure only prints a warning."""
+    if getattr(args, "no_thumbnail", False):
+        return
+    from app.pipeline import thumbnail
+
+    thumbnail.make_auto(work_dir, log=lambda m: print(f"[{tag}] {m}"))
 
 
 def cmd_compile(args: argparse.Namespace) -> int:
@@ -310,6 +321,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
         shutil.rmtree(storage / cid, ignore_errors=True)
         return 2
     print(f"[compile] done -> {out} (+ vi.srt, {compilation.CHAPTERS_TXT})")
+    _cover(out.parent, args, "compile")
     if getattr(args, "vertical", False):
         from app.pipeline import vertical
 
@@ -363,6 +375,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         preset=getattr(args, "quality", None),
     )
     print(f"[render] done -> {out}")
+    _cover(work_dir, args, "render")
     return 0
 
 
@@ -663,6 +676,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--font", default="Be Vietnam Pro", help="subtitle font (Vietnamese-diacritic)")
     rn.add_argument("--frame", choices=["source", "tiktok"], default="source",
                     help="output frame: source size, or tiktok = 1080x1920 (fit + black bars)")
+    rn.add_argument("--no-thumbnail", action="store_true",
+                    help="do not make thumb.jpg (the 1280x720 cover YouTube gets)")
     rn.set_defaults(func=cmd_render)
 
     pr = sub.add_parser("providers", help="list available providers (JSON)")
@@ -671,6 +686,8 @@ def build_parser() -> argparse.ArgumentParser:
     rt.set_defaults(func=cmd_retime)
     jn = sub.add_parser("join", help="join a split long video's rendered parts into one MP4")
     jn.add_argument("--group", required=True, help="the original video's folder (has group.json)")
+    jn.add_argument("--no-thumbnail", action="store_true",
+                    help="do not make thumb.jpg (the 1280x720 cover YouTube gets)")
     jn.set_defaults(func=cmd_join)
     cp = sub.add_parser("compile", help="join rendered episodes (or earlier compilations) into "
                                         "one video with chapters")
@@ -681,6 +698,8 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--vertical", action="store_true",
                     help="also write a 9:16 copy (output.vertical.mp4: the video on blurred bars)")
     cp.add_argument("--storage", default="", help="storage folder (default: the app's)")
+    cp.add_argument("--no-thumbnail", action="store_true",
+                    help="do not make thumb.jpg (the 1280x720 cover YouTube gets)")
     cp.set_defaults(func=cmd_compile)
 
     pr.set_defaults(func=cmd_providers)

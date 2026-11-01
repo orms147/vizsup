@@ -147,10 +147,13 @@ def test_row_menu_rules_and_the_whole_flow(qapp, storage, monkeypatch):
     v.openRequested.connect(opened.append)
     v.changed.connect(lambda: changed.append(1))
     v.message.connect(lambda t, k: msgs.append(t))
-    def stamp():
-        return {p.name: p.stat().st_mtime for p in ok.work_dir.iterdir() if p.name != "thumb.jpg"}
+    from desktop import store
 
-    before = stamp()                                              # (thumb.jpg: the library's own cache)
+    def stamp():
+        return {p.name: p.stat().st_mtime for p in ok.work_dir.iterdir()
+                if p.name != store.LIST_THUMB}
+
+    before = stamp()                                              # (the library's own cache)
     v._cut_short(ok.id)
     _wait(lambda: bool(opened), n=1500)
     assert len(opened) == 1 and changed

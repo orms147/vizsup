@@ -504,6 +504,14 @@ class RenderView(QWidget):
             lambda _i: self.vertical_cb.setVisible(self.frame.currentData() == "source"))
         self.vertical_cb.setVisible(self.frame.currentData() == "source")
         ll.addWidget(self.vertical_cb)
+        # "Ảnh bìa tự động" (pipeline/thumbnail.py): thumb.jpg, what YouTube shows
+        self.thumb_cb = QCheckBox("Tạo ảnh bìa (thumbnail YouTube)")
+        self.thumb_cb.setToolTip(
+            "Dựng xong thì chọn một khung hình đẹp, thêm tên phim + số tập chữ lớn → thumb.jpg "
+            "1280×720 (tự đăng gửi kèm lên YouTube). Ảnh bạn đã chọn ở nút Ảnh bìa được giữ.")
+        self.thumb_cb.setChecked(bool(store.load_ui_state().get("render_thumbnail", True)))
+        self.thumb_cb.toggled.connect(lambda on: store.update_ui_state(render_thumbnail=on))
+        ll.addWidget(self.thumb_cb)
         self.safe_cb = QCheckBox("Phụ đề nằm trên vùng ứng dụng che (TikTok / Reels / Shorts)")
         self.safe_cb.setToolTip(
             "Đặt phụ đề phía trên dải tên + mô tả ở đáy và tránh cột nút bên phải, theo bảng "
@@ -858,6 +866,10 @@ class RenderView(QWidget):
         self.orient_btn.clicked.connect(self._toggle_result_orient)
         self.orient_btn.setVisible(False)
         self._viewing_vertical = False
+        self.thumb_btn = button("Ảnh bìa", "Image",
+                                tip="Ảnh bìa 1280×720 cho YouTube: chọn khung hình, sửa chữ, "
+                                    "hoặc dùng ảnh của bạn")
+        self.thumb_btn.clicked.connect(self._show_thumb)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
         for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn, self.orient_btn):
@@ -867,6 +879,9 @@ class RenderView(QWidget):
         # whole pane (and the page) wider than a laptop window: it wraps on its own row now
         sr = QHBoxLayout()
         sr.setSpacing(8)
+        # "Ảnh bìa" opens this row: one more button in the row above made the page wider than a
+        # 1000-px window (test_ux_render_narrow)
+        sr.addWidget(self.thumb_btn, 0, Qt.AlignTop)
         self.res_status = label("", "small", wrap=True)
         sr.addWidget(self.res_status, 1)
         sr.addWidget(back, 0, Qt.AlignTop)
@@ -1715,6 +1730,7 @@ class RenderView(QWidget):
         }
         opts["frame"] = self.frame.currentData()   # E-16
         opts["also_vertical"] = opts["frame"] == "source" and self.vertical_cb.isChecked()
+        opts["thumbnail"] = self.thumb_cb.isChecked()   # never for the quick proof (wanted())
         opts["tiktok_fill"] = self.fill.currentData() or "blur"
         opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
         opts["preset"] = self.preset.currentData()
@@ -1854,6 +1870,7 @@ class RenderView(QWidget):
                                    else "Video tiếng Việt đã sẵn sàng")
         real = not quick
         self.save_btn.setEnabled(real)
+        self.thumb_btn.setEnabled(real)
         self.mkv_action.setEnabled(real)
         self.save_btn.setToolTip("Lưu một bản video, đặt tên theo tiêu đề dự án" if real else
                                  "Đây là bản xem nhanh — bấm Dựng video để có bản lưu được")
@@ -1955,10 +1972,12 @@ class RenderView(QWidget):
         if dest is None:
             return
         src = self._out
+        from app.pipeline import thumbnail
         from app.pipeline.vertical import VERTICAL
 
         vsrc = Path(src).with_name(VERTICAL)          # "Dựng thêm bản dọc 9:16" made one too
         vdest = dest.with_name(f"{dest.stem} (dọc 9x16).mp4") if vsrc.exists() else None
+        cover = thumbnail.cover(Path(src).parent)     # the cover, as "<name>.jpg" beside it
         self.save_btn.setEnabled(False)
         self.res_status.setText("Đang lưu…")
 
@@ -1966,18 +1985,29 @@ class RenderView(QWidget):
             _link_or_copy(Path(src), dest)
             if vdest is not None:
                 _link_or_copy(vsrc, vdest)
+            if cover is not None:
+                shutil.copyfile(cover, dest.with_suffix(".jpg"))
             return str(dest)
 
         def done(p):
             self._saved = p
             self.save_btn.setEnabled(True)
-            self.res_status.setText(f"Đã lưu: {Path(p).name}" + (" + bản dọc 9:16" if vdest else ""))
+            self.res_status.setText(f"Đã lưu: {Path(p).name}" + (" + bản dọc 9:16" if vdest else "")
+                                    + (" + ảnh bìa" if cover is not None else ""))
 
         def fail(msg):
             self.save_btn.setEnabled(True)
             self.res_status.setText(f"Không lưu được: {msg}")
 
         self._bg.run(work, done, fail)
+
+    def _show_thumb(self) -> None:
+        """“Ảnh bìa”: the cover of the shown video (a joined one too — its own folder)."""
+        from desktop.widgets.thumb_dialog import ThumbDialog
+
+        if self._showing_quick or not self._out or not Path(self._out).exists():
+            return
+        ThumbDialog(Path(self._out).parent, self).exec()
 
     def _export(self, kind: str) -> None:
         if self._job is None:
