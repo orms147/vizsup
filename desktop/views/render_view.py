@@ -361,6 +361,7 @@ class RenderView(QWidget):
         vc.setSpacing(3)
         self.voice = QComboBox()
         self.voice.currentIndexChanged.connect(self._remember_voice)
+        self.voice.currentIndexChanged.connect(lambda _i: self._sync_voice_sub())
         self.voice_sub = label("Tiếng Việt", "small")
         vc.addWidget(self.voice)
         vc.addWidget(self.voice_sub)
@@ -919,7 +920,7 @@ class RenderView(QWidget):
                 self.short_btn.setChecked(True)      # a cut Short renders as a Short
         if tts:
             self._tts = tts
-            self.voice_sub.setText(f"Tiếng Việt · {tts}")
+            self._sync_voice_sub()
         self._update_lock()
 
     def set_approved(self, on: bool) -> None:
@@ -1295,8 +1296,19 @@ class RenderView(QWidget):
         self.pitch.setValue(int(round(float(pitch))))
         self.pitch.blockSignals(False)
         self.pitch_lbl.setText(f"{self.pitch.value():+d}")
+        self._sync_voice_sub()
         self._update_fit_hint()
         self._update_summary()
+
+    def _voice_engine_label(self) -> str:
+        """Under the voice: the engine that will really speak ("vieneu:…" runs on this PC,
+        whatever the start page's default engine says)."""
+        voice = str(self.voice.currentData() or "") if self._has_real_voices else ""
+        return ("Tiếng Việt · trên máy (VieNeu)" if voice.startswith("vieneu:")
+                else f"Tiếng Việt · {self._tts}")
+
+    def _sync_voice_sub(self) -> None:
+        self.voice_sub.setText(self._voice_engine_label())
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts,
@@ -1879,7 +1891,7 @@ class RenderView(QWidget):
         out = Path(self._job.work_dir if self._job else ".") / "_voice_sample.mp3"
         self.listen_btn.setEnabled(False)
         # feedback next to the voice: self.status sits on the progress card, hidden here
-        idle = f"Tiếng Việt · {tts}"
+        idle = self._voice_engine_label()
         from app.providers.registry import split_voice
         from app.providers.tts import vieneu
 
