@@ -154,7 +154,9 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
             progress=lambda d, n: progress(0.2 + 0.3 * d / max(1, n),
                                            f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu")),
             log=log, cancel=cancel)
-        log(f"✓ TTS {len(segments)} câu ({o.get('tts', 'edge')})")
+        from app.providers.registry import split_voice
+
+        log(f"✓ TTS {len(segments)} câu ({split_voice(o.get('tts', 'edge'), o.get('voice'))[0]})")
 
     # F-4: the user's own commentary — a voice other than the dub's, or their recording
     notes = commentary.load(job)
