@@ -137,8 +137,11 @@ class BatchImportDialog(VzDialog):
         if not url:
             self._say("Dán link trang / 合集 trước.", "warnText")
             return
+        from app.pipeline import watch
+
         self._gen += 1
-        gen, lister = self._gen, self._lister
+        # the lister is picked HERE, on the GUI thread — never looked up later by the thread
+        gen, lister = self._gen, self._lister or watch.list_videos
         self._loading = True
         self._loaded_url = ""
         self._videos = []

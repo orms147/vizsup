@@ -90,6 +90,19 @@ def _no_link_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_embedded_browser(monkeypatch):
+    """No test opens Douyin in the embedded browser (``app.douyin_capture`` in its own
+    process: network + Chromium) unless it turns ``web_available`` on itself and fakes the
+    process. 2026-11-01 a dialog test that reached the real 合集 listing grew to ~59 GB and
+    starved every other test run on the machine."""
+    try:
+        from app.pipeline import download
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(download, "web_available", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _no_telegram(monkeypatch):
     """The Telegram remote (app/remote/telegram.py) never reaches api.telegram.org from a
     test: every request fails unless the test installs its own fake (tests/telegram_fake.py)."""

@@ -26,6 +26,21 @@ def storage(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def fake_lister(monkeypatch):
+    """Every test here: the page lister the dialog falls back to is a fake that records its
+    calls — the real one opens Douyin in the embedded browser (network + Chromium; a test
+    that reached it on 2026-11-01 grew to ~59 GB). conftest also keeps the browser off."""
+    calls: list[str] = []
+
+    def fake(url, limit=batch_import.LIMIT):
+        calls.append(url)
+        return list(PAGE)
+
+    monkeypatch.setattr(watch, "list_videos", fake)
+    return calls
+
+
 def _video(vid: str, title: str, published: int | None = None, **extra) -> dict:
     return {"id": vid, "url": f"https://www.douyin.com/video/{vid}", "title": title,
             "published": published, **extra}
@@ -317,16 +332,15 @@ def view(qapp, storage):
     v.deleteLater()
 
 
-def test_start_on_a_page_link_opens_the_picker_and_queues_its_videos(view, qapp, monkeypatch):
+def test_start_on_a_page_link_opens_the_picker_and_queues_its_videos(view, qapp, monkeypatch,
+                                                                     fake_lister):
     from desktop.widgets import batch_import_dialog as bid
 
     opened = {}
 
     def fake_exec(dlg):
         opened["url"], opened["series"] = dlg.url.text(), dlg._start_choice
-        dlg._lister = lambda u, limit: list(PAGE)
-        dlg.reload()
-        assert _wait(qapp, lambda: not dlg._loading)
+        assert _wait(qapp, lambda: not dlg._loading)                # the load it started itself
         dlg.accept()
         return 1
 
@@ -339,6 +353,7 @@ def test_start_on_a_page_link_opens_the_picker_and_queues_its_videos(view, qapp,
     assert view._estimate_source() is None                           # no cost guess for a page
     view._emit_start()
     assert opened == {"url": MIX, "series": "auto"} and started == []
+    assert fake_lister == [MIX]                                      # the fake, never the real one
     (items,) = queued
     assert [i["url"] for i in items] == [v["url"] for v in reversed(PAGE)]
     assert {i["series"] for i in items} == {"auto"}
@@ -353,15 +368,15 @@ def test_start_on_a_page_link_opens_the_picker_and_queues_its_videos(view, qapp,
     assert view.start.isEnabled()
 
 
-def test_the_button_opens_the_picker_with_the_typed_link(view, monkeypatch):
+def test_the_button_opens_the_picker_with_the_typed_link(view, qapp, monkeypatch, fake_lister):
     from desktop.widgets import batch_import_dialog as bid
 
     seen = []
     monkeypatch.setattr(bid.BatchImportDialog, "exec",
                         lambda dlg: seen.append(dlg.url.text()) or 0)
-    monkeypatch.setattr(watch, "list_videos", lambda u, limit: list(PAGE))
     view.url.setText(PAGE[0]["url"])                                 # an episode → its 合集
     assert view.open_batch_import() is False                         # cancelled: nothing queued
     view.url.setText("")
     view.open_batch_import()
     assert seen == [PAGE[0]["url"], ""]
+    assert _wait(qapp, lambda: fake_lister == [PAGE[0]["url"]])      # the fake; no link: no load
