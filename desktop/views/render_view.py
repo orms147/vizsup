@@ -834,7 +834,10 @@ class RenderView(QWidget):
         oc.addWidget(t)
         oc.addWidget(self.out_meta)
         oh.addLayout(oc, 1)
-        saved = label("Đã lưu", "small")
+        # "Đã lưu" alone, next to "Lưu video…", read as "already copied where I want it"
+        saved = self.saved_lbl = label("Đã lưu trong dự án", "small")
+        saved.setToolTip("Video nằm trong thư mục dự án (Mở thư mục). «Lưu video…» chép một "
+                         "bản, đặt tên theo tiêu đề, vào thư mục bạn chọn.")
         saved.setStyleSheet(f"color:{V2['green']};background:transparent;")
         oh.addWidget(saved)
         rv.addWidget(ok)

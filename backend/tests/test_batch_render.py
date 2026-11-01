@@ -109,7 +109,7 @@ def test_template_rebuilt_for_projects_rendered_before(tmp_path):
     assert t["voice"] == "vi-VN-NamMinhNeural" and t["rate"] == "+10%"
     assert t["audio_mode"] == "keep_music" and t["frame"] == "tiktok" and t["res"] == "720"
     assert t["font"] == "Noto Sans" and t["style"] == {"primary": "#fff"}
-    assert batch.describe(t) == "NamMinh · +10% · Giữ nhạc nền & hiệu ứng · 720p · Cân bằng · " \
+    assert batch.describe(t) == "Nam Minh · +10% · Giữ nhạc nền & hiệu ứng · 720p · Cân bằng · " \
                                 "khung 9:16"
     assert batch.template_from(tmp_path / "nothing") is None
 
@@ -159,7 +159,7 @@ def test_dialog_lists_in_episode_order_and_returns_the_pick(qapp):
     dlg = BatchDialog(None, rows, tpl, preselect={"b"}, waiting=4, queued={"q"})
     assert [dlg.list.item(i).data(ROLE) for i in range(3)] == ["a", "b", "q"]
     assert dlg.picked() == ["b"] and dlg.ok_btn.text() == "Dựng 1 video"
-    assert "HoaiMy" in dlg.desc.text() and "1080p · Nét" in dlg.desc.text()
+    assert "Hoài My" in dlg.desc.text() and "1080p · Nét" in dlg.desc.text()
     from PySide6.QtCore import Qt
 
     dlg._set_all(Qt.Checked)

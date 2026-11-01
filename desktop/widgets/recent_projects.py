@@ -87,9 +87,11 @@ class _Row(QFrame):
         else:
             self.badge = badge("Chờ bạn duyệt", "purple")
         col.addWidget(self.badge, 0, Qt.AlignLeft)
+        # wraps: "16 câu cần xem lại · 01:41 · AI $0.013 · 6 phút 56" was cut after "AI $0.013"
+        # in the 360-px column
         self.sub = label("MP4" if info.get("has_output") else
                          "Chưa có phụ đề tiếng Việt" if info.get("unfinished") else
-                         "Phụ đề tiếng Việt", "small")
+                         "Phụ đề tiếng Việt", "small", wrap=True)
         self._unfinished = bool(info.get("unfinished"))
         col.addWidget(self.sub)
         col.addWidget(label(_when(info.get("mtime") or time.time()), "small"))

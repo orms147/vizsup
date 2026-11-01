@@ -86,6 +86,22 @@ def test_autopilot_dialog_round_trip(qapp, storage):
     assert again.on.isChecked() and again.name.text() == "Xe Buýt Mạt Thế"
 
 
+def test_a_platform_that_is_off_greys_its_kinds(qapp, storage):
+    """UX audit 2026-11-01: "video dài / Short" stayed ticked and live beside an unticked
+    Facebook — it read as "will post there"."""
+    from desktop.widgets.autopilot_dialogs import AutopilotDialog
+
+    d = AutopilotDialog(None, slug="末日校车")
+    on, lg, sh = d.rows["folder"]
+    on.setChecked(False)
+    assert not lg.isEnabled() and not sh.isEnabled()
+    on.setChecked(True)
+    assert lg.isEnabled() and sh.isEnabled()
+    again = AutopilotDialog(None, slug="末日校车")              # opened with it off
+    on2, lg2, sh2 = again.rows["folder"]
+    assert lg2.isEnabled() == on2.isChecked() == sh2.isEnabled()
+
+
 @pytest.fixture
 def win(qapp, storage):
     from desktop import main as m

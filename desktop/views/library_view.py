@@ -1102,7 +1102,8 @@ class LibraryView(QWidget):
         if not videos:
             self.message.emit("Dự án này chưa có video nào trên máy.", "warn")
             return
-        PlayerDialog(self.window(), it.get("title") or iid, videos).exec()
+        raw = it.get("title") or iid                 # the row's own name, not the Douyin line
+        PlayerDialog(self.window(), store.friendly_title(iid, raw) or raw, videos).exec()
 
     def _external(self, iid: str) -> None:
         videos = store.videos_of(self._item(iid))

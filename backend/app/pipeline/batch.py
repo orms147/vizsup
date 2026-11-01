@@ -125,14 +125,17 @@ _PRESETS = {"light": "Nhẹ", "balanced": "Cân bằng", "sharp": "Nét"}
 
 
 def describe(opts: dict | None) -> str:
-    """One line for the dialog: "HoaiMy · +10% · Giữ nhạc nền · 1080p Nét · 9:16"."""
+    """One line for the dialog: "Hoài My · +10% · Giữ nhạc nền · 1080p Nét · 9:16" — the voice
+    named as the render page names it ("vieneu:Ngọc Huyền" read as an id: Ngọc Huyền · trên máy)."""
+    from app.providers.registry import voice_label
+
     if not opts:
         return "Chưa có cài đặt — dựng một video trước để làm mẫu."
     bits = []
     mode = opts.get("audio_mode") or "replace"
     if mode != "original":
-        voice = str(opts.get("voice") or "giọng mặc định").replace("vi-VN-", "").replace("Neural", "")
-        bits.append(voice)
+        voice = opts.get("voice")
+        bits.append(voice_label(str(voice)) if voice else "giọng mặc định")
         if opts.get("rate") and opts["rate"] not in ("+0%", "-0%"):
             bits.append(str(opts["rate"]))
     bits.append(_MODES.get(mode, mode))

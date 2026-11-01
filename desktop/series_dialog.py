@@ -201,6 +201,12 @@ class _Characters(_Table):
             combo.addItem(text, key)
         combo.setCurrentIndex(max(0, combo.findData(gender)))
         self.table.setCellWidget(r, 2, combo)
+        # the row grows to the combo (34 px by the app style): in a default 30-px row the
+        # "Nam / Nữ" boxes of every row overlapped the next one
+        combo.ensurePolished()
+        need = combo.sizeHint().height() + 2
+        if self.table.rowHeight(r) < need:
+            self.table.setRowHeight(r, need)
 
     def cells(self) -> list[tuple[str, ...]]:
         out = []

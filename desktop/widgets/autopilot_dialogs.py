@@ -147,6 +147,8 @@ class AutopilotDialog(VzDialog):
             g.addWidget(lg, r, 1)
             g.addWidget(sh, r, 2)
             g.addWidget(label(state, "small"), r, 3)
+            # "video dài / Short" of a platform that is off read as "will post": greyed with it
+            on.toggled.connect(lambda v, a=lg, b=sh: (a.setEnabled(v), b.setEnabled(v)))
             self.rows[name] = (on, lg, sh)
         self.body.addLayout(g)
         self.body.addWidget(label("Hàng đăng", "h3"))
@@ -182,6 +184,8 @@ class AutopilotDialog(VzDialog):
             on.setChecked(bool(cfg.get("on")))
             lg.setChecked("long" in kinds)
             sh.setChecked("short" in kinds)
+            lg.setEnabled(on.isChecked())
+            sh.setEnabled(on.isChecked())
         self._fill_queue(slug)
 
     def _fill_queue(self, slug: str | None) -> None:

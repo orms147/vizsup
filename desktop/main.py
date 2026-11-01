@@ -1640,7 +1640,10 @@ class MainWindow(QMainWindow):
         self.status.set_status(f"Chưa lưu được ({msg}) — đang thử lại…", "err")
 
     def _on_dirty(self, dirty: bool) -> None:
-        self.nav.set_saved("saving" if dirty else "saved")
+        # the editor's autosave lands a moment after you left it (Ctrl+L right after a fix):
+        # "Đã lưu" + ⌨ then sat in the bar of Thư viện / Cài đặt; entering the editor shows it
+        if self.stack.currentIndex() == EDITOR:
+            self.nav.set_saved("saving" if dirty else "saved")
 
     def _open_glossary(self, *, job: bool) -> None:
         from desktop.glossary_dialog import GlossaryDialog
