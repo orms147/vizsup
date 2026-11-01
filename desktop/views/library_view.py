@@ -233,7 +233,7 @@ class _Row(QFrame):
         title = item.get("title") or iid
         if title == iid and item.get("url"):
             title = str(item["url"])                 # a run that failed before the download
-        self.title = _ElideLabel(short_title(title), "h3")
+        self.title = _ElideLabel(short_title(store.friendly_title(iid, title) or title), "h3")
         self.title.setToolTip(title)
         col.addWidget(self.title)
         # the chips may be cut at the right on a narrow window — never the action buttons

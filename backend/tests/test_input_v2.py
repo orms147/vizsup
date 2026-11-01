@@ -204,3 +204,23 @@ def test_advanced_options_fold_and_the_choice_is_remembered(view):
     QApplication.processEvents()
     assert view.pron_check.isVisibleTo(view)
     assert store.load_ui_state().get("options_advanced") is True
+
+
+def test_friendly_title_for_a_named_series_episode(tmp_path, monkeypatch):
+    """"Chuyến Xe Tận Thế · Tập 9" instead of the long Douyin title (2026-11-01)."""
+    import json
+
+    from app.config import settings
+    from app.pipeline import autopilot
+    from desktop import store
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    (tmp_path / "e9").mkdir()
+    (tmp_path / "e9" / "series_link.json").write_text(json.dumps({"slug": "末日校车"}),
+                                                      encoding="utf-8")
+    raw = "第7集 | 《末日校车》09 我一个普通大巴司机"
+    assert store.friendly_title("e9", raw) is None                  # no Vietnamese name yet
+    autopilot.save_plan("末日校车", {**autopilot.DEFAULT_PLAN, "series_name": "Chuyến Xe Tận Thế"})
+    assert store.friendly_title("e9", raw) == "Chuyến Xe Tận Thế · Tập 9"
+    assert store.friendly_title("e9", "第3集 | 《末日校车》1-5 x") == "Chuyến Xe Tận Thế · Tập 1–5"
+    assert store.friendly_title("nope", raw) is None

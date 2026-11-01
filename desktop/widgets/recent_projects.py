@@ -75,7 +75,8 @@ class _Row(QFrame):
         h.addWidget(self.thumb, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(4)
-        title = label(short_title(info.get("title") or info["id"]), "h3")
+        raw = info.get("title") or info["id"]
+        title = label(short_title(store.friendly_title(info["id"], raw) or raw), "h3")
         title.setToolTip(info.get("title") or "")
         title.setMaximumWidth(210)
         col.addWidget(title)
@@ -170,7 +171,8 @@ class _GroupRow(QFrame):
         h.addWidget(self.thumb, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(4)
-        title = label(short_title(info.get("title") or info["id"]), "h3")
+        raw = info.get("title") or info["id"]
+        title = label(short_title(store.friendly_title(info["id"], raw) or raw), "h3")
         title.setToolTip(info.get("title") or "")
         title.setMaximumWidth(210)
         col.addWidget(title)
