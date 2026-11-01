@@ -118,8 +118,9 @@ def _resolve_short(url: str) -> str:
 
 
 def list_videos(source_url: str, *, limit: int = LIMIT) -> list[dict]:
-    """The latest videos of a followed page → [{id, url, title, published (epoch or None)}],
-    the page's order. Raises RuntimeError / ValueError with a Vietnamese message."""
+    """The latest videos of a followed page → [{id, url, title, published (epoch or None),
+    duration (seconds, only when the page told)}], the page's order. Raises RuntimeError /
+    ValueError with a Vietnamese message."""
     url = (source_url or "").strip()
     host = (urlparse(url).hostname or "").lower()
     if not source_kind(url) and host in ("v.douyin.com", "www.iesdouyin.com", "iesdouyin.com"):
@@ -215,7 +216,21 @@ def _clean(v: dict) -> dict | None:
     pub = v.get("published")
     return {"id": vid, "url": str(v.get("url") or "") or _video_url(vid),
             "title": " ".join(str(v.get("title") or "").split()),
-            "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None}
+            "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None,
+            **_duration(v.get("duration"))}
+
+
+def _duration(value) -> dict:
+    """{"duration": seconds} from seconds or a "mm:ss" / "h:mm:ss" text (Bilibili's space list),
+    {} when unknown. Pure."""
+    if isinstance(value, str) and re.fullmatch(r"\d{1,3}(?::\d{1,2}){1,2}", value.strip()):
+        sec = 0
+        for part in value.strip().split(":"):
+            sec = sec * 60 + int(part)
+        value = sec
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return {"duration": float(value)}
+    return {}
 
 
 def _video_url(vid: str) -> str:
@@ -292,7 +307,8 @@ def _bilibili_list(url: str, limit: int, kind: str) -> list[dict]:
         pub = row.get("pubdate") or row.get("created") or e.get("timestamp")
         out.append({"id": vid, "url": _video_url(vid),
                     "title": " ".join(str(row.get("title") or e.get("title") or "").split()),
-                    "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None})
+                    "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None,
+                    **_duration(row.get("duration") or row.get("length") or e.get("duration"))})
     if kind == "bilibili_season":
         out.reverse()                                 # newest first, like the other pages
     return out[:limit]

@@ -372,6 +372,11 @@ class InputView(QWidget):
         self.file_badge.setVisible(False)
         foot.addWidget(self.file_badge)
         foot.addStretch(1)
+        many = button("Chọn nhiều video từ trang / 合集…", "Rows3", variant="ghost", small=True,
+                      tip="Dịch một loạt: đọc danh sách video của một 合集 Douyin, trang người "
+                          "đăng hoặc Bilibili, chọn video rồi cho chạy lần lượt tới bước duyệt")
+        many.clicked.connect(lambda: self.open_batch_import())
+        foot.addWidget(many)
         v.addLayout(foot)
         self.defaults = label("", "small")
         v.addWidget(self.defaults)
@@ -789,22 +794,53 @@ class InputView(QWidget):
 
     def _refresh_start(self) -> None:
         has_src = bool(self.url.text().strip()) or bool(self._file)
-        need_srt = self._subtitle_source() == "srt" and not self._srt
-        self.start.setEnabled(has_src and not need_srt and not self._busy)
         if self.url.text().strip():
             self._file = None
             self.file_badge.setVisible(False)
+        page = self._page_link()             # a page picks its videos (a .srt is one video's)
+        need_srt = self._subtitle_source() == "srt" and not self._srt and not page
+        self.start.setEnabled(has_src and not need_srt and not self._busy)
         many = len(_ALL_URLS.findall(self.url.text()))
         self._est_timer.start()
-        if need_srt and has_src:
+        if page:
+            self.hint.setText("Link này là một trang / 合集 nhiều video — bấm Bắt đầu để chọn các "
+                              "video cần dịch.")
+        elif need_srt and has_src:
             self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
         elif many > 1:
             self.hint.setText(f"{many} link — sẽ xử lý lần lượt tới bước duyệt, báo khi từng video xong.")
-        self.hint.setVisible((need_srt and has_src) or many > 1)
+        self.hint.setVisible(bool(page) or (need_srt and has_src) or many > 1)
+
+    def _page_link(self) -> str | None:
+        """The typed link when it is a page / 合集 of many videos (not one video)."""
+        from app.pipeline import batch_import
+
+        text = self.url.text().strip()
+        return text if not self._file and batch_import.is_page(text) else None
+
+    def open_batch_import(self, url: str | None = None) -> bool:
+        """“Dịch một loạt”: pick videos of a page / 合集 → the queue (E-9), one series for all.
+        True when something was queued."""
+        from desktop.widgets.batch_import_dialog import BatchImportDialog
+
+        if url is None:
+            urls = _ALL_URLS.findall(self.url.text())
+            url = urls[0] if len(urls) == 1 and not self._file else ""
+        base = self._collect_opts()
+        dlg = BatchImportDialog(self, url=url, base=base, series_choice=base.get("series") or "auto")
+        if not dlg.exec() or not dlg.result_items:
+            return False
+        self._remember({k: v for k, v in base.items() if k not in ("url", "file")})
+        self.refresh_series()                         # the batch may have made a new series
+        self.queueRequested.emit(list(dlg.result_items))
+        return True
 
     def _emit_start(self) -> None:
-        opts = self._collect_opts()
         urls = _ALL_URLS.findall(self.url.text())
+        if self._page_link():                         # a 合集 / creator page: pick its videos
+            self.open_batch_import(urls[0] if urls else self.url.text().strip())
+            return
+        opts = self._collect_opts()
         if len(urls) > 1 and not self._file:          # E-9: several links pasted at once
             self._remember(opts)
             self.queueRequested.emit([{**opts, "url": u} for u in urls])
@@ -1241,6 +1277,8 @@ class InputView(QWidget):
         if self._file:
             return self._file
         urls = _ALL_URLS.findall(self.url.text())
+        if self._page_link():                         # a page is no one video to estimate
+            return None
         return urls[0] if len(urls) == 1 else None
 
     def _update_estimate(self) -> None:

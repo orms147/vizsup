@@ -177,32 +177,59 @@ def find_link(text: str) -> str | None:
     return m.group(0).rstrip(_TRAIL) if m else None
 
 
-def project_for_url(url: str) -> Job | None:
-    """The newest project made from ``url`` (job.json's link), else None."""
-    want = (url or "").strip()
-    best: tuple[float, str] | None = None
+def _projects():
+    """(job.json's time, folder, job.json) of every project folder."""
     root = _root()
-    if not want or not root.exists():
-        return None
+    if not root.exists():
+        return
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith(("_", ".")):
             continue
         jf = d / "job.json"
-        if not jf.exists():
-            continue
-        data = _read(jf)
-        if want not in (str(data.get("url") or "").strip(),
-                        str((data.get("opts") or {}).get("url") or "").strip()):
-            continue
-        t = jf.stat().st_mtime
-        if best is None or t > best[0]:
-            best = (t, d.name)
+        if jf.exists():
+            yield jf.stat().st_mtime, d, _read(jf)
+
+
+def _links(data: dict) -> set[str]:
+    """The links a project was made from: job.json's ``url`` and its options' ``url``."""
+    return {u for u in (str(data.get("url") or "").strip(),
+                        str((data.get("opts") or {}).get("url") or "").strip()) if u}
+
+
+def project_for_url(url: str) -> Job | None:
+    """The newest project made from ``url`` (job.json's link), else None."""
+    want = (url or "").strip()
+    best: tuple[float, Path] | None = None
+    if not want:
+        return None
+    for t, d, data in _projects():
+        if want in _links(data) and (best is None or t > best[0]):
+            best = (t, d)
     if best is None:
         return None
-    d = root / best[1]
+    d = best[1]
     job = Job(id=d.name, work_dir=d)
     job.metadata = _read(d / "metadata.json")
     return job
+
+
+def project_index() -> dict[str, str]:
+    """``project_for_url`` for a whole page of links at once (Dịch một loạt,
+    pipeline/batch_import.py): every project's links, plus the Douyin / Bilibili video ids in
+    them and in its metadata.json (a share link and a page's link of the same video), → the
+    newest such project's folder name. One pass over storage."""
+    from app.pipeline.watch import ids_in
+
+    found: dict[str, tuple[float, str]] = {}
+    for t, d, data in _projects():
+        md = _read(d / "metadata.json")
+        keys = _links(data)
+        for v in (*keys, md.get("webpage_url"), md.get("video_id")):
+            keys |= ids_in(v)
+        for k in keys:
+            if k not in found or t > found[k][0]:
+                found[k] = (t, d.name)
+    return {k: name for k, (_t, name) in found.items()}
 
 
 # --- outgoing ------------------------------------------------------------------------------------
@@ -946,9 +973,10 @@ class CliSession:
             return
         if out is None:
             return
-        self.send(planned_outs(job, autopilot.plan_posts(job, "long")))
+        kind = autopilot.post_kind(job)        # a vertical video ≤ 3 min goes out as a Short
+        self.send(planned_outs(job, autopilot.plan_posts(job, kind)))
         _p, plan = autopilot.plan_of(job)
-        if plan is None or not plan.get("auto_short"):
+        if kind != "long" or plan is None or not plan.get("auto_short"):
             return
         try:
             child = autopilot.auto_short(job, log=self.log)

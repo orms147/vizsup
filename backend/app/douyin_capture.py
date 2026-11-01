@@ -155,7 +155,8 @@ _POSTS_HOOK_JS = r"""
       }
       (d && d.aweme_list || []).forEach(function (a) {
         window.__vzPosts.push({id: String(a.aweme_id || ''), title: a.desc || '',
-                               published: a.create_time || null});
+                               published: a.create_time || null,
+                               duration: a.duration || (a.video || {}).duration || null});
       });
     } catch (e) {}
   }
@@ -250,10 +251,15 @@ def _card_title(card: dict, author: str) -> str:
     return " ".join(max(lines, key=len).split()) if lines else ""
 
 
+def _secs(ms) -> dict:
+    """{"duration": seconds} from Douyin's ``duration`` (milliseconds), {} when unknown. Pure."""
+    return {"duration": round(ms / 1000, 1)} if isinstance(ms, (int, float)) and ms > 0 else {}
+
+
 def merge_cards(raw: dict, limit: int = 30) -> list[dict]:
     """The page's cards (order = the page's: pinned first, then newest) joined with the
-    post-list answers caught by the hook (exact title, publish time) →
-    [{id, url, title, published, pinned}], at most ``limit``. Pure."""
+    post-list answers caught by the hook (exact title, publish time, length when answered) →
+    [{id, url, title, published, pinned, duration?}], at most ``limit``. Pure."""
     author = str(raw.get("author") or "").strip()
     posts = {}
     for p in raw.get("posts") or []:
@@ -269,7 +275,7 @@ def merge_cards(raw: dict, limit: int = 30) -> list[dict]:
         out.append({"id": vid, "url": f"https://www.douyin.com/video/{vid}",
                     "title": " ".join(str(p.get("title") or title or "").split()),
                     "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None,
-                    "pinned": pinned})
+                    "pinned": pinned, **_secs(p.get("duration"))})
         seen.add(vid)
 
     for card in raw.get("cards") or []:
@@ -393,7 +399,8 @@ _MIX_ASK_JS = r"""
       (d.aweme_list || []).forEach(function (a) {
         var m = a.mix_info || {}, s = m.statis || {};
         r.items.push({id: String(a.aweme_id || ''), title: a.desc || '',
-                      published: a.create_time || null, index: s.current_episode || null});
+                      published: a.create_time || null, index: s.current_episode || null,
+                      duration: a.duration || (a.video || {}).duration || null});
         if (!r.mix && m.mix_id) r.mix = {id: String(m.mix_id), name: m.mix_name || '',
                                          total: s.updated_to_episode || null};
       });
@@ -426,7 +433,7 @@ def mix_ask_js(mix_id: str, cursor: int = 0) -> str:
 def merge_mix(pages: list, limit: int = MIX_PAGE * MIX_PAGES) -> list[dict]:
     """A 合集's answers → its episodes in the 合集's order (oldest first, by ``index`` when
     every one has it), once each, the LAST ``limit`` (the newest) → [{id, url, title,
-    published, pinned, index}]. Pure."""
+    published, pinned, index, duration?}]. Pure."""
     rows: dict[str, dict] = {}
     for page in pages or []:
         for it in (page or {}).get("items") or []:
@@ -437,7 +444,8 @@ def merge_mix(pages: list, limit: int = MIX_PAGE * MIX_PAGES) -> list[dict]:
             rows[vid] = {"id": vid, "url": f"https://www.douyin.com/video/{vid}",
                          "title": " ".join(str(it.get("title") or "").split()),
                          "published": int(pub) if isinstance(pub, (int, float)) and pub > 0 else None,
-                         "pinned": False, "index": idx if isinstance(idx, int) else None}
+                         "pinned": False, "index": idx if isinstance(idx, int) else None,
+                         **_secs(it.get("duration"))}
     out = list(rows.values())
     if out and all(r["index"] is not None for r in out):
         out.sort(key=lambda r: r["index"])

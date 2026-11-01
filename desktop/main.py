@@ -762,6 +762,8 @@ class MainWindow(QMainWindow):
             return
         job = loaded[0]
         kind = item.get("autopilot") or "long"
+        if kind == "long":                    # a vertical video ≤ 3 min goes out as a Short, uncut
+            kind = autopilot.post_kind(job)
         new = autopilot.plan_posts(job, kind)
         if new:
             first = min(p["slot"] for p in new)

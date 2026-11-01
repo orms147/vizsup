@@ -19,6 +19,7 @@ Pure helpers + small JSON files; the desktop schedules renders and runs publishe
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -98,9 +99,61 @@ def after_approve_text(job: Job) -> str:
     if render_opts(job) is None:
         return ("Duyệt xong app CHƯA tự dựng được: máy chưa dựng video nào — dựng tay "
                 "một tập để app học cài đặt.")
+    kind = post_kind(job)
     return ("Duyệt xong app tự dựng theo cài đặt của bộ phim"
-            + (", tự cắt 1 Short" if plan.get("auto_short") else "")
-            + " rồi " + summary(p.slug).replace("Tự đăng: ", "đăng lên ") + ".")
+            + (", tự cắt 1 Short" if plan.get("auto_short") and kind == "long" else "")
+            + " rồi " + summary(p.slug).replace("Tự đăng: ", "đăng lên ")
+            + (" — video dọc ≤ 3 phút: đăng nguyên video dạng Short" if kind == "short" else "")
+            + ".")
+
+
+# --- long video or Short --------------------------------------------------------------------
+
+NATIVE_SHORT_MAX_S = 180.0     # YouTube Shorts and Reels take up to 3 min (shorts.LIMITS_S)
+
+
+def kind_of(size, duration) -> str:
+    """"short" for a vertical picture (narrower than tall) of at most NATIVE_SHORT_MAX_S
+    seconds, else "long"; an unknown size or length is "long" (what every post was before).
+    Pure."""
+    try:
+        w, h = (int(x) for x in size or ())
+        sec = float(duration or 0)
+    except (TypeError, ValueError):
+        return "long"
+    return "short" if 0 < w < h and 0 < sec <= NATIVE_SHORT_MAX_S else "long"
+
+
+def post_kind(job: Job) -> str:
+    """How a project goes out after its render: "short" for a Short cut from an episode, or
+    for a video that is already vertical and ≤ 3 min (a Douyin short — posted whole as a
+    TikTok / Reels / YouTube Short, and no Short is cut from it); else "long". The rendered
+    video decides — render.json's size and length (the render's frame may differ from the
+    source's), else the file — and before a render, the source."""
+    from app.pipeline import assemble, clipshort
+
+    if clipshort.info(job) is not None:
+        return "short"
+    out = job.work_dir / "output.mp4"
+    if out.exists():
+        info = assemble.load_render_info(job)
+        try:
+            dur = float(info.get("duration") or 0)
+            dur += sum(float(d) for _at, d in info.get("inserts") or [])  # commentary pauses
+        except (TypeError, ValueError):
+            dur = 0.0
+        if info.get("size") and dur > 0:
+            return kind_of(info["size"], dur)
+    for f in (out, job.source_video):
+        if not f.exists():
+            continue
+        try:
+            size = assemble.probe_size(f)
+            if size:
+                return kind_of(size, assemble.probe_duration(f))
+        except Exception:  # noqa: BLE001 - no ffprobe / unreadable file: the next one, else long
+            continue
+    return "long"
 
 
 def targets(plan: dict, kind: str) -> list[str]:
@@ -179,8 +232,12 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
     ser = _series_of(job)
     name = (plan.get("series_name") or "").strip() or (ser[1] if ser else "")
     n = episode_label(job)
-    hook = ((clipshort.info(job) or {}).get("hook") or "") if kind == "short" else ""
+    hook = ""
+    if kind == "short":
+        hook = (clipshort.info(job) or {}).get("hook") or native_hook(job)
     tmpl = plan.get("short_title" if kind == "short" else "title") or DEFAULT_PLAN["title"]
+    if not n and kind == "short":       # a short without an episode number: no "tập " left over
+        tmpl = re.sub(r"\s*[Tt]ập\s*\{n\}", "", tmpl)
     title = tmpl.format(series=name, n=n, hook=hook).strip(" |–-") or job.id
     title = " ".join(title.split())[:100]
     tags = [t for t in (plan.get("tags") or []) if str(t).startswith("#")]
@@ -204,6 +261,24 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
                     publish_at=None if private else publish_at,
                     thumbnail=thumbnail.cover(job.work_dir),   # never the library's 120-px frame
                     playlist=name, private=private)
+
+
+HOOK_LINES = 5                 # a whole short's title comes from one of its first lines
+
+
+def native_hook(job: Job) -> str:
+    """The title line of a Short that was not cut from an episode (a vertical short posted
+    whole): the punchiest of its first approved lines (clipshort.hook_score), "" without
+    subtitles."""
+    from app.pipeline import clipshort
+    from app.pipeline.srt import parse_srt
+
+    try:
+        cues = parse_srt(job.vi_srt)[:HOOK_LINES] if job.vi_srt.exists() else []
+    except (OSError, ValueError):
+        return ""
+    best = max(cues, key=lambda c: clipshort.hook_score(c.text), default=None)
+    return clipshort.hook_text(best.text) if best is not None else ""
 
 
 def plan_posts(job: Job, kind: str, *, now: float | None = None) -> list[dict]:
