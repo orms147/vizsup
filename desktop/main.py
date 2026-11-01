@@ -1729,6 +1729,11 @@ def main() -> int:
     pointer.install(app, glow_enabled=store.load_ui_state().get("hover_glow", True) is not False)
     win = MainWindow()
     win.show()
+    if "--open" in sys.argv[1:-1]:            # `--open <job id>`: start in that project
+        from PySide6.QtCore import QTimer
+
+        job_id = sys.argv[sys.argv.index("--open") + 1]
+        QTimer.singleShot(0, lambda: win._resume(job_id))
     return app.exec()
 
 
