@@ -211,6 +211,11 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
         print(f"[run] translating CN->VI (draft={args.translator}, refine={args.refine}) ...")
         translate.translate(job, draft=args.translator, refine=args.refine, force=force, log=print,
                             voice_hints=getattr(args, "voice_hints", False))
+        # 3.3) Soát xưng hô: the whole video as one conversation, pronoun-only fixes applied
+        if not getattr(args, "no_pron_check", False) and args.translator != "passthrough":
+            from app.pipeline import pronouns
+
+            pronouns.check(job, args.refine or args.translator, log=lambda m: print(f"[run] {m}"))
         # 3.4) Vietnamese typography lint, before the AI review (its findings need unchanged text)
         if not getattr(args, "no_vi_lint", False):
             from app.pipeline import vi_lint
@@ -405,6 +410,7 @@ def autopilot_opts(ui: dict, providers: dict) -> dict:
         "vi_lint": on("vi_lint", True),
         "voice_guess": on("voice_guess", False),
         "voice_hints": on("voice_hints", False),
+        "pron_check": on("pron_check", True),
         "ai_review": on("ai_review", True),
         "ai_frames": on("ai_frames", False),
     }
@@ -430,6 +436,7 @@ def autopilot_args(url: str, slug: str, opts: dict, work_dir: Path) -> argparse.
     a.no_vi_lint = not opts["vi_lint"]
     a.voice_guess = opts["voice_guess"]
     a.voice_hints = opts["voice_hints"]
+    a.no_pron_check = not opts["pron_check"]
     a.series = slug
     a.workdir = str(work_dir)
     return a
@@ -614,6 +621,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="guess each line's male/female voice from the pitch (for "
                         "`render --voice-by-gender`; off by default)")
     r.add_argument("--no-voice-guess", action="store_true", help=argparse.SUPPRESS)  # old flag
+    r.add_argument("--no-pron-check", action="store_true",
+                   help="skip the xưng hô pass (default: the refine model reads the whole video as "
+                        "one conversation, says who speaks each line, and a wrong tôi/tao/tớ for "
+                        "that speaker → listener is fixed)")
     r.add_argument("--voice-hints", action="store_true",
                    help="tell the translator which lines are a man's / a woman's voice, measured "
                         "from the pitch (helps the xưng hô; the dub keeps one voice; off by default)")

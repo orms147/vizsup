@@ -564,6 +564,14 @@ class PipelineWorker(QObject):
                                 log=self.log.emit, cancel=lambda: self._cancel,
                                 voice_hints=o.get("voice_hints", False))
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
+            # 3.3) Soát xưng hô: the whole video read as one conversation (who speaks to
+            # whom), pronoun-only fixes applied, other rewrites left for the gate
+            if o.get("pron_check", True) and o.get("translator", "passthrough") != "passthrough":
+                self._check()
+                from app.pipeline import pronouns
+
+                self.progress.emit(0.9, "Soát xưng hô cả video…")
+                pronouns.check(job, o.get("refine") or o["translator"], log=self.log.emit)
             # 3.4) Vietnamese typography lint (spaces, …, quotes, repeated function words)
             # BEFORE the AI review, whose findings are tied to the unchanged line text
             if o.get("vi_lint", True):
