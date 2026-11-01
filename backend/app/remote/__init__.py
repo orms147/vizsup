@@ -10,6 +10,8 @@ lives in app/pipeline/remote.py and is the same for every channel. Telegram is t
     poll(timeout) -> raw updates (no state change)      update_id(raw) / commit(update_id)
     accept(raw) -> Event | None   (auth + pairing)      send(text, buttons) -> message id
     ack(event, text)              (a button press)      drop_buttons(event)
+    send_photo(path, caption, buttons) -> message id    download(file, dest) -> dest
+    set_commands([(command, description)])               (the command menu; optional)
 """
 from __future__ import annotations
 
@@ -20,8 +22,9 @@ from dataclasses import dataclass
 class Event:
     """One accepted update from the paired owner. ``kind``: "text" (a message), "button" (an
     inline button pressed; ``data`` = its payload, ``ref`` = the press to acknowledge,
-    ``message_id`` = the message holding the button) or "paired" (pairing just succeeded;
-    ``who`` = the owner's display name)."""
+    ``message_id`` = the message holding the button), "photo" (a picture; ``file`` = the
+    channel's handle to download it, ``size`` = its bytes when known, ``text`` = its caption)
+    or "paired" (pairing just succeeded; ``who`` = the owner's display name)."""
     kind: str
     text: str = ""
     data: str = ""
@@ -29,6 +32,8 @@ class Event:
     message_id: int | None = None
     who: str = ""
     uid: int = 0
+    file: str = ""
+    size: int = 0
 
 
 @dataclass

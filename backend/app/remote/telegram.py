@@ -15,7 +15,13 @@ dropped without a reply (nothing leaks); five wrong codes or 30 minutes end the 
   ``getUpdates`` (no webhook: the PC is behind NAT). A connection failure is raised as the
   httpx error, so ``app.net.looks_like_network_error`` recognises it.
 - **Messages** are plain text (no parse_mode — nothing to escape), split under the 4096-
-  character limit on line breaks; inline buttons go on the last piece.
+  character limit on line breaks; inline buttons go on the last piece. A picture goes out with
+  ``sendPhoto`` (multipart; its caption ≤ 1024 characters, a longer text follows as a message).
+- **Pictures in** (the owner's own cover from the phone): only from the paired chat, the
+  largest size of a photo or an image sent as a file; ``download`` asks ``getFile`` and fetches
+  it (≤ 20 MB — the Bot API's limit) into a path vizsup chose — Telegram's file path is never
+  used as a local name.
+- **Command menu**: ``set_commands`` (setMyCommands) — the "/" list the phone shows.
 """
 from __future__ import annotations
 
@@ -27,11 +33,16 @@ import time
 
 import httpx
 
+from pathlib import Path
+
 from app.remote import Button, Event
 
 API = "https://api.telegram.org"
 PLATFORM = "telegram"
 MAX_CHARS = 3900            # Telegram allows 4096 (UTF-16 units) per message — keep a margin
+MAX_CAPTION = 1000          # … and 1024 per photo caption
+MAX_FILE = 20 * 1024 * 1024  # getFile: bots may download files up to 20 MB
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
 PAIR_TTL_S = 30 * 60
 PAIR_TRIES = 5
 NOTIFY_KINDS = ("gate", "planned", "posted", "error")
@@ -169,11 +180,44 @@ class BotAPI:
         self._token = token
         self.transport = transport
 
+    def _client(self, timeout: float) -> httpx.Client:
+        return httpx.Client(transport=self.transport, follow_redirects=False,
+                            timeout=httpx.Timeout(timeout, connect=15.0))
+
     def call(self, method: str, payload: dict | None = None, *, timeout: float = 30.0):
-        url = f"{API}/bot{self._token}/{method}"
-        with httpx.Client(transport=self.transport, follow_redirects=False,
-                          timeout=httpx.Timeout(timeout, connect=15.0)) as c:
-            r = c.post(url, json=payload or {})
+        with self._client(timeout) as c:
+            r = c.post(f"{API}/bot{self._token}/{method}", json=payload or {})
+        return self._result(r)
+
+    def upload(self, method: str, fields: dict, files: dict, *, timeout: float = 90.0):
+        """A multipart call (sendPhoto): ``fields`` as form values (dicts as JSON), ``files``
+        = {name: (filename, bytes, mime)}."""
+        import json
+
+        data = {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+                for k, v in fields.items() if v is not None}
+        with self._client(timeout) as c:
+            r = c.post(f"{API}/bot{self._token}/{method}", data=data, files=files)
+        return self._result(r)
+
+    def fetch(self, file_path: str, *, max_bytes: int = MAX_FILE, timeout: float = 60.0) -> bytes:
+        """The bytes of a file ``getFile`` named (at most ``max_bytes``)."""
+        if not file_path or ".." in file_path or file_path.startswith(("/", "\\")):
+            raise TelegramError("Telegram trả về đường dẫn tệp lạ.")
+        out = bytearray()
+        with self._client(timeout) as c, \
+                c.stream("GET", f"{API}/file/bot{self._token}/{file_path}") as r:
+            if r.status_code != 200:
+                raise TelegramError(f"Không tải được tệp (HTTP {r.status_code}).",
+                                    code=r.status_code)
+            for chunk in r.iter_bytes():
+                out += chunk
+                if len(out) > max_bytes:
+                    raise TelegramError("Tệp lớn quá (trên 20 MB).")
+        return bytes(out)
+
+    @staticmethod
+    def _result(r: httpx.Response):
         try:
             data = r.json()
         except ValueError:
@@ -277,10 +321,15 @@ class TelegramChannel:
             text = str(msg.get("text") or "").strip()
             if pairing(now) and _START.match(text):          # a code is waiting: this is a try
                 return self._pair(acc, chat, sender, text, now)
-            if chat.get("id") is not None and chat.get("id") == chat_id:
-                return Event("text", text=text, message_id=msg.get("message_id"),
+            if chat.get("id") is None or chat.get("id") != chat_id:
+                return None
+            pic = picture(msg)
+            if pic is not None:
+                return Event("photo", text=str(msg.get("caption") or "").strip(),
+                             file=pic[0], size=pic[1], message_id=msg.get("message_id"),
                              uid=self.update_id(raw))
-            return None
+            return Event("text", text=text, message_id=msg.get("message_id"),
+                         uid=self.update_id(raw))
         if isinstance(cb, dict) and chat_id is not None:
             m = cb.get("message") or {}
             if (m.get("chat") or {}).get("id") != chat_id or (cb.get("from") or {}).get("id") != chat_id:
@@ -334,6 +383,45 @@ class TelegramChannel:
             last = res.get("message_id")
         return last
 
+    def send_photo(self, photo: Path, caption: str = "",
+                   buttons: list[list[Button]] | None = None) -> int | None:
+        """``photo`` with ``caption`` (and the buttons); a caption over the limit goes out as a
+        message right after the picture (the buttons on it)."""
+        api, chat_id = self._api(), self._chat()
+        photo = Path(photo)
+        caption = (caption or "").strip()
+        short = len(caption) <= MAX_CAPTION
+        fields: dict = {"chat_id": chat_id}
+        if short and caption:
+            fields["caption"] = caption
+        if short and buttons:
+            fields["reply_markup"] = keyboard(buttons)
+        mime = "image/png" if photo.suffix.lower() == ".png" else "image/jpeg"
+        res = api.upload("sendPhoto", fields,
+                         {"photo": (photo.name, photo.read_bytes(), mime)}) or {}
+        if short:
+            return res.get("message_id")
+        return self.send(caption, buttons)
+
+    def download(self, file_id: str, dest: Path, *, max_bytes: int = MAX_FILE) -> Path:
+        """The file the owner sent (``Event.file``) saved at ``dest``."""
+        from app.fsutil import atomic_write_bytes
+
+        api = self._api()
+        info = api.call("getFile", {"file_id": str(file_id)}) or {}
+        if int(info.get("file_size") or 0) > max_bytes:
+            raise TelegramError("Ảnh lớn quá (trên 20 MB) — gửi lại dạng ảnh thường.")
+        data = api.fetch(str(info.get("file_path") or ""), max_bytes=max_bytes)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(dest, data)
+        return dest
+
+    def set_commands(self, commands: list[tuple[str, str]]) -> None:
+        """The command menu the phone shows after "/" (BotFather's /setcommands)."""
+        self._api().call("setMyCommands", {"commands": [
+            {"command": c, "description": d[:256]} for c, d in commands]})
+
     def ack(self, event: Event, text: str = "") -> None:
         if event.ref:
             self._api().call("answerCallbackQuery",
@@ -348,6 +436,21 @@ class TelegramChannel:
                 "reply_markup": {"inline_keyboard": []}})
         except TelegramError:
             pass                            # too old to edit / already without buttons
+
+
+def picture(msg: dict) -> tuple[str, int] | None:
+    """(file id, bytes) of the picture in a message: the largest size of a photo, or an image
+    sent as a file; None for anything else. Pure."""
+    sizes = [p for p in msg.get("photo") or [] if isinstance(p, dict) and p.get("file_id")]
+    if sizes:
+        best = max(sizes, key=lambda p: (int(p.get("width") or 0) * int(p.get("height") or 0),
+                                         int(p.get("file_size") or 0)))
+        return str(best["file_id"]), int(best.get("file_size") or 0)
+    doc = msg.get("document")
+    if isinstance(doc, dict) and doc.get("file_id") and \
+            str(doc.get("mime_type") or "").lower() in IMAGE_TYPES:
+        return str(doc["file_id"]), int(doc.get("file_size") or 0)
+    return None
 
 
 def keyboard(rows: list[list[Button]]) -> dict:

@@ -223,6 +223,31 @@ def episode_label(job: Job) -> str:
     return f"{r[0]}–{r[1]}" if r[1] > r[0] else str(r[0])
 
 
+_SHORT_OF = re.compile(r"·\s*(Short(?:\s+\d+)?)\s*$")
+
+
+def friendly_title(work_dir: Path, title: str | None = None) -> str | None:
+    """"Chuyến Xe Tận Thế · Tập 9" for an episode of a series that has a Vietnamese name (the
+    plan's ``series_name``) — the raw Douyin title is a long Chinese line; a Short cut from it
+    keeps its " · Short 1". None when there is no such name or no episode number (the caller
+    keeps the original). The library, «Duyệt hàng loạt» and the Telegram bot show it."""
+    from app.pipeline import compilation, series
+
+    try:
+        raw = title if title is not None else compilation._job_title(Path(work_dir))
+        lk = series.link_of(Path(work_dir))
+        vn = (load_plan(lk["slug"]).get("series_name") or "").strip() if lk else ""
+        rng = compilation.episode_range(raw) if vn else None
+    except Exception:  # noqa: BLE001 - a label: the original title is fine
+        return None
+    if not rng:
+        return None
+    a, b = rng
+    name = f"{vn} · Tập {a}" if a == b else f"{vn} · Tập {a}–{b}"
+    m = _SHORT_OF.search(raw or "")
+    return f"{name} · {m.group(1)}" if m else name
+
+
 def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = None):
     """Title / description / tags for one post — the series' templates, the post description
     the render page writes (source credit, AI voice note, rights), the series' tags."""

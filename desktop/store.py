@@ -23,19 +23,13 @@ def _storage() -> Path:
 def friendly_title(item_id: str, title: str) -> str | None:
     """"Chuyến Xe Tận Thế · Tập 9" for an episode of a series that has a Vietnamese name (the
     autopilot plan's series_name) — the raw Douyin title is a long Chinese line (2026-11-01).
-    None keeps the original."""
+    None keeps the original. The bot shows the same (autopilot.friendly_title)."""
     try:
-        from app.pipeline import autopilot, compilation, series
+        from app.pipeline import autopilot
 
-        lk = series.link_of(_storage() / item_id)
-        vn = (autopilot.load_plan(lk["slug"]).get("series_name") or "").strip() if lk else ""
-        rng = compilation.episode_range(title) if vn else None
+        return autopilot.friendly_title(_storage() / item_id, title or "")
     except Exception:  # noqa: BLE001 - a label: the original title is fine
         return None
-    if not rng:
-        return None
-    a, b = rng
-    return f"{vn} · Tập {a}" if a == b else f"{vn} · Tập {a}–{b}"
 
 
 # --- UI choices ------------------------------------------------------------

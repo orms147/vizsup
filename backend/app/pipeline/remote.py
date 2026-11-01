@@ -15,20 +15,38 @@ the open editor shows it and saving it changed the text). Approval goes through
 Nothing here approves anything else, auto-approves, or renders an unapproved revision (the
 render itself re-checks: app/pipeline/render.py).
 
+More from the phone (none of it approves anything):
+- **a page link** (Douyin 合集 / creator page, Bilibili space / list — batch_import.is_page):
+  the page is listed off the GUI thread (``Host.work``), the videos NOT on the machine yet
+  (batch_import.load) are offered with [▶️ Dịch N tập mới] [Bỏ qua]; the offer is kept in
+  ``_remote/pending.json`` (a button carries only its key) and the press queues them through
+  the host's link queue (``Host.queue_batch``) with the series the start page's picker would
+  pick (batch_import.suggested_series, else "auto"). A single video link is one video, as before.
+- **/cho**: the episodes waiting at the gate (``waiting``, minus the ones the host is still
+  processing), oldest first, five per call — each its usual approval message + [✅ Duyệt].
+- **a photo**: "which video?" with buttons (recent approved / rendered projects) → that
+  project's cover (thumbnail.use_image: the owner's choice, never replaced automatically); a
+  video already on YouTube gets it there too (``PublishProvider.set_thumbnail``).
+- after a render, the planned posts come with the cover picture (``planned_outs``).
+
 Only ONE process reads the bot's updates (Telegram answers a second getUpdates with 409):
 ``take_poll`` — the open app holds it, the scheduled task only polls when the app does not.
 Each update is committed (offset saved) BEFORE it is acted on: processed once, at most.
 Network sends never run on the GUI thread: ``handle`` returns ``Out`` items, ``deliver`` (or
-the desktop's ``Outbox`` thread) sends them.
+the desktop's ``Outbox`` thread) sends them; blocking work (a page listing, a photo download)
+goes through ``Host.work``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
 import re
+import secrets
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,11 +57,19 @@ from app.models import Job
 from app.remote import Button, Event
 
 STATE = Path("_remote") / "state.json"       # approval messages sent (job → revision); no secrets
+PENDING = Path("_remote") / "pending.json"   # page offers + photos waiting for a press
+PHOTOS = Path("_remote") / "photos"          # a photo from the phone, while it becomes a cover
 POLL = Path("_remote") / "poll.json"         # who reads the bot's updates now
 POLL_STALE_S = 120
 REV = 8                                      # revision prefix carried by the ✅ button
 CAP = 40                                     # flagged lines shown in one approval message
 WAITING_DAYS = 14
+CHO_MAX = 5                                  # approval messages per /cho
+CHO_ROUND_S = 3600                           # /cho again within this: the next ones
+LIST_MAX = 10                                # new videos of a page listed by name
+OFFER_TTL_S = 3 * 86400
+PHOTO_TTL_S = 86400
+COVER_CHOICES = 8                            # projects offered for a photo
 POLL_WAIT_S = 120                            # the task waits this long for a lost connection
 RENDER_WAIT_S = 3 * 3600
 _JOB_ID = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
@@ -57,12 +83,16 @@ POSTED = ("done", "published", "scheduled", "private", "draft")
 CHANGED = ("Phụ đề đã thay đổi sau khi gửi tin này nên CHƯA duyệt — bản mới ở tin ngay dưới, "
            "đọc lại rồi bấm Duyệt ở đó.")
 HELP = ("🤖 vizsup — điều khiển từ điện thoại\n\n"
-        "• Gửi link video Douyin / Bilibili (dán nguyên đoạn chia sẻ “长按复制…” cũng được): "
+        "• Gửi link một video Douyin / Bilibili (dán nguyên đoạn chia sẻ “长按复制…” cũng được): "
         "máy tải, làm phụ đề, dịch rồi gửi lại để bạn duyệt.\n"
+        "• Gửi link 合集 / trang người đăng Douyin / danh sách Bilibili: bot kể các tập CHƯA có "
+        "trên máy, bấm “Dịch N tập mới” là máy dịch lần lượt.\n"
         "• Tập tới bước duyệt: bot gửi các câu cần xem + nút ✅ Duyệt (duyệt là việc của bạn — "
         "không bao giờ tự duyệt) hoặc ✏️ Để sửa trên máy.\n"
+        "• Gửi một tấm ảnh: chọn video để làm ảnh bìa (video đã lên YouTube thì đổi luôn ở đó).\n"
         "• Duyệt xong: bộ phim bật Tự động đăng thì máy tự dựng, cắt Short, lên lịch và đăng; "
-        "bot báo từng bước.\n\n"
+        "bot gửi ảnh bìa + lịch đăng, rồi báo từng bài.\n\n"
+        "/cho — video đang chờ duyệt (mỗi lần 5 video, kèm nút ✅ Duyệt)\n"
         "/trangthai — tập chờ duyệt, hàng dựng, lịch đăng 24 giờ, bài vừa đăng, lỗi\n"
         "/lich — kế hoạch đăng + các bài sắp đăng\n"
         "/gio 19:00 21:00 — đổi giờ đăng (mọi bộ phim đang tự đăng; bài chờ được xếp lại)\n"
@@ -70,6 +100,18 @@ HELP = ("🤖 vizsup — điều khiển từ điện thoại\n\n"
         "/dangthu bat | tat — đăng thử: video để riêng tư\n"
         "/tamdung · /tieptuc — tạm dừng / tiếp tục đăng\n"
         "/help — hướng dẫn này")
+# the "/" menu on the phone (setMyCommands) — the same commands, one line each
+COMMANDS = (("cho", "Video chờ duyệt (kèm nút ✅ Duyệt)"),
+            ("trangthai", "Chờ duyệt, đang dựng, lịch đăng, lỗi"),
+            ("lich", "Kế hoạch đăng + bài sắp đăng"),
+            ("gio", "Đổi giờ đăng, vd. /gio 19:00 21:00"),
+            ("moingay", "Số bài mỗi ngày, vd. /moingay 2"),
+            ("dangthu", "Đăng thử: /dangthu bat hoặc tat"),
+            ("tamdung", "Tạm dừng đăng"),
+            ("tieptuc", "Tiếp tục đăng"),
+            ("help", "Hướng dẫn dùng bot"))
+PAGE_NAMES = {"douyin_user": "Trang Douyin", "bilibili_space": "Trang Bilibili",
+              "bilibili_season": "Tuyển tập Bilibili", "bilibili_series": "Danh sách Bilibili"}
 
 
 # --- small files -------------------------------------------------------------------------------
@@ -89,6 +131,48 @@ def _read(path: Path) -> dict:
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+_FILES = threading.Lock()      # the desktop changes these files from the GUI thread AND Host.work
+
+
+def _change(rel: Path, fn: Callable[[dict], object]):
+    """Read ``rel`` (under storage), let ``fn`` change the dict, write it back; ``fn``'s result."""
+    with _FILES:
+        d = _read(_root() / rel)
+        res = fn(d)
+        _write(_root() / rel, d)
+        return res
+
+
+def _stash(kind: str, item: dict, ttl: float, keep: int = 10) -> str:
+    """Keep ``item`` under a new short key in pending.json[kind] (older than ``ttl`` dropped,
+    the newest ``keep`` kept) → the key a button carries."""
+    key = secrets.token_hex(3)
+
+    def put(d: dict) -> None:
+        now = time.time()
+        items = {k: v for k, v in (d.get(kind) or {}).items()
+                 if isinstance(v, dict) and now - float(v.get("at") or 0) < ttl}
+        items[key] = {**item, "at": now}
+        d[kind] = dict(sorted(items.items(), key=lambda kv: kv[1]["at"])[-keep:])
+
+    _change(PENDING, put)
+    return key
+
+
+def _take(kind: str, key: str, ttl: float, *, keep: bool = False) -> dict | None:
+    """The item a button's key names (None when unknown / expired); removed unless ``keep``."""
+    def get(d: dict):
+        items = d.get(kind) or {}
+        item = items.get(key) if isinstance(items, dict) else None
+        if not keep and isinstance(items, dict):
+            items.pop(key, None)
+        if not isinstance(item, dict) or time.time() - float(item.get("at") or 0) > ttl:
+            return None
+        return item
+
+    return _change(PENDING, get) if re.fullmatch(r"[0-9a-f]{6}", key or "") else None
 
 
 def channel():
@@ -133,13 +217,14 @@ def was_sent(job_id: str, rev: str) -> bool:
 
 
 def mark_sent(job_id: str, rev: str, message_id) -> None:
-    st = _read(_root() / STATE)
-    sent = st.get("sent") or {}
-    cutoff = time.time() - 60 * 86400
-    sent = {k: v for k, v in sent.items() if float((v or {}).get("at") or 0) > cutoff}
-    sent[job_id] = {"rev": rev, "at": time.time(), "msg": message_id}
-    st["sent"] = sent
-    _write(_root() / STATE, st)
+    def put(st: dict) -> None:
+        cutoff = time.time() - 60 * 86400
+        sent = {k: v for k, v in (st.get("sent") or {}).items()
+                if float((v or {}).get("at") or 0) > cutoff}
+        sent[job_id] = {"rev": rev, "at": time.time(), "msg": message_id}
+        st["sent"] = sent
+
+    _change(STATE, put)
 
 
 # --- projects ------------------------------------------------------------------------------------
@@ -158,10 +243,18 @@ def load_job(job_id: str) -> Job | None:
     return job
 
 
-def title_of(job: Job) -> str:
+def display_title(d: Path, limit: int = 80) -> str:
+    """A project's name in the bot: "Chuyến Xe Tận Thế · Tập 9" when its series has a
+    Vietnamese name (autopilot.friendly_title), else its title without hashtags."""
+    from app.pipeline import autopilot
     from app.pipeline.compilation import _job_title, clean_title
 
-    return clean_title(_job_title(job.work_dir), 80)
+    raw = _job_title(Path(d))
+    return clean_title(autopilot.friendly_title(Path(d), raw) or raw, limit)
+
+
+def title_of(job: Job) -> str:
+    return display_title(job.work_dir, 80)
 
 
 def rev_of(job: Job) -> str:
@@ -237,7 +330,9 @@ def project_index() -> dict[str, str]:
 @dataclass
 class Out:
     """One thing to send: "send" a message (``note`` = the notification toggle it belongs
-    to, None = a direct answer, always sent), "ack" a button press, "drop" its buttons."""
+    to, None = a direct answer, always sent), "photo" a picture (``photo``) with ``text`` as
+    its caption — the plain message when the picture can't go out, "ack" a button press,
+    "drop" its buttons, "commands" the "/" menu (COMMANDS)."""
     kind: str
     text: str = ""
     buttons: list | None = None
@@ -245,17 +340,41 @@ class Out:
     note: str | None = None
     preview: bool = False
     sent: Callable[[int | None], None] | None = field(default=None, repr=False)
+    photo: Path | None = None
 
 
 def _say(text: str, note: str | None = None, **kw) -> Out:
     return Out("send", text, note=note, **kw)
 
 
+def _send_one(ch, o: Out) -> None:
+    if o.kind == "photo":
+        if o.photo is not None and Path(o.photo).is_file() and hasattr(ch, "send_photo"):
+            mid = ch.send_photo(Path(o.photo), o.text, o.buttons)
+        else:                                    # the picture is gone: the words still go
+            mid = ch.send(o.text, o.buttons, preview=o.preview)
+        if o.sent is not None:
+            o.sent(mid)
+    elif o.kind == "send":
+        mid = ch.send(o.text, o.buttons, preview=o.preview)
+        if o.sent is not None:
+            o.sent(mid)
+    elif o.kind == "ack" and o.event is not None:
+        ch.ack(o.event, o.text)
+    elif o.kind == "drop" and o.event is not None:
+        ch.drop_buttons(o.event)
+    elif o.kind == "commands" and hasattr(ch, "set_commands"):
+        ch.set_commands(list(COMMANDS))
+        if o.sent is not None:
+            o.sent(None)
+
+
 def deliver(outs: list[Out], ch=None, *, log: Callable[[str], None] | None = None,
             sleep: Callable[[float], None] = time.sleep) -> int:
     """Send ``outs`` in order on the paired channel; returns how many went out. A refusal is
-    logged and skipped; a connection error is retried twice, Telegram's flood limit waited
-    out (≤ 30 s). Blocking — never call it on the GUI thread."""
+    logged and skipped (a refused picture goes out as its text); a connection error is
+    retried twice, Telegram's flood limit waited out (≤ 30 s). Blocking — never call it on
+    the GUI thread."""
     from app import net
     from app.remote.telegram import TelegramError, scrub
 
@@ -271,14 +390,7 @@ def deliver(outs: list[Out], ch=None, *, log: Callable[[str], None] | None = Non
             continue
         for attempt in range(3):
             try:
-                if o.kind == "send":
-                    mid = ch.send(o.text, o.buttons, preview=o.preview)
-                    if o.sent is not None:
-                        o.sent(mid)
-                elif o.kind == "ack" and o.event is not None:
-                    ch.ack(o.event, o.text)
-                elif o.kind == "drop" and o.event is not None:
-                    ch.drop_buttons(o.event)
+                _send_one(ch, o)
                 n += 1
                 break
             except TelegramError as exc:
@@ -286,6 +398,19 @@ def deliver(outs: list[Out], ch=None, *, log: Callable[[str], None] | None = Non
                     sleep(min(30.0, exc.retry_after))
                     continue
                 say(f"Telegram từ chối ({o.kind}): {scrub(exc)}")
+                if o.kind == "photo":            # the schedule / confirmation still matters
+                    o = Out("send", o.text, o.buttons, note=o.note, sent=o.sent)
+                    continue
+                break
+            except OSError as exc:               # the picture could not be read
+                if o.kind == "photo" and not net.looks_like_network_error(exc):
+                    say(f"Telegram: không đọc được ảnh ({type(exc).__name__})")
+                    o = Out("send", o.text, o.buttons, note=o.note, sent=o.sent)
+                    continue
+                if attempt < 2 and net.looks_like_network_error(exc):
+                    sleep(2.0 + 3.0 * attempt)
+                    continue
+                say(f"Telegram: không gửi được ({type(exc).__name__})")
                 break
             except Exception as exc:  # noqa: BLE001 - a notification never breaks a run
                 if attempt < 2 and net.looks_like_network_error(exc):
@@ -436,12 +561,24 @@ def failed_outs(what: str, msg: str, *, asked: bool = False) -> list[Out]:
 
 
 def planned_outs(job: Job, posts: list[dict]) -> list[Out]:
+    """A render finished and its posts were queued: the cover (thumb.jpg) with the schedule as
+    its caption — the plain message when there is no cover."""
+    from app.pipeline import thumbnail
+
     if not posts:
         return []
     rows = "\n".join(f"• {PLATFORMS.get(p['platform'], p['platform'])} "
                      f"({KINDS.get(p['kind'], p['kind'])}) lúc {_when(p['slot'])}"
                      for p in sorted(posts, key=lambda p: p["slot"]))
-    return [_say(f"📅 Đã lên lịch đăng: {title_of(job)}\n{rows}", note="planned")]
+    text = f"📅 Đã lên lịch đăng: {title_of(job)}\n{rows}"
+    try:
+        cover = thumbnail.cover(job.work_dir)
+    except Exception:  # noqa: BLE001 - the schedule matters, the picture is a bonus
+        cover = None
+    if cover is not None:
+        return [Out("photo", text + "\n(Ảnh bìa ở trên — muốn đổi thì gửi ảnh khác cho bot.)",
+                    photo=cover, note="planned")]
+    return [_say(text, note="planned")]
 
 
 def posted_outs(post: dict | None) -> list[Out]:
@@ -452,9 +589,7 @@ def posted_outs(post: dict | None) -> list[Out]:
     name = PLATFORMS.get(post.get("platform") or "", post.get("platform") or "")
     kind = KINDS.get(post.get("kind") or "", post.get("kind") or "")
     d = _root() / str(post.get("job") or "")
-    from app.pipeline.compilation import _job_title, clean_title
-
-    title = clean_title(_job_title(d), 80) if d.is_dir() else str(post.get("job"))
+    title = display_title(d, 80) if post.get("job") and d.is_dir() else str(post.get("job"))
     if post.get("status") == "scheduled":
         when = time.strftime("%H:%M %d/%m", time.localtime(float(post.get("slot") or 0)))
         text = f"⏰ {name}: đã tải lên {title} ({kind}) — tự công khai lúc {when}"
@@ -505,10 +640,257 @@ def waiting(now: float | None = None) -> list[Job]:
     return [j for _t, j in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
+# --- /cho: the gate, from the phone ----------------------------------------------------------------
+
+def waiting_outs(host: Host, *, now: float | None = None) -> list[Out]:
+    """/cho: the episodes waiting at the gate — oldest first (they are posted in the order they
+    are approved), the host's running ones left out — each with its approval message and
+    [✅ Duyệt]; CHO_MAX per call, the next call within CHO_ROUND_S goes on with the rest."""
+    now = time.time() if now is None else now
+    wait = [j for j in reversed(waiting(now)) if not host.busy(j.id)]
+    if not wait:
+        return [_say("🟢 Không có video nào chờ duyệt. Gửi link video hoặc link 合集 để dịch "
+                     "thêm.")]
+    st = _read(_root() / STATE).get("cho") or {}
+    shown = set(st.get("shown") or []) if now - float(st.get("at") or 0) < CHO_ROUND_S else set()
+    rest = [j for j in wait if j.id not in shown]
+    if not rest:                                   # everything was shown: from the start again
+        rest, shown = wait, set()
+    batch = rest[:CHO_MAX]
+    more = len(rest) - len(batch)
+
+    def put(d: dict) -> None:
+        d["cho"] = {"shown": sorted(shown | {j.id for j in batch}), "at": now}
+
+    _change(STATE, put)
+    head = (f"🟡 {len(wait)} video chờ duyệt" + (f" — đây là {len(batch)} video:" if more or shown
+                                                 else ":")
+            + "\nĐọc từng tin rồi bấm ✅ Duyệt (hoặc ✏️ để sửa trên máy).")
+    outs = [_say(head)]
+    for job in batch:
+        outs += approval_outs(job)
+    if more:
+        outs.append(_say(f"… còn {more} video, gửi /cho lần nữa."))
+    return outs
+
+
+# --- a page of videos (合集 / creator page / Bilibili list) ----------------------------------------
+
+def page_outs(url: str, res: dict) -> list[Out]:
+    """What ``batch_import.load(url)`` found, as the offer: the page, how many are on the
+    machine, the NEW ones (oldest first, LIST_MAX by name), the series they will join, and
+    [▶️ Dịch N tập mới] [Bỏ qua]. The offer (its videos in the page's order, the series) is
+    kept in pending.json — the button carries its key."""
+    from app.pipeline import autopilot, batch_import, series
+    from app.pipeline.compilation import clean_title
+
+    if res.get("error"):
+        return [_say(f"⚠ Chưa đọc được danh sách video: {res['error']}")]
+    videos = [v for v in res.get("videos") or [] if v.get("url")]
+    new = [v for v in videos if not v.get("have")]
+    mix = res.get("mix") or {}
+    head = (f"📋 合集 “{mix['name']}”" if mix.get("name")
+            else "📋 " + PAGE_NAMES.get(res.get("kind") or "", "Trang này"))
+    head += f": {len(videos)} video"
+    if len(videos) - len(new):
+        head += f" · {len(videos) - len(new)} đã có trên máy"
+    if not new:
+        return [_say(head + "\n\nKhông có tập mới — mọi video đều đã có trên máy. Gửi /cho để "
+                            "xem video chờ duyệt.")]
+    order = batch_import.oldest_first(new)
+    lines = [head, "", f"🆕 {len(new)} tập mới (dịch từ tập cũ nhất):"]
+    lines += [f"• {clean_title(str(v.get('title') or v.get('id') or v['url']), 70)}"
+              for v in order[:LIST_MAX]]
+    if len(order) > LIST_MAX:
+        lines.append(f"… và {len(order) - LIST_MAX} tập nữa")
+    try:
+        slug = batch_import.suggested_series(videos) or "auto"
+        prof = series.load(slug) if slug != "auto" else None
+    except Exception:  # noqa: BLE001 - a series is a help: each video finds its own
+        slug, prof = "auto", None
+    lines.append("")
+    if prof is not None:
+        lines.append(f"Bộ phim: 《{prof.name}》 · {autopilot.summary(prof.slug)}")
+    else:
+        lines.append("Bộ phim: mỗi video tự nhận theo tên 《…》 trong tiêu đề.")
+    if res.get("kind") == "douyin_user":
+        lines.append("(Trang người đăng Douyin chỉ hiện ~18–36 video mới nhất khi chưa đăng nhập "
+                     "— gửi link 合集 để có đủ các tập.)")
+    lines.append("Bấm Dịch: máy tải và dịch lần lượt, tập nào xong sẽ gửi để bạn duyệt — không "
+                 "tự duyệt tập nào.")
+    keep = ("url", "id", "title", "published")
+    key = _stash("offers", {"url": url, "series": slug,
+                            "videos": [{k: v.get(k) for k in keep} for v in new]}, OFFER_TTL_S)
+    return [_say("\n".join(lines), buttons=[[Button(f"▶️ Dịch {len(new)} tập mới", f"bt:{key}"),
+                                             Button("Bỏ qua", f"bx:{key}")]])]
+
+
+def list_page(url: str, lister=None) -> list[Out]:
+    """List ``url`` and build the offer (blocking: a Douyin page opens the embedded browser
+    for a minute or two — call it through ``Host.work``). Never raises."""
+    from app.pipeline import batch_import
+
+    try:
+        return page_outs(url, batch_import.load(url, lister=lister))
+    except Exception as exc:  # noqa: BLE001 - the owner gets a sentence, not a traceback
+        from app.remote.telegram import scrub
+
+        return [_say(f"⚠ Chưa đọc được danh sách video ({type(exc).__name__}: "
+                     f"{scrub(exc)[:200]}).")]
+
+
+# --- the owner's cover from the phone ---------------------------------------------------------------
+
+def _fold(text: str) -> set[str]:
+    """The words of ``text`` without accents, lower case ("Tập 9" → {"tap", "9"}). Pure."""
+    t = unicodedata.normalize("NFD", (text or "").replace("đ", "d").replace("Đ", "D"))
+    t = "".join(c for c in t if not unicodedata.combining(c)).casefold()
+    return set(re.findall(r"\w+", t))
+
+
+def _youtube_posts(job_id: str, posts: list[dict] | None = None) -> list[dict]:
+    """This project's posts already on a platform that can change a posted video's cover."""
+    return [p for p in (posts if posts is not None else _load_posts())
+            if p.get("job") == job_id and p.get("status") in POSTED
+            and (p.get("result") or {}).get("id") and _cover_settable(p.get("platform"))]
+
+
+def _load_posts() -> list[dict]:
+    from app.pipeline import autopilot
+
+    try:
+        return autopilot.load_posts()
+    except Exception:  # noqa: BLE001 - a broken posts file: nothing posted as far as we know
+        return []
+
+
+def _cover_settable(platform) -> bool:
+    from app.providers.registry import get_publisher
+
+    try:
+        return bool(getattr(get_publisher(str(platform or "")), "can_set_thumbnail", False))
+    except KeyError:
+        return False
+
+
+def cover_choices(caption: str = "", *, limit: int = COVER_CHOICES) -> list[tuple[Job, bool]]:
+    """(project, already on YouTube) the owner may give a cover: approved or rendered ones,
+    newest first — the ones whose name shares words with the photo's ``caption`` first."""
+    rows: list[tuple[float, Path]] = []
+    for _t, d, _data in _projects():
+        if (d / "group.json").exists() or (d / "compilation.json").exists():
+            continue
+        stamps = [p for p in (d / "output.mp4", d / "approved.json") if p.exists()]
+        if stamps and (d / "vi.srt").exists():
+            rows.append((max(p.stat().st_mtime for p in stamps), d))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    rows = rows[:40]
+    want = _fold(caption)
+    if want:
+        from app.pipeline.compilation import _job_title
+
+        rows.sort(key=lambda r: -len(want & _fold(f"{display_title(r[1], 200)} {_job_title(r[1])}")))
+    posts = _load_posts()
+    out = []
+    for _t, d in rows[:limit]:
+        job = load_job(d.name)
+        if job is not None:
+            out.append((job, bool(_youtube_posts(job.id, posts))))
+    return out
+
+
+def photo_outs(ev: Event) -> list[Out]:
+    """A photo from the owner: which project gets it as its cover (buttons)."""
+    from app.remote.telegram import MAX_FILE
+
+    if ev.size and ev.size > MAX_FILE:
+        return [_say("Ảnh này lớn quá (trên 20 MB) — Telegram không cho bot tải. Gửi lại dạng "
+                     "ảnh thường (không chọn “gửi dạng tệp”).")]
+    choices = cover_choices(ev.text)
+    if not choices:
+        return [_say("🖼 Đã nhận ảnh, nhưng trên máy chưa có video nào đã duyệt hoặc đã dựng để "
+                     "làm ảnh bìa.")]
+    key = _stash("photos", {"file": ev.file}, PHOTO_TTL_S, keep=5)
+    rows = [[Button(("📺 " if on_yt else "") + display_title(job.work_dir, 48),
+                    f"cv:{key}:{job.id}")] for job, on_yt in choices]
+    rows.append([Button("Bỏ qua", f"cx:{key}")])
+    text = "🖼 Ảnh này làm ảnh bìa cho video nào?"
+    if any(on_yt for _j, on_yt in choices):
+        text += "\n📺 = đã lên YouTube — ảnh bìa ở đó cũng được đổi luôn."
+    return [_say(text, buttons=rows)]
+
+
+def set_cover(job: Job, file_id: str, ch=None) -> list[Out]:
+    """Download the owner's photo, make it ``job``'s cover (the owner's choice: never replaced
+    by the automatic one) and put it on the YouTube video when it is already up. Blocking —
+    through ``Host.work``. Never raises: every failure is a sentence."""
+    from app.pipeline import thumbnail
+    from app.remote.telegram import TelegramError, scrub
+
+    ch = ch if ch is not None else channel()
+    if ch is None:
+        return [_say("⚠ Bot chưa kết nối trên máy — chưa đặt được ảnh bìa.")]
+    tmp = _root() / PHOTOS / f"telegram-{secrets.token_hex(4)}.img"
+    try:
+        ch.download(file_id, tmp)
+        thumb = thumbnail.use_image(job.work_dir, tmp)
+    except TelegramError as exc:
+        return [_say(f"⚠ Chưa tải được ảnh từ Telegram ({scrub(exc)[:160]}) — gửi lại ảnh nhé.")]
+    except ImportError:
+        return [_say("⚠ Máy thiếu thư viện xử lý ảnh (Pillow) — chưa đặt được ảnh bìa.")]
+    except Exception as exc:  # noqa: BLE001 - offline, not a picture Pillow knows …
+        from app import net
+
+        if net.looks_like_network_error(exc):
+            return [_say("⚠ Mất kết nối khi tải ảnh — gửi lại ảnh khi mạng ổn nhé.")]
+        return [_say(f"⚠ Không mở được ảnh này ({type(exc).__name__}) — gửi ảnh JPG / PNG "
+                     f"khác nhé.")]
+    finally:
+        tmp.unlink(missing_ok=True)
+    lines = [f"🖼 Đã đổi ảnh bìa: {title_of(job)}", *cover_notes(job, thumb)]
+    return [Out("photo", "\n".join(lines), photo=thumb)]
+
+
+def cover_notes(job: Job, thumb: Path) -> list[str]:
+    """Where the new cover goes: set on the videos already up (when the platform can), the
+    posts still waiting, or "the next post"."""
+    from app.providers.registry import get_publisher
+
+    posts = _load_posts()
+    lines = []
+    for p in _youtube_posts(job.id, posts):
+        name = PLATFORMS.get(p["platform"], p["platform"])
+        res = p.get("result") or {}
+        try:
+            pub = get_publisher(p["platform"])
+            if not pub.connected():
+                lines.append(f"{name}: chưa kết nối trên máy — chưa đổi được ảnh bìa của video "
+                             f"đã tải lên; ảnh sẽ dùng cho lần đăng tới.")
+                continue
+            got = pub.set_thumbnail(str(res.get("id")), thumb)
+        except Exception as exc:  # noqa: BLE001 - the cover is set here anyway
+            lines.append(f"⚠ {name}: chưa đổi được ảnh bìa ({type(exc).__name__}).")
+            continue
+        url = res.get("url") or ""
+        if got.ok:
+            lines.append(f"✅ {name}: đã thay ảnh bìa ({KINDS.get(p.get('kind'), p.get('kind'))})"
+                         + (f" — {url}" if url else ""))
+        else:
+            lines.append(f"⚠ {name}: {got.message or 'chưa đổi được ảnh bìa'}")
+    later = sorted((p for p in posts if p.get("job") == job.id
+                    and p.get("status") in ("pending", "running")), key=lambda p: p["slot"])
+    if later:
+        lines.append("Ảnh sẽ dùng khi đăng: " + ", ".join(
+            f"{PLATFORMS.get(p['platform'], p['platform'])} lúc {_when(p['slot'])}"
+            for p in later[:4]) + ".")
+    if not lines:
+        lines.append("Ảnh sẽ dùng cho lần đăng tới.")
+    return lines
+
+
 def schedule_text(*, now: float | None = None) -> str:
     """/lich: each series' posting plan and the next posts (7 days)."""
     from app.pipeline import autopilot
-    from app.pipeline.compilation import _job_title, clean_title
 
     now = time.time() if now is None else now
     lines = ["📅 Lịch đăng" + (" — ⏸ ĐANG TẠM DỪNG (/tieptuc để đăng lại)"
@@ -528,7 +910,7 @@ def schedule_text(*, now: float | None = None) -> str:
         lines.append(f"Sắp đăng ({len(soon)}):")
         for p in soon[:12]:
             d = _root() / str(p.get("job") or "")
-            title = clean_title(_job_title(d), 50) if d.is_dir() else str(p.get("job"))
+            title = display_title(d, 50) if d.is_dir() else str(p.get("job"))
             mark = "⏰ đã tải lên" if p.get("status") == "scheduled" else "chờ"
             lines.append(f"• {_when(p['slot'])} · {PLATFORMS.get(p['platform'], p['platform'])} "
                          f"· {KINDS.get(p['kind'], p['kind'])} · {title} ({mark})")
@@ -581,7 +963,7 @@ def status_text(renders: list[str] | None = None, *, now: float | None = None) -
     """/trangthai: episodes waiting for approval, the render queue, the next 24 h of posts,
     the last five published, failures."""
     from app.pipeline import autopilot
-    from app.pipeline.compilation import _job_title, clean_title
+    from app.pipeline.compilation import clean_title
 
     now = time.time() if now is None else now
     lines = [f"📊 vizsup · {time.strftime('%H:%M %d/%m', time.localtime(now))}"]
@@ -592,6 +974,7 @@ def status_text(renders: list[str] | None = None, *, now: float | None = None) -
         lines += [f"• {title_of(j)}" for j in wait[:8]]
         if len(wait) > 8:
             lines.append(f"… và {len(wait) - 8} tập nữa")
+        lines.append("→ gửi /cho để duyệt ngay trên điện thoại")
     else:
         lines.append("🟡 Không có tập nào chờ duyệt.")
     lines.append("")
@@ -603,7 +986,7 @@ def status_text(renders: list[str] | None = None, *, now: float | None = None) -
 
     def name(p: dict) -> str:
         d = _root() / str(p.get("job") or "")
-        return clean_title(_job_title(d), 60) if d.is_dir() else str(p.get("job"))
+        return display_title(d, 60) if d.is_dir() else str(p.get("job"))
 
     def where(p: dict) -> str:
         return (f"{PLATFORMS.get(p.get('platform'), p.get('platform'))} · "
@@ -643,7 +1026,16 @@ class Host:
     def queue_link(self, url: str, job_id: str | None) -> str:          # pragma: no cover
         raise NotImplementedError
 
+    def queue_batch(self, videos: list[dict], series: str) -> str:      # pragma: no cover
+        """Queue the new videos of a page (page order; the host runs them oldest first,
+        batch_import.oldest_first) with ``series`` (a slug, "auto" or "none") → the answer."""
+        raise NotImplementedError
+
     def link_busy(self, url: str) -> str | None:
+        return None
+
+    def busy(self, job_id: str) -> str | None:
+        """Why the project is not ready to approve (being processed / rendered), else None."""
         return None
 
     def before_approve(self, job: Job) -> str | None:
@@ -656,6 +1048,11 @@ class Host:
 
     def renders(self) -> list[str]:
         return []
+
+    def work(self, fn: Callable[[], list[Out]]) -> list[Out]:
+        """Blocking work (a page listing, a photo download) → its messages. Here: right
+        away; the desktop runs it on a thread and sends what it returns when done ([] now)."""
+        return fn()
 
 
 def check_approve(job_id: str, rev: str) -> tuple[Job | None, str | None]:
@@ -673,13 +1070,32 @@ def check_approve(job_id: str, rev: str) -> tuple[Job | None, str | None]:
     return job, None
 
 
+def _commands_sig() -> str:
+    return hashlib.sha1(json.dumps(COMMANDS, ensure_ascii=False).encode()).hexdigest()[:10]
+
+
+def commands_outs(*, force: bool = False) -> list[Out]:
+    """The "/" menu (setMyCommands) — once per version of COMMANDS, or ``force`` (pairing)."""
+    sig = _commands_sig()
+    if not force and _read(_root() / STATE).get("commands") == sig:
+        return []
+
+    def done(_mid, s=sig) -> None:
+        _change(STATE, lambda d: d.__setitem__("commands", s))
+
+    return [Out("commands", sent=done)]
+
+
 def handle(ev: Event, host: Host) -> list[Out]:
     if ev.kind == "paired":
         who = f" của {ev.who}" if ev.who else ""
-        return [_say(f"✅ Đã ghép bot với vizsup trên máy{who}. Từ giờ bot chỉ trả lời đoạn chat "
+        return [*commands_outs(force=True),
+                _say(f"✅ Đã ghép bot với vizsup trên máy{who}. Từ giờ bot chỉ trả lời đoạn chat "
                      f"này.\n\n{HELP}")]
     if ev.kind == "button":
         return _button(ev, host)
+    if ev.kind == "photo":
+        return photo_outs(ev)
     if ev.kind == "text":
         return _text(ev, host)
     return []
@@ -690,6 +1106,8 @@ def _text(ev: Event, host: Host) -> list[Out]:
     cmd = t.split()[0].lower().split("@")[0] if t.startswith("/") else ""
     if cmd in ("/start", "/help", "/trogiup", "/huongdan"):
         return [_say(HELP)]
+    if cmd in ("/cho", "/choduyet"):
+        return waiting_outs(host)
     if cmd in ("/trangthai", "/status"):
         return [_say(status_text(host.renders()))]
     if cmd in ("/lich", "/gio", "/moingay", "/dangthu", "/tamdung", "/tieptuc"):
@@ -697,13 +1115,25 @@ def _text(ev: Event, host: Host) -> list[Out]:
     url = find_link(t)
     if url:
         return _link(url, host)
+    if cmd:
+        return [_say(f"Bot chưa biết lệnh {cmd[:40]}. Gửi /help để xem các lệnh.")]
+    if not t:
+        return [_say("Bot chỉ hiểu chữ, link và ảnh. Gửi link video / 合集 Douyin, Bilibili, hoặc "
+                     "/help.")]
     return [_say("Mình chưa hiểu tin này. Gửi link video Douyin / Bilibili (dán nguyên đoạn chia "
-                 "sẻ cũng được), hoặc /trangthai, /help.")]
+                 "sẻ cũng được), link 合集 để dịch nhiều tập, hoặc /cho, /trangthai, /help.")]
 
 
 def _link(url: str, host: Host) -> list[Out]:
-    from app.pipeline import approval
+    from app.pipeline import approval, batch_import, watch
 
+    if batch_import.is_page(url):              # a 合集 / creator page / Bilibili list
+        lister = watch.list_videos             # picked here (the GUI thread), used by the work
+        douyin = "douyin" in url.lower()
+        return [_say("📋 Đang đọc danh sách video của trang này"
+                     + (" (mở Douyin trong trình duyệt nhúng — 1–2 phút)" if douyin else "")
+                     + "…"),
+                *host.work(lambda: list_page(url, lister))]
     busy = host.link_busy(url)
     if busy:
         return [_say(busy)]
@@ -722,6 +1152,16 @@ def _button(ev: Event, host: Host) -> list[Out]:
     parts = (ev.data or "").split(":")
     if parts[0] == "ok" and len(parts) == 3:
         return _approve(ev, parts[1], parts[2], host)
+    if parts[0] == "bt" and len(parts) == 2:
+        return _batch(ev, parts[1], host)
+    if parts[0] == "bx" and len(parts) == 2:
+        _take("offers", parts[1], OFFER_TTL_S)
+        return [Out("ack", "Đã bỏ qua", event=ev), Out("drop", event=ev)]
+    if parts[0] == "cv" and len(parts) == 3:
+        return _cover(ev, parts[1], parts[2], host)
+    if parts[0] == "cx" and len(parts) == 2:
+        _take("photos", parts[1], PHOTO_TTL_S)
+        return [Out("ack", "Đã bỏ qua ảnh này", event=ev), Out("drop", event=ev)]
     if parts[0] == "ed" and len(parts) == 2:
         job = load_job(parts[1])
         title = title_of(job) if job is not None else "tập này"
@@ -729,6 +1169,50 @@ def _button(ev: Event, host: Host) -> list[Out]:
                 _say(f"✏️ Để dành {title} sửa trên máy: mở vizsup → Thư viện (hoặc Tiếp tục dự "
                      f"án), sửa rồi bấm Duyệt và dựng. Tập này KHÔNG tự duyệt.")]
     return [Out("ack", "Nút này không còn dùng được.", event=ev)]
+
+
+def _batch(ev: Event, key: str, host: Host) -> list[Out]:
+    """[▶️ Dịch N tập mới]: the offer's videos still not on the machine (nor in the host's
+    queue) go to the host's link queue with the offer's series. Nothing is approved."""
+    from app.pipeline import batch_import, series
+
+    offer = _take("offers", key, OFFER_TTL_S)
+    if offer is None:
+        return [Out("ack", "Danh sách này đã cũ", event=ev), Out("drop", event=ev),
+                _say("Danh sách này đã hết hạn hoặc đã bấm rồi — gửi lại link trang để xem lại "
+                     "các tập mới.")]
+    try:
+        index = project_index()
+    except OSError:
+        index = {}
+    fresh = [v for v in batch_import.mark_local(list(offer.get("videos") or []), index)
+             if v.get("url") and not v.get("have") and not host.link_busy(v["url"])]
+    if not fresh:
+        return [Out("ack", "Không còn tập mới", event=ev), Out("drop", event=ev),
+                _say("Các tập này đã có trên máy hoặc đang chờ xử lý rồi — không cần dịch lại. "
+                     "Gửi /cho để xem video chờ duyệt.")]
+    slug = str(offer.get("series") or "auto")
+    if slug not in ("auto", "none") and series.load(slug) is None:
+        slug = "auto"                              # the series was deleted meanwhile
+    videos = [{k: v.get(k) for k in ("url", "id", "title", "published")} for v in fresh]
+    text = host.queue_batch(videos, slug)
+    return [Out("ack", f"Đã xếp {len(fresh)} tập", event=ev), Out("drop", event=ev), _say(text)]
+
+
+def _cover(ev: Event, key: str, job_id: str, host: Host) -> list[Out]:
+    """A project picked for the photo: download it and make it the cover (through
+    ``Host.work``: the network never runs on the GUI thread)."""
+    job = load_job(job_id)
+    if job is None:
+        return [Out("ack", "Không thấy video này", event=ev),
+                _say("Không tìm thấy video này trên máy (đã xóa?) — chọn video khác.")]
+    photo = _take("photos", key, PHOTO_TTL_S)
+    if photo is None or not photo.get("file"):
+        return [Out("ack", "Ảnh đã cũ", event=ev), Out("drop", event=ev),
+                _say("Ảnh này đã quá hạn hoặc đã dùng rồi — gửi lại ảnh nhé.")]
+    file_id = str(photo["file"])
+    return [Out("ack", "Đang đặt ảnh bìa…", event=ev), Out("drop", event=ev),
+            *host.work(lambda: set_cover(job, file_id))]
 
 
 def _approve(ev: Event, job_id: str, rev: str, host: Host) -> list[Out]:
@@ -767,19 +1251,26 @@ def process(updates: list[dict], host: Host, ch, *,
 
     say = log or (lambda _m: None)
     outs: list[Out] = []
+    owner = False
     for raw in updates:
         ch.commit(ch.update_id(raw))           # first: an update is acted on once, at most
         ev = ch.accept(raw)
         if ev is None:
             continue
+        owner = True
         try:
             outs += handle(ev, host)
         except Exception as exc:  # noqa: BLE001 - one bad message must not stop the others
             say(f"Telegram: lỗi khi xử lý ({type(exc).__name__}: {scrub(exc)})")
             if ev.kind == "button":
                 outs.append(Out("ack", "Có lỗi — chưa làm gì.", event=ev))
-            outs.append(_say(f"⚠ Có lỗi khi xử lý tin này, chưa làm gì: {type(exc).__name__}: "
-                             f"{scrub(exc)[:300]}"))
+            outs.append(_say(f"⚠ Có lỗi khi xử lý tin này nên chưa làm gì ({type(exc).__name__}: "
+                             f"{scrub(exc)[:300]}). Thử lại, hoặc mở vizsup trên máy."))
+    if owner and not any(o.kind == "commands" for o in outs):
+        try:
+            outs = commands_outs() + outs      # a new command menu reaches an older pairing
+        except OSError:
+            pass
     return outs
 
 
@@ -804,21 +1295,46 @@ def render_headless(job: Job, kind: str = "long", *, log: Callable[[str], None] 
                                  cancel=lambda: time.time() > give_up)
 
 
+def render_kind(job: Job) -> str:
+    """"short" for a «Cắt Short» project (rendered with the series' 9:16 Short preset), else
+    "long" (a native vertical video is rendered as it is and posted as a Short after)."""
+    from app.pipeline import clipshort
+
+    return "short" if clipshort.info(job) is not None else "long"
+
+
 class CliHost(Host):
     """The scheduled task: links are run to the gate right after the inbox, approved
-    episodes are rendered headless (the app is closed — nothing else would render them)."""
+    episodes are rendered headless (the app is closed — nothing else would render them).
+    ``links`` = (url, series) to run, ``tasks`` = Host.work items run after the answers went
+    out (a page listing, a cover)."""
 
     def __init__(self) -> None:
-        self.links: list[str] = []
+        self.links: list[tuple[str, str]] = []
         self.to_render: list[str] = []
+        self.tasks: list[Callable[[], list[Out]]] = []
 
     def queue_link(self, url: str, job_id: str | None) -> str:
-        self.links.append(url)
+        self.links.append((url, "auto"))
         return ("📥 Đã nhận link. App vizsup trên máy đang đóng — tác vụ nền tải và dịch ngay "
                 "bây giờ, xong sẽ gửi phụ đề để bạn duyệt.")
 
+    def queue_batch(self, videos: list[dict], series: str) -> str:
+        from app.pipeline import batch_import
+
+        urls = [str(v["url"]) for v in batch_import.oldest_first(videos) if v.get("url")]
+        self.links += [(u, series or "auto") for u in dict.fromkeys(urls)
+                       if not self.link_busy(u)]
+        return (f"📥 Đã nhận {len(urls)} tập. App vizsup trên máy đang đóng — tác vụ nền tải và "
+                f"dịch lần lượt từ tập cũ nhất; tập nào xong sẽ gửi để bạn duyệt.")
+
     def link_busy(self, url: str) -> str | None:
-        return "Link này đang chờ xử lý trên máy." if url in self.links else None
+        return ("Link này đang chờ xử lý trên máy."
+                if any(u == url for u, _s in self.links) else None)
+
+    def work(self, fn: Callable[[], list[Out]]) -> list[Out]:
+        self.tasks.append(fn)
+        return []
 
     def after_approve(self, job: Job) -> str:
         from app.pipeline import autopilot
@@ -827,7 +1343,7 @@ class CliHost(Host):
         if plan is None:
             return ("Bộ phim này chưa bật Tự động đăng — mở vizsup trên máy để dựng (tập đã ở "
                     "trạng thái đã duyệt).")
-        if autopilot.render_opts(job) is None:
+        if autopilot.render_opts(job, render_kind(job)) is None:
             return ("Chưa tự dựng được: máy chưa dựng video nào — dựng tay một tập trên máy "
                     "để app học cài đặt.")
         self.to_render.append(job.id)
@@ -908,44 +1424,74 @@ class CliSession:
 
         return go
 
-    def inbox(self, rounds: int = 8) -> int:
-        """Read and answer the owner's messages; run the links they sent to the gate and
-        render the episodes they approved — until nothing new comes in (``rounds`` max).
-        Returns how many updates were handled."""
-        if not (self.active and self.reading):
-            return 0
+    def _read(self) -> int | None:
+        """One getUpdates (no waiting) → answered; how many updates, None when unreadable."""
         from app import net
         from app.remote.telegram import TelegramError, scrub
 
+        give_up = time.time() + POLL_WAIT_S
+        try:
+            updates = net.run_resilient(lambda: self.ch.poll(0), max_rounds=3,
+                                        cancel=lambda g=give_up: time.time() > g)
+        except TelegramError as exc:
+            self.log(f"Telegram: {scrub(exc)}")
+            return None
+        except Exception as exc:  # noqa: BLE001 - no connection: next run
+            self.log(f"Telegram: không đọc được tin nhắn ({type(exc).__name__})")
+            return None
+        self.send(process(updates, self.host, self.ch, log=self.log))
+        return len(updates)
+
+    def _pending(self) -> bool:
+        h = self.host
+        return bool(h.tasks or h.links or h.to_render)
+
+    def _step(self) -> None:
+        """One piece of work: a listing / cover first (quick, the owner waits for its
+        answer), then a link to the gate, then a render."""
+        h = self.host
+        if h.tasks:
+            fn = h.tasks.pop(0)
+            try:
+                outs = fn()
+            except Exception as exc:  # noqa: BLE001 - reported, the task goes on
+                outs = [_say(f"⚠ Có lỗi, chưa làm xong ({type(exc).__name__}).")]
+            self.send(outs)
+        elif h.links:
+            self._link(*h.links.pop(0))
+        elif h.to_render:
+            self._render(h.to_render.pop(0))
+
+    def inbox(self, rounds: int = 8) -> int:
+        """Read and answer the owner's messages; run the links they sent to the gate and
+        render the episodes they approved — until nothing new comes in (``rounds`` max).
+        Between two pieces of work the bot is read again, so a [✅ Duyệt] pressed while a
+        batch of links runs is answered at once. Returns how many updates were handled."""
+        if not (self.active and self.reading):
+            return 0
         handled = 0
         for _ in range(rounds):
-            give_up = time.time() + POLL_WAIT_S
-            try:
-                updates = net.run_resilient(lambda: self.ch.poll(0), max_rounds=3,
-                                            cancel=lambda g=give_up: time.time() > g)
-            except TelegramError as exc:
-                self.log(f"Telegram: {scrub(exc)}")
+            got = self._read()
+            if got is None:
                 break
-            except Exception as exc:  # noqa: BLE001 - no connection: next run
-                self.log(f"Telegram: không đọc được tin nhắn ({type(exc).__name__})")
-                break
-            handled += len(updates)
-            self.send(process(updates, self.host, self.ch, log=self.log))
-            worked = bool(self.host.links or self.host.to_render)
-            while self.host.links:
-                self._link(self.host.links.pop(0))
-            while self.host.to_render:
-                self._render(self.host.to_render.pop(0))
-            if not updates and not worked:
+            handled += got
+            worked, reading = self._pending(), True
+            while self._pending():
+                self._step()
+                if reading:                    # offline / refused: just finish the work
+                    n = self._read()
+                    reading = n is not None
+                    handled += n or 0
+            if not got and not worked:
                 break
         return handled
 
-    def _link(self, url: str) -> None:
+    def _link(self, url: str, series: str = "auto") -> None:
         if self.run_link is None:
             return
         self.log(f"Telegram: link {url}")
         try:
-            res = self.run_link(url, "auto")
+            res = self.run_link(url, series or "auto")
         except Exception as exc:  # noqa: BLE001 - reported to the owner, the task goes on
             self.send(failed_outs("Chưa xử lý được link", f"{url}\n{type(exc).__name__}: {exc}",
                                   asked=True))
@@ -965,13 +1511,16 @@ class CliSession:
         if job is None:
             return
         title = title_of(job)
+        made = render_kind(job)                # a «Cắt Short» project: the 9:16 Short preset
         try:
-            out = self.render(job, "long", log=self.log)
+            out = self.render(job, made, log=self.log)
         except Exception as exc:  # noqa: BLE001 - reported, the task goes on
             self.send(failed_outs(f"Dựng lỗi {title}", f"{type(exc).__name__}: {exc} — mở vizsup "
                                   f"trên máy để dựng lại", asked=True))
             return
         if out is None:
+            self.send([_say(f"⚠ Chưa tự dựng được {title}: máy chưa có cài đặt dựng — dựng tay "
+                            f"một tập trên máy để app học.")])
             return
         kind = autopilot.post_kind(job)        # a vertical video ≤ 3 min goes out as a Short
         self.send(planned_outs(job, autopilot.plan_posts(job, kind)))

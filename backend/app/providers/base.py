@@ -228,10 +228,18 @@ class PublishProvider(Provider):
     in the repo, never printed. ``kinds``: which of "long" / "short" this platform takes."""
 
     kinds: tuple[str, ...] = ("long", "short")
+    can_set_thumbnail = False       # set_thumbnail works on a video already posted
 
     def connected(self) -> bool:
         """An account is linked (credentials present and not revoked as far as we know)."""
         return False
+
+    def set_thumbnail(self, remote_id: str, image: Path) -> PostResult:
+        """Change the cover of a video already posted here (``remote_id`` = the post's
+        ``PostResult.remote_id``) — the owner's new cover from the phone (Telegram)."""
+        return PostResult(False, "failed", remote_id=remote_id,
+                          message=f"{self.display_name or self.name} không đổi được ảnh bìa "
+                                  f"của video đã đăng.")
 
     def account_label(self) -> str:
         """Who/what is linked, e.g. the channel or Page name ("" when not connected)."""

@@ -193,6 +193,7 @@ class YouTubePublisher(PublishProvider):
     unavailable_note = "cần Client ID / Client secret (Cài đặt → Đăng video)"
     kinds = ("long", "short")
     can_schedule = True                 # status.publishAt
+    can_set_thumbnail = True            # thumbnails.set on a posted video
     auth_kind = "loopback"              # Settings: Kết nối = browser + local redirect
     transport: httpx.BaseTransport | None = None   # tests: httpx.MockTransport
 
@@ -466,6 +467,24 @@ class YouTubePublisher(PublishProvider):
             return ("chưa đặt được ảnh bìa — kênh cần xác minh (số điện thoại) để dùng ảnh bìa "
                     "riêng: youtube.com/verify")
         return f"chưa đặt được ảnh bìa: {explain(r)}"
+
+    def set_thumbnail(self, remote_id: str, image: Path) -> PostResult:
+        """thumbnails.set on a video already uploaded (the owner's cover sent from the phone)."""
+        acc = cm.load_account(PLATFORM)
+        if not self.available() or not acc or not self.connected():
+            return PostResult(False, "failed", remote_id=remote_id,
+                              message="Chưa kết nối YouTube — Cài đặt → Đăng video → Kết nối.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", remote_id or ""):
+            return PostResult(False, "failed", remote_id=remote_id,
+                              message="Không rõ mã video YouTube của bài này.")
+        try:
+            with cm.client(self.transport) as c:
+                note = self._set_thumbnail(c, acc, remote_id, Path(image))
+        except (cm.PublishError, OSError, httpx.HTTPError) as e:
+            return PostResult(False, "failed", remote_id=remote_id,
+                              message=f"chưa đặt được ảnh bìa: {e}")
+        ok = note == "đã đặt ảnh bìa"
+        return PostResult(ok, "done" if ok else "failed", remote_id=remote_id, message=note)
 
     # --- publish ----------------------------------------------------------------------------
     def publish(self, video, meta: PostMeta, *, progress=None) -> PostResult:

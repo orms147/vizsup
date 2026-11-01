@@ -287,10 +287,13 @@ vizsup không tạo tài khoản, không đăng nhập Telegram giúp bạn — 
 |---|---|
 | Link Douyin / Bilibili, hoặc dán nguyên đoạn chia sẻ "长按复制… https://v.douyin.com/… 打开抖音" | Chạy tới bước duyệt như link dán trong app (bộ phim tự nhận từ 《…》), báo: đã nhận → đã tải → đang dịch → **chờ duyệt** (hoặc lỗi + lý do). Link đã có trên máy: gửi lại tin duyệt / báo đã làm |
 | (tập tới bước duyệt — cả tập do "Theo dõi tập mới" tìm được) | Tin **Chờ duyệt**: tiêu đề, số câu, tối đa 40 câu bị đánh dấu (lúc, tiếng Trung, tiếng Việt, vì sao), "Sau khi duyệt: …" như hộp *Duyệt nhanh*; nút ✅ Duyệt / ✏️ Để sửa trên máy |
-| ✅ Duyệt | Duyệt **đúng bản phụ đề trong tin đó**, rồi Tự động đăng: dựng → "Đã lên lịch đăng: YouTube lúc 19:00 …" → "✅ YouTube: đã đăng <link>" / "❌ … lỗi" |
+| Link **合集** Douyin / trang người đăng Douyin / danh sách Bilibili | Bot đọc danh sách (Douyin: 1–2 phút) rồi kể **các tập CHƯA có trên máy** (tối đa 10 tên, cũ nhất trước) + bộ phim sẽ dùng; nút **▶️ Dịch N tập mới** → các tập vào hàng dịch lần lượt, tập nào xong gửi tin duyệt; **Bỏ qua** → thôi. Không tập nào tự duyệt |
+| ✅ Duyệt | Duyệt **đúng bản phụ đề trong tin đó**, rồi Tự động đăng: dựng → **ảnh bìa** + "Đã lên lịch đăng: YouTube lúc 19:00 …" → "✅ YouTube: đã đăng <link>" / "❌ … lỗi" |
 | ✏️ Để sửa trên máy | Không duyệt; tập chờ bạn mở Thư viện sửa |
+| `/cho` (`/choduyet`) | Các video đang chờ duyệt, cũ nhất trước, mỗi lần 5 tin duyệt (kèm ✅) — "… còn N video, gửi /cho lần nữa" |
+| Một **tấm ảnh** (kèm chữ hay không) | Bot hỏi "làm ảnh bìa cho video nào?" (các video đã duyệt / đã dựng gần đây; chữ kèm ảnh như "tập 9" đưa video đó lên đầu) → ảnh thành ảnh bìa (vừa khung 1280×720, app không tự thay nữa); video đã lên YouTube (📺) thì đổi luôn ảnh bìa trên YouTube (kênh cần xác minh số điện thoại), chưa đăng thì dùng cho lần đăng tới |
 | `/trangthai` (`/status`) | Tập chờ duyệt, hàng dựng, bài sắp đăng trong 24 giờ, 5 bài vừa đăng (có link), bài lỗi |
-| `/help` | Hướng dẫn |
+| `/help` | Hướng dẫn (các lệnh cũng hiện trong menu "/" của bot) |
 
 **Duyệt vẫn là việc của bạn.** Bot không bao giờ tự duyệt. Nút ✅ mang mã dự án + mã phiên bản
 phụ đề lúc gửi tin; bấm ✅ bị **từ chối (kèm lý do)** khi: phụ đề đã đổi sau khi gửi tin (bot gửi

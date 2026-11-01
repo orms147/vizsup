@@ -735,19 +735,22 @@ class MainWindow(QMainWindow):
             self._open_for_edit(dlg.edit_id)
 
     def _autopilot_after_approve(self, job) -> None:
-        """A series with Tự động đăng on: queue the episode's render with its settings."""
-        from app.pipeline import autopilot
+        """A series with Tự động đăng on: queue the episode's render with its settings (a
+        «Cắt Short» project — the Short the bot sent for its own approval — with the Short
+        preset, as the after-render step queues an approved one)."""
+        from app.pipeline import autopilot, remote
 
         _p, plan = self._autopilot_plan(job)
         if plan is None:
             return
-        opts = autopilot.render_opts(job)
+        kind = remote.render_kind(job)
+        opts = autopilot.render_opts(job, kind)
         if opts is None:
             self.status.set_status("Tự động đăng: máy chưa dựng video nào — dựng tay một "
                                    "tập để app học cài đặt.", "warn")
             return
         title = job.metadata.get("title") or job.id
-        if self._batch_add([{"id": job.id, "opts": opts, "title": title, "autopilot": "long"}]):
+        if self._batch_add([{"id": job.id, "opts": opts, "title": title, "autopilot": kind}]):
             self.status.set_status("Tự động: đang dựng rồi lên lịch đăng — " + title[:40], "busy")
 
     def _autopilot_rendered(self, item: dict) -> None:

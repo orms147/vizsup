@@ -241,6 +241,101 @@ def test_fast_approve_never_runs_the_after_step_twice(win, paired, storage, qapp
     assert after == [] and "Đã duyệt rồi" in win.status.text.text()
 
 
+MIX = "https://www.douyin.com/collection/7699176142011385907"
+
+
+def _page_video(n: int) -> dict:
+    vid = f"76999197545212{n:05d}"
+    return {"id": vid, "url": f"https://www.douyin.com/video/{vid}",
+            "title": f"《末日校车》{n:02d}", "published": 1792800000 + n * 86400}
+
+
+def test_a_page_link_from_the_phone_offers_and_queues_the_new_videos(win, paired, storage, qapp,
+                                                                     monkeypatch):
+    from app.pipeline import watch
+
+    page = [_page_video(n) for n in (3, 2, 1)]                # newest first, as pages list
+    monkeypatch.setattr(watch, "list_videos", lambda url, limit=100: list(page))
+    _episode(storage, "ep01on0disk")                          # episode 1 is on the machine …
+    (storage / "ep01on0disk" / "job.json").write_text(json.dumps(
+        {"id": "ep01on0disk", "url": page[2]["url"], "opts": {}}), encoding="utf-8")
+    queued = []
+    win._start_queue = lambda items, **kw: queued.extend(items)
+    win.input.context_note.setPlainText("ghi chú của video đang mở")
+    paired.say(MIX)
+    _poll(win, qapp)
+    assert _wait(qapp, lambda: any("tập mới" in t for t in paired.texts()))   # off the GUI thread
+    assert win.remote.outbox.wait()
+    offer = paired.sent[-1]
+    assert "🆕 2 tập mới" in offer["text"] and "Bộ phim: 《末日校车》" in offer["text"]
+    go = paired.buttons(offer)[0]
+    assert queued == []
+    paired.press(go)
+    _poll(win, qapp)
+    assert [i["url"] for i in queued] == [page[1]["url"], page[0]["url"]]   # oldest first
+    assert all(i["series"] == "末日校车" and i["_remote"] == "batch" and i["file"] is None
+               and "context_note" not in i and i["translator"] for i in queued)
+    assert paired.texts()[-1].startswith("📥 Đã xếp 2 tập vào hàng dịch")
+    # a batch item reaching each step sends no milestone — only its approval message later
+    job = _episode(storage, "ep02aaaa1111")
+    win._queue_job, win._queue_opts = job, queued[0]
+    n = len(paired.sent)
+    win._on_stage("translate")
+    win._queue_job = win._queue_opts = None
+    assert win.remote.outbox.wait() and len(paired.sent) == n
+
+
+def test_cho_leaves_out_what_the_window_is_still_processing(win, paired, storage, qapp):
+    a = _episode(storage, "ep07aaaa1111")
+    b = _episode(storage, "ep08bbbb2222")
+    win._gate_job = b                                         # still running in the foreground
+    paired.say("/cho")
+    _poll(win, qapp)
+    win._gate_job = None
+    texts = paired.texts()
+    assert texts[0].startswith("🟡 1 video chờ duyệt")
+    assert len([t for t in texts if t.startswith("🟡 Chờ duyệt")]) == 1
+    assert paired.buttons(paired.sent[1])[0] == f"ok:{a.id}:{approval.revision(a)[:8]}"
+    assert not approval.is_approved(a)
+
+
+def test_a_photo_from_the_phone_becomes_a_cover(win, paired, storage, qapp):
+    import io
+
+    from PIL import Image
+
+    from app.pipeline import thumbnail
+
+    job = _episode(storage)
+    approval.approve(job)
+    buf = io.BytesIO()
+    Image.new("RGB", (900, 500), (10, 120, 200)).save(buf, "JPEG")
+    paired.photo(buf.getvalue())
+    _poll(win, qapp)
+    ask = paired.sent[-1]
+    assert ask["text"].startswith("🖼") and paired.buttons(ask)[0].endswith(f":{job.id}")
+    paired.press(paired.buttons(ask)[0])
+    _poll(win, qapp)
+    assert _wait(qapp, lambda: bool(paired.photos)) and win.remote.outbox.wait()
+    assert paired.photos[-1]["caption"].startswith("🖼 Đã đổi ảnh bìa")
+    assert thumbnail.user_chosen(job.work_dir)
+
+
+def test_approving_a_cut_short_queues_a_short_render(win, storage, monkeypatch):
+    autopilot.save_plan("末日校车", {**autopilot.DEFAULT_PLAN, "on": True,
+                                     "platforms": {"folder": {"on": True, "kinds": ["short"]}}})
+    job = _episode(storage)
+    md = json.loads((job.work_dir / "metadata.json").read_text(encoding="utf-8"))
+    md["short"] = {"parent": "ep09parent", "start": 0.0, "end": 30.0}
+    (job.work_dir / "metadata.json").write_text(json.dumps(md), encoding="utf-8")
+    monkeypatch.setattr(autopilot, "render_opts", lambda j, kind="long": {"kind": kind})
+    added = []
+    win._batch_add = lambda items: added.extend(items) or True
+    win._autopilot_after_approve(job)
+    (item,) = added
+    assert item["autopilot"] == "short" and item["opts"] == {"kind": "short"}
+
+
 def test_the_editor_and_the_bot_flag_the_same_lines(storage):
     from app.pipeline import quickreview
     from desktop import cuemodel, store

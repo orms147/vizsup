@@ -385,3 +385,24 @@ def test_a_dead_connection_is_raised_after_the_retries(env):
     with pytest.raises(httpx.ConnectError) as ei:
         p.publish(_video(env, 1000), PostMeta(title="T"))
     assert looks_like_network_error(ei.value)
+
+
+def test_set_thumbnail_on_a_video_already_uploaded(env):
+    """The owner's cover sent from the phone (Telegram) after the upload: thumbnails.set."""
+    thumb = env / "thumb.jpg"
+    thumb.write_bytes(b"\xff\xd8bia")
+    fake = FakeGoogle()
+    p = _pub(fake)
+    assert p.can_set_thumbnail
+    assert "Chưa kết nối" in p.set_thumbnail("abcDEF12345", thumb).message
+    _connected(env)
+    res = p.set_thumbnail("abcDEF12345", thumb)
+    assert res.ok and res.message == "đã đặt ảnh bìa" and fake.thumbnails == [b"\xff\xd8bia"]
+    assert not p.set_thumbnail("../../x", thumb).ok and len(fake.thumbnails) == 1
+
+    def refused(req):
+        return httpx.Response(403, json={"error": {"code": 403, "message": "forbidden"}})
+
+    p.transport = httpx.MockTransport(refused)
+    res = p.set_thumbnail("abcDEF12345", thumb)
+    assert not res.ok and "xác minh" in res.message
