@@ -383,6 +383,14 @@ class RenderView(QWidget):
         ll.addWidget(card)
         self.speed, self.speed_lbl = self._slider(ll, "Tốc độ nói", 70, 140, 100,
                                                   lambda v: f"{v / 100:.2f}×")
+        # semitones after the TTS (tts.pitched): a free voice moved nearer the one you want
+        from app.pipeline.tts import PITCH_RANGE
+
+        self.pitch, self.pitch_lbl = self._slider(ll, "Cao độ giọng", *PITCH_RANGE, 0,
+                                                  lambda v: f"{v:+d}")
+        self.pitch.setToolTip("Nâng / hạ giọng đọc theo nửa cung, giữ nguyên tốc độ (vd. +2 cho "
+                              "giống giọng review phim). Không tạo lại giọng, chỉ xử lý thêm.")
+        self.pitch.valueChanged.connect(self._remember_voice)
         # fast talker → most lines late at 1.0×: say so BEFORE ~15 min of TTS
         fit_row = QHBoxLayout()
         self.fit_hint = label("", "small", wrap=True)
@@ -1273,6 +1281,13 @@ class RenderView(QWidget):
         self.speed.setValue(int(round((rate or 1.0) * 100)))
         self.speed.blockSignals(False)
         self.speed_lbl.setText(f"{self.speed.value() / 100:.2f}×")
+        pitch = _read_project_file(self._job).get("pitch") if self._job is not None else None
+        if pitch is None:
+            pitch = store.load_ui_state().get("render_pitch") or 0
+        self.pitch.blockSignals(True)
+        self.pitch.setValue(int(round(float(pitch))))
+        self.pitch.blockSignals(False)
+        self.pitch_lbl.setText(f"{self.pitch.value():+d}")
         self._update_fit_hint()
         self._update_summary()
 
@@ -1282,9 +1297,10 @@ class RenderView(QWidget):
         restoring a project's own pick blocks the signals, so only a real choice gets here)."""
         if self._job is not None and self._has_real_voices:
             _update_project_file(self._job, voice=self.voice.currentData(),
-                                 rate=self.speed.value() / 100)
+                                 rate=self.speed.value() / 100, pitch=self.pitch.value())
             store.update_ui_state(render_voice=self.voice.currentData(),
-                                  render_rate=self.speed.value() / 100)
+                                  render_rate=self.speed.value() / 100,
+                                  render_pitch=self.pitch.value())
 
     def _update_fit_hint(self) -> None:
         from app.pipeline import fit_estimate
@@ -1671,6 +1687,7 @@ class RenderView(QWidget):
             # to edge-tts as a literal voice name broke every render without voices()
             "voice": self.voice.currentData() if self._has_real_voices else None,
             "rate": f"{int(round((speed - 1) * 100)):+d}%",
+            "pitch": self.pitch.value(),           # semitones (tts.pitched), 0 = as made
             "voice_by_gender": self.by_gender_cb.isChecked() and self._has_real_voices,
             "audio_mode": self._audio_mode(),
             "orig_volume": self.orig_vol.value() / 100.0,
@@ -1827,6 +1844,7 @@ class RenderView(QWidget):
 
         voice = self.voice.currentData() if self._has_real_voices else None
         rate = f"{int(round((self.speed.value() / 100 - 1) * 100)):+d}%"
+        pitch = self.pitch.value()
         tts = self._tts
         out = Path(self._job.work_dir if self._job else ".") / "_voice_sample.mp3"
         self.listen_btn.setEnabled(False)
@@ -1850,6 +1868,10 @@ class RenderView(QWidget):
             get_tts(prov).synthesize(SAMPLE, out, voice=v, rate=rate)   # 1st VieNeu use: model
             if not out.exists() or out.stat().st_size == 0:      # a dropped connection
                 raise RuntimeError("máy chủ giọng đọc không trả âm thanh — thử lại")
+            if pitch:                                    # what the render will do (tts.pitched)
+                from app.pipeline.tts import pitched
+
+                return str(pitched(out, pitch))
             return str(out)
 
         def done(p):

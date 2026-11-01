@@ -149,6 +149,7 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
         segments = with_throttle_waits(lambda: tts.synthesize(
             job, provider=o.get("tts", "edge"), voice=o.get("voice"), rate=o.get("rate"), log=log,
             voice_by_gender=bool(o.get("voice_by_gender")),
+            pitch=float(o.get("pitch") or 0),             # semitones, after the TTS cache
             cancel=(lambda: bool(cancel and cancel())),  # per-cue (N-10)
             progress=lambda d, n: progress(0.2 + 0.3 * d / max(1, n),
                                            f"Đang tạo lồng tiếng (TTS)… {d}/{n} câu")),

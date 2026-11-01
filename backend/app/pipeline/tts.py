@@ -161,6 +161,43 @@ def trim_files(paths, registry: Path, *, workers: int = 4,
     return n
 
 
+PITCH_RANGE = (-6, 6)               # semitones the render page offers
+
+
+def pitched(seg: Path, semitones: float) -> Path:
+    """``seg`` raised / lowered by ``semitones`` (ffmpeg rubberband: tempo and formants
+    kept), cached beside it as ``seg_0001.p+2.mp3`` and remade when the segment is newer —
+    the segment and its TTS cache stay as they are, so trying another pitch costs no TTS
+    (the owner's "Ngọc Huyền" +2, 2026-11-01: the review channels' voice sits higher)."""
+    import subprocess
+
+    from app import fsutil
+    from app.ffmpegutil import ffmpeg_bin
+
+    out = seg.with_name(f"{seg.stem}.p{semitones:+g}{seg.suffix}")
+    if out.exists() and out.stat().st_size > 0 and out.stat().st_mtime_ns >= seg.stat().st_mtime_ns:
+        return out
+    tmp = out.with_name(out.stem + ".part" + out.suffix)
+    subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-i", str(seg), "-af",
+                    f"rubberband=pitch={2 ** (semitones / 12):.6f}:formant=preserved",
+                    "-c:a", "libmp3lame", "-q:a", "2", str(tmp)], check=True,
+                   capture_output=True)
+    fsutil.replace(tmp, out)
+    return out
+
+
+def pitch_segments(segments: list[tuple[Cue, Path]], semitones: float, *,
+                   workers: int = 4) -> list[tuple[Cue, Path]]:
+    """Every segment at ``semitones`` (``pitched``); unchanged when 0."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not semitones:
+        return segments
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        paths = list(ex.map(lambda s: pitched(s[1], semitones), segments))
+    return [(c, p) for (c, _s), p in zip(segments, paths)]
+
+
 def load_overrides(job: Job) -> list[dict]:
     """Per-cue dub overrides (gain_db, mute) — delegates to pipeline.sidecars
     (the single loader implementation; kept here for existing callers)."""
@@ -254,17 +291,23 @@ def synthesize(
     progress: Callable[[int, int], None] | None = None,
     voice_by_gender: bool = False,
     trim: bool = True,
+    pitch: float = 0,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> list[tuple[Cue, Path]]:
     """One segment per dubbed line (see ``_synthesize``), then the silence around each one's
     speech is cut (``trim``; the module docstring says why) — cached segments of older runs
-    included. ``progress(done, total)``: lines ready so far (cache hits included)."""
+    included — and the voice moved by ``pitch`` semitones (``pitch_segments``).
+    ``progress(done, total)``: lines ready so far (cache hits included)."""
     segments = _synthesize(job, provider=provider, voice=voice, rate=rate, log=log, cancel=cancel,
                            progress=progress, voice_by_gender=voice_by_gender, _sleep=_sleep)
     if trim and segments:                 # (not cancel-aware on purpose: it takes seconds)
         n = trim_files([seg for _c, seg in segments], job.tts_dir / TRIM_FILE)
         if log and n:
             log(f"✂ Cắt khoảng lặng đầu / cuối của {n} đoạn giọng đọc")
+    if pitch and segments:
+        segments = pitch_segments(segments, pitch)
+        if log:
+            log(f"♪ Cao độ giọng {pitch:+g} nửa cung")
     return segments
 
 
