@@ -135,7 +135,11 @@ def video_body(meta: PostMeta, *, at: float | None = None) -> tuple[dict, bool]:
     scheduled = bool(not meta.private and meta.publish_at
                      and meta.publish_at - at >= SCHEDULE_MIN_AHEAD)
     status: dict = {"privacyStatus": "private" if scheduled or meta.private else "public",
-                    "selfDeclaredMadeForKids": False}
+                    "selfDeclaredMadeForKids": False,
+                    # every upload carries an AI voice: YouTube's "altered or synthetic content"
+                    # disclosure ("Tạo bằng AI"), API field since 2024-10-30 — declaring it
+                    # protects the channel
+                    "containsSyntheticMedia": True}
     if scheduled:
         status["publishAt"] = _iso_utc(meta.publish_at)
     snippet = {"title": yt_title(meta.title),

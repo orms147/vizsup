@@ -160,7 +160,8 @@ def test_metadata_follows_youtube_limits():
     assert sn["tags"][:3] == ["phim", "hai từ", "a b"]
     cost = sum(len(t) + (2 if " " in t else 0) for t in sn["tags"]) + len(sn["tags"]) - 1
     assert cost <= 500
-    assert body["status"] == {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
+    assert body["status"] == {"privacyStatus": "public", "selfDeclaredMadeForKids": False,
+                              "containsSyntheticMedia": True}      # AI voice: "Tạo bằng AI"
 
 
 def test_a_future_publish_time_is_a_private_scheduled_upload():

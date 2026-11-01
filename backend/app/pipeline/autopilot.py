@@ -183,8 +183,18 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
     tmpl = plan.get("short_title" if kind == "short" else "title") or DEFAULT_PLAN["title"]
     title = tmpl.format(series=name, n=n, hook=hook).strip(" |–-") or job.id
     title = " ".join(title.split())[:100]
-    desc = disclosure.post_description(job, ai_voice=True, title=title)
     tags = [t for t in (plan.get("tags") or []) if str(t).startswith("#")]
+    # the layout review channels use (the owner's example, 2026-11-01): the tags, "Bộ phim:",
+    # the credit + AI-voice block, the channel's no-reup line, the tags again
+    from app.pipeline import series
+
+    prof = series.profile_of(job)
+    channel = str(((prof.render if prof else {}).get("watermark") or {}).get("text") or "").strip()
+    desc = "\n".join(x for x in (
+        " ".join(tags), f"Bộ phim: {name}" if name else "", "-" * 40,
+        disclosure.post_description(job, ai_voice=True, title=title).strip(),
+        f"© Bản vietsub thuộc về {channel} - vui lòng không reup" if channel else "",
+        " ".join(tags)) if x) + "\n"
     if kind == "short":
         tags = [*tags, "#shorts"]
     thumb = job.work_dir / "thumb.jpg"
