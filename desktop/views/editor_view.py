@@ -936,6 +936,26 @@ class EditorView(QWidget):
             msg += f" {flagged} câu cần xem tay (chữ Trung, lệch số, từ chưa dịch, xưng hô)."
         self.message.emit(msg, "ok")
 
+    def _dub_voice(self) -> tuple[str, str | None, str | None, float]:
+        """(provider, voice, rate, pitch) the render will dub with, so «Nghe thử» sounds like
+        the dub: the project's own pick on Dựng video (voice.json), else the run's option,
+        else the voice the owner used last (ui_state). The run options alone carry no voice
+        for most projects — the line used to play in the provider's default voice (Hoài My)
+        while the video was dubbed in e.g. "vieneu:Ngọc Huyền" at 1.3× and +2."""
+        from app.providers.registry import split_voice
+        from desktop.views.render_view import _read_project_file
+
+        saved = _read_project_file(self.job) if self.job is not None else {}
+        voice = (saved.get("voice") or self._ctx.get("voice")
+                 or store.load_ui_state().get("render_voice"))
+        prov, v = split_voice(self._ctx.get("tts", "edge"), voice)
+        rate = self._rate_str() if saved.get("rate") else self._ctx.get("rate")
+        try:
+            pitch = float(saved.get("pitch") or 0)
+        except (TypeError, ValueError):
+            pitch = 0.0
+        return prov, v, rate, pitch
+
     def _rate_str(self) -> str:
         """The voice speed as the TTS/render options spell it ("+30%")."""
         return f"{int(round((self._voice_rate() - 1) * 100)):+d}%"
@@ -1314,13 +1334,16 @@ class EditorView(QWidget):
             return
         gain_db = self.cues[self._sel].gain_db
         out = self.job.work_dir / "_dub_preview.mp3"
-        tts_name = self._ctx.get("tts", "edge")
-        voice, rate = self._ctx.get("voice"), self._ctx.get("rate")
+        tts_name, voice, rate, pitch = self._dub_voice()
         self.inspector.set_busy("listen", True)
 
         def work():
             from app.providers.registry import get_tts
             get_tts(tts_name).synthesize(text, out, voice=voice, rate=rate)
+            if pitch:                                    # what the render does (tts.pitched)
+                from app.pipeline.tts import pitched
+
+                return str(pitched(out, pitch))
             return str(out)
 
         def done(path):
@@ -2077,10 +2100,9 @@ class EditorView(QWidget):
     def _add(self) -> None:
         self._snapshot()
         i = self._cur()
-        last = self.cues[-1] if self.cues else None
-        start = (self.cues[i].end if 0 <= i < len(self.cues) else (last.end if last else 0.0))
-        at = i + 1 if i >= 0 else len(self.cues)
-        self.cues.insert(at, EditorCue(start=start, end=start + 2.0, vi="", zh=""))
+        start, end = cuemodel.added_span(self.cues, i)     # fits the gap before the next line
+        at = i + 1 if 0 <= i < len(self.cues) else len(self.cues)
+        self.cues.insert(at, EditorCue(start=start, end=end, vi="", zh=""))
         self._reload()
         self.cue_list.selectRow(at)
         self.inspector.focus_text()

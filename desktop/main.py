@@ -47,6 +47,11 @@ INPUT, EDITOR, RENDER, SETTINGS, LIBRARY = 0, 1, 2, 3, 4
 EDITOR_IDLE = "Sửa phụ đề — duyệt khi xong"
 PAGE_IDLE = {INPUT: "Sẵn sàng", EDITOR: EDITOR_IDLE, RENDER: "Chọn âm thanh rồi dựng video",
              SETTINGS: "Cài đặt", LIBRARY: "Thư viện — mọi dự án trên máy"}
+# the editor's key hints in the status bar — each one says what the key really does
+# ([ / ] set the start / end to the playhead; "canh lời" to the voice is A — it used to
+# read "[ ] Canh lời"); the full list is the Phím tắt dialog (desktop/widgets/shortcuts.py)
+EDITOR_HINTS = [("Space", "Phát / dừng"), ("[ ]", "Đặt đầu / cuối"), ("A", "Tự canh lời"),
+                ("F8", "Xem lại")]
 
 
 def _first_size(want: tuple[int, int] = (1380, 880)) -> tuple[int, int]:
@@ -317,8 +322,7 @@ class MainWindow(QMainWindow):
             self.status.set_status(PAGE_IDLE[idx])     # never over a message or a progress line
         self.nav.set_primary("Duyệt và dựng" if idx == EDITOR else None)
         self.nav.set_saved("saved" if idx == EDITOR else None)
-        self.status.set_hints([("Space", "Phát / dừng"), ("[ ]", "Canh lời"), ("F8", "Xem lại")]
-                              if idx == EDITOR else [])
+        self.status.set_hints(EDITOR_HINTS if idx == EDITOR else [])
         if idx != EDITOR:
             self.editor.video.pause()
         if idx != RENDER:
@@ -481,6 +485,7 @@ class MainWindow(QMainWindow):
             return
         job, opts = loaded
         title = job.metadata.get("title") or job.id
+        title = store.friendly_title(job.id, str(title)) or title   # as the library row names it
         ok = QMessageBox.question(
             self, "Đọc lại phụ đề",
             f"Đọc lại phụ đề tiếng Trung của “{str(title)[:60]}”?\n\nPhụ đề hiện tại (cả bản dịch "
@@ -568,13 +573,14 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 voices = []
             if not approval.is_approved(self.job):
+                from app.providers.registry import voice_label
                 from desktop.widgets.dialogs import ApproveDialog
 
                 voice = _default_voice(self.job, voices, self.opts) or tts_name
                 dur = self.editor.video.duration() or max((c.end for c in self.editor.cues),
                                                           default=0.0)
-                dlg = ApproveDialog(self, cues=len(self.editor.cues),
-                                    voice=str(voice).replace("vi-VN-", "").replace("Neural", ""),
+                # named as on the render page: "Ngọc Huyền · trên máy", not "vieneu:Ngọc Huyền"
+                dlg = ApproveDialog(self, cues=len(self.editor.cues), voice=voice_label(str(voice)),
                                     duration=fmt_time(dur, 0),
                                     pending=self.editor.pending_count())
                 if not dlg.exec():

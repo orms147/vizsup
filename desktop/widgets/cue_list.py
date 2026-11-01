@@ -515,7 +515,7 @@ class CueList(QFrame):
         m.addSeparator()
         m.addAction("Rút gọn hàng loạt các câu đọc không kịp…", self.bulkShortenRequested.emit)
         m.addAction("Xem tất cả gợi ý của AI soát…", self.aiSuggestionsRequested.emit)
-        m.addAction("Gộp câu quá ngắn & gỡ chồng lấn", self.tidyRequested.emit)
+        m.addAction("Gộp câu quá ngắn && gỡ chồng lấn", self.tidyRequested.emit)   # && = one "&"
         m.addAction("Tách vế theo nhịp nói (như phụ đề gốc)", self.clauseSplitRequested.emit)
         m.addSeparator()
         m.addAction("Xuất bảng CSV để soát (Google Sheets / Excel)…", self.csvExportRequested.emit)

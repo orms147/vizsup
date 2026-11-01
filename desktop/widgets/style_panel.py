@@ -200,7 +200,7 @@ class _Section(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(8)
         self.head = QToolButton()
-        self.head.setText(title)
+        self.head.setText(title.replace("&", "&&"))   # "Dòng & vị trí": a bare & is a mnemonic
         self.head.setCheckable(True)
         self.head.setChecked(open_)
         self.head.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -346,8 +346,11 @@ class StylePanel(QScrollArea):
             b.setFixedSize(32, 30)          # three fit the 1366 inspector (B · I · AA)
             b.setToolTip(tip)
             b.toggled.connect(self._changed)
-        self.bold.setStyleSheet("QPushButton{font-weight:800;}")
-        self.italic.setStyleSheet("QPushButton{font-style:italic;font-family:serif;}")
+        # padding:0 — the app-wide 13 px button padding left 6 px of a 32-px button for the
+        # letter, so B / I / AA showed as cut-off marks ("3", "/", "‥")
+        self.bold.setStyleSheet("QPushButton{padding:0;font-weight:800;}")
+        self.italic.setStyleSheet("QPushButton{padding:0;font-style:italic;font-family:serif;}")
+        self.caps.setStyleSheet("QPushButton{padding:0;}")
         brow = QHBoxLayout()
         brow.setSpacing(6)
         brow.addWidget(self.bold)

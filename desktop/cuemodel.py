@@ -239,6 +239,23 @@ def split_cue(c: EditorCue) -> tuple[EditorCue, EditorCue]:
     return a, b
 
 
+def added_span(cues: list[EditorCue], i: int, *, length: float = 2.0,
+               min_room: float = 0.5) -> tuple[float, float]:
+    """Start / end of the empty line "Thêm câu sau câu này" puts after line ``i`` (-1: at the
+    end): right after it, ``length`` long — but never over the next line when the gap between
+    them leaves at least ``min_room``: a 2-s line used to land on the next one every time the gap
+    was shorter (flagged "Chồng lấn" the moment it appeared)."""
+    if not cues:
+        return 0.0, length
+    i = i if 0 <= i < len(cues) else len(cues) - 1
+    start = cues[i].end
+    end = start + length
+    nxt = cues[i + 1] if i + 1 < len(cues) else None
+    if nxt is not None and nxt.start - start >= min_room:
+        end = min(end, nxt.start)
+    return start, end
+
+
 def merge_cues(a: EditorCue, b: EditorCue) -> EditorCue:
     """Merge b into a: texts join (zh gains a space only between two non-empty
     parts), mute ORs (never silently un-mute), the larger |gain| wins, and the
