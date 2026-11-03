@@ -128,6 +128,7 @@ def _voice_name(v: str) -> str:
     return voice_label(v)
 
 
+LEFT_MIN = 430             # the options column: below this its cards and buttons are cut off
 RESULT_MIN_PICTURE = 140   # the preview / result picture may shrink this far on a small window
 CARD_FLOOR = 40            # two lines of text + padding: never less, even before any layout
 
@@ -316,7 +317,10 @@ class RenderView(QWidget):
         split.setStretchFactor(1, 1)
         saved = store.load_ui_state().get("render_split")
         ok = isinstance(saved, list) and len(saved) == 2 and all(isinstance(v, int) for v in saved)
-        split.setSizes(saved if ok else [440, 900])
+        # the options column never narrower than its content: a seam dragged (and remembered) too far
+        # left cut the cards and buttons off under the video (2026-11-03)
+        split.widget(0).setMinimumWidth(LEFT_MIN)
+        split.setSizes([max(saved[0], LEFT_MIN), saved[1]] if ok else [440, 900])
         scroll = QScrollArea()                # narrower window: scroll, never grow past the screen
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)

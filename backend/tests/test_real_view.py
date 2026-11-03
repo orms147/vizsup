@@ -63,3 +63,20 @@ def test_the_render_page_shows_the_real_frame_and_cuts_it_again_on_a_change(qapp
     assert img is not None and img.height() > img.width()            # the 9:16 composition
     rv.preview.set_real_view(False)
     assert not rv.preview._canvas.has_still()
+
+
+def test_a_remembered_seam_too_far_left_never_cuts_the_options_off(qapp, monkeypatch):
+    from desktop import store
+    from desktop.views import render_view
+
+    monkeypatch.setattr(store, "load_ui_state", lambda: {"render_split": [360, 974],
+                                                          "render_real_view": False})
+    rv = render_view.RenderView()
+    rv.resize(1380, 880)
+    rv.show()
+    for _ in range(10):
+        qapp.processEvents()
+    assert rv._split.sizes()[0] >= render_view.LEFT_MIN
+    rv._split.setSizes([200, 1100])                      # dragging it further is refused too
+    qapp.processEvents()
+    assert rv._split.sizes()[0] >= render_view.LEFT_MIN
