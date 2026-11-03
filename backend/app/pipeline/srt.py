@@ -184,6 +184,7 @@ def write_ass(
     comments: list[Cue] | None = None,
     mark: list[dict] | None = None,
     mark_look: dict | None = None,
+    cover: list[dict] | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
@@ -235,6 +236,12 @@ def write_ass(
               "margin_l": 40, "margin_r": 40, "margin_v": 40}
         style_block += "\n" + _style_line("Mark", wm, font,
                                           max(16, int(look.get("size", 14)) * 3), False)
+    if cover:
+        # "Che logo, ghi tên phim": the box is a vector drawing (style only carries the name);
+        # the text is centred in it with a thin dark outline so any fill reads
+        ct = {**DEFAULT_STYLE, "bold": True, "alignment": 5, "border_style": 1, "outline": "#000000",
+              "outline_w": 2, "margin_l": 0, "margin_r": 0, "margin_v": 0}
+        style_block += "\n" + _style_line("Cover", ct, font, 40, False)
     if comments:
         # warm yellow; a dark amber on the white glass, where yellow would not read
         note = {**base, "primary": "#7A4A00" if base.get("glass") else "#FFD966", "italic": True}
@@ -250,6 +257,20 @@ def write_ass(
         text = c.text.replace("\n", "\\N")
         lines.append(f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Comment,,"
                      f"0,0,0,,{text}")
+    for e in cover or []:
+        bgr = e["fill"][4:6] + e["fill"][2:4] + e["fill"][0:2]
+        box = ("{\\an7\\pos(0,0)\\bord0\\shad0\\blur2\\1c&H%s&\\1a&H%02X&\\p1}"
+               "m %d %d l %d %d l %d %d l %d %d{\\p0}"
+               % (bgr, e["alpha"], e["x0"], e["y0"], e["x1"], e["y0"], e["x1"], e["y1"],
+                  e["x0"], e["y1"]))
+        lines.append(f"Dialogue: 3,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Cover,,"
+                     f"0,0,0,,{box}")
+        if e.get("text"):
+            fg = e["color"][4:6] + e["color"][2:4] + e["color"][0:2]
+            txt = ("{\\an5\\pos(%d,%d)\\fs%d\\1c&H%s&}" % (e["tx"], e["ty"], e["fs"], fg)
+                   + str(e["text"]).replace("\n", "\\N"))
+            lines.append(f"Dialogue: 4,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Cover,,"
+                         f"0,0,0,,{txt}")
     for e in mark or []:
         # top corners: below the 5-second Tag notes (their margin 100 + one line)
         al = int(e.get("align", 9))

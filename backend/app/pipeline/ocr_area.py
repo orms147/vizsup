@@ -20,6 +20,8 @@ from pathlib import Path
 from app.fsutil import atomic_write_text
 
 FILE = "ocr_area.json"
+LOGOS_FILE = "ocr_logos.json"
+MAX_LOGOS = 8
 MIN_SIDE = 0.03          # a rectangle thinner than this (÷ frame) is a mis-click, not a band
 
 
@@ -40,6 +42,74 @@ def crop_filter(rect: dict) -> str:
     """The ffmpeg crop for ``rect`` (even sizes). Pure."""
     return (f"crop=trunc(iw*{rect['w']:.4f}/2)*2:trunc(ih*{rect['h']:.4f}/2)*2:"
             f"trunc(iw*{rect['x']:.4f}):trunc(ih*{rect['y']:.4f})")
+
+
+def clean_logos(rects) -> list[dict]:
+    """The usable rectangles of ``rects`` (at most ``MAX_LOGOS``). Pure."""
+    out = []
+    for r in rects or []:
+        c = clean(r)
+        if c is not None:
+            out.append(c)
+    return out[:MAX_LOGOS]
+
+
+def load_logos(work_dir: Path) -> list[dict] | None:
+    """The project's own logo regions; None when it never had any (an empty list = "none")."""
+    try:
+        data = json.loads((Path(work_dir) / LOGOS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return clean_logos(data) if isinstance(data, list) else None
+
+
+def logos_for_job(job) -> list[dict]:
+    """The logo regions OCR must not read: the project's, else its series'. A logo (creator
+    name, platform mark) sits in the same corner of every episode."""
+    mine = load_logos(job.work_dir)
+    if mine is not None:
+        return mine
+    from app.pipeline import series
+
+    p = series.profile_of(job)
+    return clean_logos(p.ocr_logos) if p is not None else []
+
+
+def remember_logos(job, rects, *, series_too: bool = True) -> list[dict]:
+    """Keep the logo regions (possibly none) for this project and, when asked, its series."""
+    logos = clean_logos(rects)
+    atomic_write_text(job.work_dir / LOGOS_FILE, json.dumps(logos, indent=1))
+    if series_too:
+        from app.pipeline import series
+
+        p = series.profile_of(job)
+        if p is not None:
+            p.ocr_logos = logos
+            series.save(p)
+    return logos
+
+
+def blank_logos(img, logos: list[dict], box: tuple[float, float, float, float]):
+    """``img`` (a BGR strip cut out of the frame at ``box`` = x, y, w, h normalized to the full
+    frame) with every logo region painted black — the OCR then has nothing to read there. Works
+    on a copy only when something is painted. Pure."""
+    if not logos:
+        return img
+    bx, by, bw, bh = box
+    h, w = img.shape[:2]
+    out = None
+    for lg in logos:
+        x0 = max(lg["x"], bx)
+        y0 = max(lg["y"], by)
+        x1 = min(lg["x"] + lg["w"], bx + bw)
+        y1 = min(lg["y"] + lg["h"], by + bh)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        if out is None:
+            out = img.copy()
+        out[int((y0 - by) / bh * h):int(round((y1 - by) / bh * h)),
+            int((x0 - bx) / bw * w):int(round((x1 - bx) / bw * w))] = 0
+    return img if out is None else out
 
 
 def load(work_dir: Path) -> dict | None:

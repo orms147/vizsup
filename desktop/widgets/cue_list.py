@@ -602,6 +602,20 @@ class CueList(QFrame):
     def selected_rows(self) -> list[int]:
         return sorted(ix.row() for ix in self.view.selectionModel().selectedRows())
 
+    def set_selected_rows(self, rows, current: int | None = None) -> None:
+        """Select exactly ``rows`` (the timeline's Ctrl / Shift click, Ctrl+A); the current
+        line is ``current`` — without moving the other rows' selection."""
+        from PySide6.QtCore import QItemSelection
+
+        sm = self.view.selectionModel()
+        sel = QItemSelection()
+        for r in rows:
+            if 0 <= r < self.model.rowCount():
+                sel.select(self.model.index(r), self.model.index(r))
+        sm.select(sel, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        if current is not None and 0 <= current < self.model.rowCount():
+            sm.setCurrentIndex(self.model.index(current), QItemSelectionModel.NoUpdate)
+
     def _update_pos(self) -> None:
         r = self.currentRow()
         n = self.model.rowCount()

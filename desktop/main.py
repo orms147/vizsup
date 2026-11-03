@@ -33,6 +33,7 @@ from desktop.views.editor_view import EditorView
 from desktop.views.input_view import InputView
 from desktop.views.library_view import LibraryView
 from desktop.views.render_view import RenderView
+from desktop.views.script_pages import AudioPage, ScriptVideoPage
 from desktop.widgets import pointer
 from desktop.widgets.chrome import AppNav, StatusBar, Toast
 from desktop.worker import PipelineWorker
@@ -41,12 +42,13 @@ from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 from app.providers.registry import get_tts, list_providers  # noqa: E402
 
-INPUT, EDITOR, RENDER, SETTINGS, LIBRARY = 0, 1, 2, 3, 4
+INPUT, EDITOR, RENDER, SETTINGS, LIBRARY, AUDIO, SCRIPTVIDEO = 0, 1, 2, 3, 4, 5, 6
 # what the status bar says when a page has nothing running; the editor's line used to stay
 # on every other page (Dựng video, Cài đặt, Thư viện, Bắt đầu)
 EDITOR_IDLE = "Sửa phụ đề — duyệt khi xong"
 PAGE_IDLE = {INPUT: "Sẵn sàng", EDITOR: EDITOR_IDLE, RENDER: "Chọn âm thanh rồi dựng video",
-             SETTINGS: "Cài đặt", LIBRARY: "Thư viện — mọi dự án trên máy"}
+             SETTINGS: "Cài đặt", LIBRARY: "Thư viện — mọi dự án trên máy",
+             AUDIO: "Tạo audio từ text", SCRIPTVIDEO: "Tạo video audio"}
 # the editor's key hints in the status bar — each one says what the key really does
 # ([ / ] set the start / end to the playhead; "canh lời" to the voice is A — it used to
 # read "[ ] Canh lời"); the full list is the Phím tắt dialog (desktop/widgets/shortcuts.py)
@@ -100,6 +102,18 @@ class MainWindow(QMainWindow):
         self.library = LibraryView()
         self.stack.addWidget(_scrolled(self.library))
         self._before_library = INPUT
+        # two tools of their own, beside the translation flow: their builds run on their own
+        # threads and go on while another tab is open (or another video is being translated)
+        self.audio_page = AudioPage(tts=self._start_tts)
+        self.script_page = ScriptVideoPage(tts=self._start_tts)
+        self.stack.addWidget(_scrolled(self.audio_page))
+        self.stack.addWidget(_scrolled(self.script_page))
+        self.audio_page.useForVideo.connect(self._audio_to_video)
+        self.audio_page.busyChanged.connect(lambda _b: self._sync_tool_badges())
+        self.script_page.busyChanged.connect(lambda _b: self._sync_tool_badges())
+        self.nav.audioClicked.connect(lambda: self._open_tool(AUDIO))
+        self.nav.scriptVideoClicked.connect(lambda: self._open_tool(SCRIPTVIDEO))
+        self._before_tool = INPUT
         self._join_gid: str | None = None    # the split video a join is running for
         v.addWidget(self.stack, 1)
         v.addWidget(self.status)
@@ -308,7 +322,9 @@ class MainWindow(QMainWindow):
         ShortcutsDialog(self).exec()
 
     def _on_page(self, idx: int) -> None:
-        if idx in (SETTINGS, LIBRARY):
+        self.nav.audio_btn.setChecked(idx == AUDIO)
+        self.nav.video_btn.setChecked(idx == SCRIPTVIDEO)
+        if idx in (SETTINGS, LIBRARY, AUDIO, SCRIPTVIDEO):
             self.steps.set_active(getattr(self, "_rail_idx", INPUT), dimmed=True)
         else:
             self._rail_idx = idx
@@ -515,6 +531,34 @@ class MainWindow(QMainWindow):
         self._before_library = self._before_settings if idx == SETTINGS else idx
         self.library.refresh()
         self.stack.setCurrentIndex(LIBRARY)
+
+    def _start_tts(self) -> str:
+        """The TTS engine chosen on the start page (the tool pages speak with the same one)."""
+        try:
+            return self.input.tts.current_name() or settings.vizsup_default_tts
+        except Exception:  # noqa: BLE001
+            return settings.vizsup_default_tts
+
+    def _open_tool(self, idx: int) -> None:
+        """«Tạo audio» / «Video audio»: another page of the stack — nothing stops while it is shown;
+        a second click on the same button goes back to where the owner was."""
+        cur = self.stack.currentIndex()
+        if cur == idx:
+            self.stack.setCurrentIndex(self._before_tool)
+            return
+        if cur not in (AUDIO, SCRIPTVIDEO):
+            self._before_tool = self._before_settings if cur == SETTINGS else (
+                self._before_library if cur == LIBRARY else cur)
+        page = self.audio_page if idx == AUDIO else self.script_page
+        page.fill_voices()
+        self.stack.setCurrentIndex(idx)
+
+    def _audio_to_video(self, path: str) -> None:
+        self.script_page.set_audio(path)
+        self._open_tool(SCRIPTVIDEO)
+
+    def _sync_tool_badges(self) -> None:
+        self.nav.set_tool_busy(self.audio_page.is_busy(), self.script_page.is_busy())
 
     def _library_guard(self, item: dict) -> str | None:
         """Why ``item`` (a library project / split video) must not be deleted now, or None.
@@ -1095,10 +1139,11 @@ class MainWindow(QMainWindow):
         worker = self._worker
         self.raise_()
         self.activateWindow()
-        dlg = AreaDialog(ask.get("frames") or [], ask.get("suggestion"), ask.get("series"), self)
+        dlg = AreaDialog(ask.get("frames") or [], ask.get("suggestion"), ask.get("series"), self,
+                         logos=ask.get("logos"))
         dlg.exec()
         if worker is not None:
-            worker.answer_area(dlg.result_area(), dlg.remember.isChecked())
+            worker.answer_area(dlg.result_area(), dlg.remember.isChecked(), dlg.result_logos())
 
     def _on_split_done(self, items: list) -> None:
         """A long video became parts: queue them first, keep the app free meanwhile."""

@@ -99,6 +99,44 @@ def glass_region(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
     note_hardsubs(job, o, log=log, debug=debug)
 
 
+def picture_args(o: dict) -> dict:
+    """The part of ``assemble.assemble``'s arguments that decides how the PICTURE looks (style,
+    cover, frame, bars, watermark, cards, canvas text) — one place for the real render and
+    for the exact still frame, so what the owner previews is what gets burned."""
+    ui_size = o.get("size")
+    return dict(
+        cover_hardsubs=o.get("cover_hardsubs", False),
+        cover_mode=o.get("cover_mode"),
+        font=o.get("font", "Be Vietnam Pro"),
+        size=int(round(ui_size * 3)) if ui_size else 60,   # UI px → .ass units (1080 canvas)
+        style=o.get("style"),
+        frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
+        res=o.get("res") or "source",       # "Chất lượng": short side, never upscaled
+        preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
+        sharpen=bool(o.get("sharpen", True)),   # "Làm nét hình" (on unless turned off)
+        cover=o.get("logo_cover"),              # "Che logo, ghi tên phim": a box + the owner's text
+        watermark=o.get("watermark"),      # the translator's own mark
+        fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
+        episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card
+        safe_caption=o.get("safe_caption"),    # Short: subtitles above the platform's UI
+        canvas_text=bool(o.get("canvas_text")),   # 9:16: chip / hook / end card in the bars
+        bar_subs=bool(o.get("bar_subs")),         # … and the dialogue in the bottom bar
+    )
+
+
+def still_job(job: Job, o: dict, at: float, *, height: int = 720) -> Path:
+    """ONE frame of the finished picture at source second ``at`` → still.png: the same .ass,
+    the same filter graph as the render (no voice, no encode — about a second). The owner sees
+    where the text, the logo box and the watermark land BEFORE spending the render."""
+    from app.pipeline import assemble, disclosure
+
+    return assemble.assemble(
+        job, [], burn_cues=o.get("burn_cues"), preview=True,
+        overlays=disclosure.overlays(job, credit=bool(o.get("credit_overlay")),
+                                     ai_voice=bool(o.get("ai_label"))),
+        still_at=max(0.0, float(at)), still_h=int(height), **picture_args(o))
+
+
 def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
                progress: Callable[[float, str], None] = _noop,
                stage: Callable[[str], None] = _noop,
@@ -172,8 +210,6 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
     check()
     stage("assemble")
     progress(0.6, "Đang ghép video (ffmpeg)…")
-    ui_size = o.get("size")
-    ass_size = int(round(ui_size * 3)) if ui_size else 60  # UI px → .ass units (1080 canvas)
     glass_region(job, o, log=log, progress=progress, debug=debug)
     out = assemble.assemble(
         job, segments,
@@ -181,28 +217,15 @@ def render_job(job: Job, o: dict, *, log: Callable[[str], None] = _noop,
         audio_mode=audio_mode,
         orig_volume=1.0 if original else o.get("orig_volume", 1.0),
         dub_volume=o.get("dub_volume", 1.0),
-        cover_hardsubs=o.get("cover_hardsubs", False),
-        cover_mode=o.get("cover_mode"),
-        font=o.get("font", "Be Vietnam Pro"),
-        size=ass_size,
-        style=o.get("style"),
         log=log,
         preview=bool(o.get("preview")),     # E-15: fast low-res check first
-        frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
-        res=o.get("res") or "source",       # "Chất lượng": short side, never upscaled
-        preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
         progress=lambda f, m: progress(0.6 + 0.4 * f, m),
         cancel=(lambda: bool(cancel and cancel())),   # a long encode stops on Hủy
         overlays=disclosure.overlays(        # F-1/F-2: credit + AI-voice label
             job, credit=bool(o.get("credit_overlay")),
             ai_voice=bool(o.get("ai_label")) and (not original or bool(voiced))),
         commentary=voiced,
-        watermark=o.get("watermark"),      # the translator's own mark
-        fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
-        episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card
-        safe_caption=o.get("safe_caption"),    # Short: subtitles above the platform's UI
-        canvas_text=bool(o.get("canvas_text")),   # 9:16: chip / hook / end card in the bars
-        bar_subs=bool(o.get("bar_subs")),         # … and the dialogue in the bottom bar
+        **picture_args(o),
     )
     review.stamp_fit_report(job, rate=o.get("rate"))   # late flags ↔ this speed
     log(f"✓ Xuất: {out}")

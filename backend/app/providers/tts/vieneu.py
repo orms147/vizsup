@@ -14,6 +14,8 @@ inaudible AI watermark (default on). Speed: the ``rate`` ("+10%") is applied wit
 """
 from __future__ import annotations
 
+import os
+import queue
 import re
 import subprocess
 import tempfile
@@ -26,8 +28,60 @@ VOICES = ["Quốc Tuấn", "Trúc Ly", "Ngọc Huyền", "Adam bựa"]
 DEFAULT_VOICE = "Trúc Ly"
 GENDER = {"Quốc Tuấn": "m", "Adam bựa": "m", "Trúc Ly": "f", "Ngọc Huyền": "f"}
 
-_engine = None
+# Parallel lines (2026-11-02): one ONNX session speaks ONE line at a time and, with the engine's own
+# default of 8 intra-op threads, left a 16-core / 32-thread CPU at ~25 % (1592 lines took ~25 min).
+# A pool of several engines — each with fewer threads — speaks several lines at once. Each engine
+# holds ~0.6 GB, so the count is capped by cores and by the free memory.
+_pool: queue.Queue = queue.Queue()
+_made = 0
 _lock = threading.Lock()
+MAX_WORKERS = 6
+ENGINE_GB = 0.8
+
+
+_gpu_failed = False
+
+
+def use_gpu() -> bool:
+    """Speak on the graphics card (PyTorch / CUDA): ``VIZSUP_VIENEU_DEVICE`` = cpu | cuda | auto
+    (default auto: a CUDA torch + ``transformers`` installed, and no earlier load failure).
+    Measured 2026-11-02 on an RTX 4070 Laptop: 0.24 s/line vs 0.62 on 6 CPU engines."""
+    mode = (os.environ.get("VIZSUP_VIENEU_DEVICE") or "auto").strip().lower()
+    if mode == "cpu" or _gpu_failed:
+        return False
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        import transformers  # noqa: F401 - the PyTorch engine needs it
+    except Exception:  # noqa: BLE001 - no CUDA torch / no transformers: the CPU engines
+        return False
+    return True
+
+
+def workers() -> int:
+    """How many lines are spoken at once: ``VIZSUP_VIENEU_WORKERS`` when set (1 = the old one at a
+    time), else one per 4 physical cores up to ``MAX_WORKERS`` and while ~0.8 GB of memory each
+    stays free. Pure apart from reading the machine."""
+    if use_gpu():
+        return 1                         # one engine on the card: it is already faster than 6 CPU ones
+    env = (os.environ.get("VIZSUP_VIENEU_WORKERS") or "").strip()
+    if env.isdigit():
+        return max(1, min(8, int(env)))
+    n = max(1, min(MAX_WORKERS, (os.cpu_count() or 8) // 5))       # 32 threads → 6
+    try:
+        import psutil
+
+        n = min(n, max(1, int(psutil.virtual_memory().available / 2**30 / ENGINE_GB) - 1))
+    except Exception:  # noqa: BLE001 - no psutil: keep the core-based count
+        pass
+    return n
+
+
+def _threads_each(n: int) -> int:
+    physical = max(1, (os.cpu_count() or 8) // 2)
+    return max(2, min(8, physical // max(1, n)))
 
 
 def _tempo(rate: str | None) -> float:
@@ -49,14 +103,40 @@ def model_cached() -> bool:
     return snap.is_dir() and any(snap.iterdir())
 
 
-def _get_engine():
-    global _engine
+def _acquire():
+    """An engine nobody is using: a free one from the pool, a new one while fewer than
+    ``workers()`` exist, else wait for one to come back."""
+    global _made, _gpu_failed
+    try:
+        return _pool.get_nowait()
+    except queue.Empty:
+        pass
     with _lock:
-        if _engine is None:
+        n = workers()
+        if use_gpu() and _made < 1:
             from vieneu import Vieneu
 
-            _engine = Vieneu(mode="v3turbo", backend="onnx", device="cpu")
-        return _engine
+            try:
+                _made += 1
+                return Vieneu(mode="v3turbo", device="cuda")
+            except Exception:  # noqa: BLE001 - out of memory, missing weights: speak on the CPU
+                _made -= 1
+                _gpu_failed = True
+                n = workers()
+        if _made < n:
+            _made += 1
+            from vieneu import Vieneu
+
+            try:
+                return Vieneu(mode="v3turbo", backend="onnx", device="cpu", threads=_threads_each(n))
+            except Exception:
+                _made -= 1
+                raise
+    return _pool.get()
+
+
+def _release(engine) -> None:
+    _pool.put(engine)
 
 
 class VieNeuTTS(TTSProvider):
@@ -65,6 +145,11 @@ class VieNeuTTS(TTSProvider):
     cost_note = "free · runs on this computer · Quốc Tuấn / Trúc Ly / Ngọc Huyền / Adam bựa"
     unavailable_note = "chưa cài vieneu"
     local_voices = True          # listed next to any provider's voices (registry)
+
+    @property
+    def parallel(self) -> int:
+        """Lines spoken at once (pipeline/tts.py runs that many ``synthesize`` calls together)."""
+        return workers()
 
     def available(self) -> bool:
         return _installed("vieneu") and _installed("soundfile")
@@ -77,14 +162,17 @@ class VieNeuTTS(TTSProvider):
 
         from app.ffmpegutil import ffmpeg_bin
 
-        tts = _get_engine()
-        with _lock:                               # one ONNX session: one line at a time
+        tts = _acquire()
+        try:                                      # one ONNX session = one line at a time
             wav = tts.infer(text, voice=voice if voice in VOICES else DEFAULT_VOICE)
+            rate_hz = tts.sample_rate
+        finally:
+            _release(tts)
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
             raw = Path(tmp) / "line.wav"
-            sf.write(str(raw), wav, tts.sample_rate)
+            sf.write(str(raw), wav, rate_hz)
             af = ["-af", f"atempo={_tempo(rate):.3f}"] if abs(_tempo(rate) - 1) > 1e-3 else []
             subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-i", str(raw), *af,
                             "-c:a", "libmp3lame", "-b:a", "96k", str(out)], check=True)

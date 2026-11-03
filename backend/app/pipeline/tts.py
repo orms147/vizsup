@@ -357,6 +357,11 @@ def _synthesize(
                                  line_voices=lv, rate=rate, log=log, cancel=cancel,
                                  progress=progress)
 
+    if int(getattr(tts, "parallel", 1) or 1) > 1:        # a local engine that can speak several lines at once
+        return _synthesize_parallel(job, tts, cues, ov, manifest, said, provider=provider,
+                                    line_voices=lv, rate=rate, log=log, cancel=cancel,
+                                    progress=progress, sleep=_sleep)
+
     segments: list[tuple[Cue, Path]] = []
     kept = made = 0
     for i, c in enumerate(cues):
@@ -391,6 +396,92 @@ def _synthesize(
     if log and kept:
         log(f"↷ Giữ lại {kept} câu đã tạo trước đó, tạo mới {made} câu")
     return segments
+
+
+def _synthesize_parallel(
+    job: Job, tts, cues: list[Cue], ov: list[dict], manifest: dict, said: dict[int, str], *,
+    provider: str, line_voices: list[str | None], rate: str | None,
+    log: Callable[[str], None] | None, cancel: Callable[[], bool] | None,
+    progress: Callable[[int, int], None] | None, sleep: Callable[[float], None],
+) -> list[tuple[Cue, Path]]:
+    """The per-cue path with ``tts.parallel`` lines spoken at once (VieNeu on a many-core CPU).
+    Same decisions as the sequential loop — muted / empty drop their cache, an up-to-date segment
+    is kept, the rest is made — but the making runs on a thread pool; manifest writes, progress
+    and errors stay on THIS thread, so a crash keeps every finished line."""
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    width = int(tts.parallel)
+    keep: dict[int, Path] = {}          # cue position → its segment (made or cached)
+    todo: list[tuple[int, Cue, Path, str]] = []
+    for i, c in enumerate(cues):
+        key = str(c.index)
+        if (ov[i].get("mute") if i < len(ov) else False) or not said[c.index].strip():
+            manifest.pop(key, None)
+            continue
+        seg = job.tts_dir / f"seg_{c.index:04d}.mp3"
+        want = _seg_hash(provider, line_voices[i], rate, said[c.index])
+        if seg.exists() and seg.stat().st_size > 0 and manifest.get(key) == want:
+            keep[i] = seg
+        else:
+            todo.append((i, c, seg, want))
+    kept, made, done = len(keep), 0, len(keep)
+    total = len(cues)
+    if progress and done:
+        progress(done, total)
+    if log and todo and width > 1:
+        log(f"… đọc {width} câu cùng lúc")
+
+    def one(item):
+        i, c, seg, _want = item
+        _synth_retry(tts, said[c.index], seg, voice=line_voices[i], rate=rate, sleep=sleep)
+        return i
+
+    err: Exception | None = None
+    ex = ThreadPoolExecutor(max_workers=width)
+    try:
+        pending = {}
+        queue_ = iter(todo)
+
+        def feed() -> None:
+            while len(pending) < width * 2 and err is None and not (cancel and cancel()):
+                nxt = next(queue_, None)
+                if nxt is None:
+                    return
+                pending[ex.submit(one, nxt)] = nxt
+
+        feed()
+        while pending:
+            finished, _ = wait(list(pending), timeout=0.5, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                i, c, seg, want = pending.pop(fut)
+                exc = fut.exception()
+                if exc is None:
+                    manifest[str(c.index)] = want
+                    keep[i] = seg
+                    made += 1
+                elif _unvoiceable(exc):
+                    manifest.pop(str(c.index), None)
+                    if log:
+                        log(f"⚠ Câu {c.index}: giọng đọc không phát âm được văn bản này "
+                            f"— bỏ lồng tiếng câu này (phụ đề vẫn hiện).")
+                elif err is None:
+                    err = _explain(exc)
+                done += 1
+                if progress:
+                    progress(min(done, total), total)
+            if finished:
+                _save_manifest(job, manifest)    # write-after-each batch: a crash keeps progress
+            if cancel and cancel():
+                break
+            feed()
+    finally:
+        ex.shutdown(wait=True, cancel_futures=True)
+    _save_manifest(job, manifest)
+    if err is not None:
+        raise err
+    if log and kept:
+        log(f"↷ Giữ lại {kept} câu đã tạo trước đó, tạo mới {made} câu")
+    return [(cues[i], keep[i]) for i in sorted(keep)]
 
 
 def _synthesize_batch(

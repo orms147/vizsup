@@ -63,7 +63,7 @@ def test_main_window_can_shrink_to_a_small_screen(qapp):
 
     win = desktop_main.MainWindow()
     hint = win.minimumSizeHint()
-    assert hint.width() < 1000 and hint.height() < 300      # the nav bar (~952 px) is all that is left
+    assert hint.width() < 1100 and hint.height() < 300      # the nav bar (~1060 px with the two tool tabs) is all that is left
 
 
 def test_video_priority_layout_gives_the_picture_the_room(qapp):

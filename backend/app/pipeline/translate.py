@@ -495,6 +495,52 @@ def shorten_lines(items: list[tuple[str, int]], *, provider: str = "openrouter",
     return out
 
 
+RETRANSLATE_INSTRUCTION = (
+    "Bạn là biên tập viên phụ đề Trung → Việt. Mỗi dòng dưới đây có dạng "
+    "`n| ZH: <câu Trung> | VI hiện tại: <bản Việt>` kèm (nếu có) câu liền trước / liền sau để "
+    "hiểu mạch. Hãy DỊCH LẠI từng dòng cho đúng nghĩa, tự nhiên khi nói, đúng xưng hô của video "
+    "và không dài hơn bản hiện tại quá nhiều (để lồng tiếng kịp). Chỉ dịch câu ZH của dòng đó. "
+    "Trả đúng từng dòng `n| <câu Việt>`, không giải thích, không thêm dòng."
+)
+
+
+def retranslate_lines(items: list[dict], *, brief: str = "", request: str = "",
+                      provider: str = "openrouter",
+                      cancel: Callable[[], bool] | None = None) -> list[str]:
+    """Editor "Dịch lại các câu đã chọn": ``items`` = [{zh, vi, before, after}] (before / after =
+    the neighbouring Vietnamese lines, "" when none) → one new Vietnamese line per item, in
+    batched rewrite() calls on the "shorten" role model. A line the model did not answer comes
+    back unchanged. Raises when the provider can't."""
+    prov = get_translator(provider)
+    if not hasattr(prov, "rewrite"):
+        raise RuntimeError(f"Bộ dịch '{provider}' không hỗ trợ dịch lại câu.")
+    if not prov.available():
+        raise RuntimeError(f"Bộ dịch '{provider}' chưa sẵn sàng (thiếu API key).")
+    head = []
+    if brief.strip():
+        head.append(f"Ngữ cảnh video:\n{brief.strip()}")
+    if request.strip():
+        head.append(f"Yêu cầu thêm của người dùng (ưu tiên): {request.strip()}")
+    out = [it.get("vi", "") for it in items]
+    for start in range(0, len(items), BATCH):
+        if cancel and cancel():
+            break
+        chunk = items[start:start + BATCH]
+        lines = []
+        for k, it in enumerate(chunk, 1):
+            ctx = "".join(f" | {tag}: {it[key]}" for tag, key in (("trước", "before"), ("sau", "after"))
+                          if it.get(key))
+            lines.append(f"{k}| ZH: {it['zh']} | VI hiện tại: {it.get('vi', '')}{ctx}")
+        reply = prov.rewrite("\n\n".join([*head, "\n".join(lines)]), RETRANSLATE_INSTRUCTION,
+                             max_tokens=_completion_cap(len(chunk)), role="shorten")
+        current = [it.get("vi", "") for it in chunk]
+        for k, cand in enumerate(parse_numbered(reply or "", len(chunk), current)):
+            cand = cand.strip().strip('"').strip()
+            if cand:
+                out[start + k] = cand
+    return out
+
+
 ALT_STYLES = ("Sát nghĩa", "Tự nhiên", "Ngắn gọn")
 ALT_INSTRUCTION = (
     "Bạn là biên tập viên phụ đề Trung → Việt. Cho DÒNG CẦN DỊCH LẠI (tiếng Trung + bản "

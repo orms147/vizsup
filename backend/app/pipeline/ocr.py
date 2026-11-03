@@ -275,6 +275,75 @@ def _similar(a: str, b: str, sim: float) -> bool:
     return SequenceMatcher(None, na, nb).ratio() >= sim
 
 
+# A creator's logo sits in the subtitle band for the WHOLE video ("只蝉漫画 bilibili", checked
+# 2026-11-02 on 38856230108-1-192: on 98 % of the 5710 frames). Read together with every line it
+# made two different short lines "similar" (the shared mark is half the text), so a new line
+# was swallowed by the one before it and ~30 % of the dialogue never became a cue; the OCR
+# spells the mark differently each frame (bilibili / bilbili / billili), which also flagged
+# 1005 of 1047 cues "suspect". The marks are found from the reads themselves — a token on a
+# large share of ALL frames, spread over the whole video — and cut from every frame before
+# the frames are grouped.
+STATIC_MIN_SHARE = 0.10       # a mark is on at least this share of all frames…
+STATIC_SPREAD = 8             # …and in at least this many of 10 equal slices of the video
+_TOKEN = re.compile(r"[A-Za-z]+|[^A-Za-z\s]+")
+
+
+def _same_script(a: str, b: str) -> bool:
+    return bool(_CJK.search(a)) == bool(_CJK.search(b))
+
+
+def _edit_ratio(a: str, b: str) -> float:
+    """1 − Levenshtein/longer: "bilbili" ↔ "bilibili" 0.88 (difflib's greedy ratio says 0.53)."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return 1 - prev[-1] / max(len(a), len(b), 1)
+
+
+def _like_mark(tok: str, mark: str) -> bool:
+    """``tok`` is a misread or a clipped piece of ``mark`` (same script, close in length)."""
+    if not _same_script(tok, mark) or abs(len(tok) - len(mark)) > 4:
+        return False
+    a, b = tok.lower(), mark.lower()
+    if _edit_ratio(a, b) >= 0.6:
+        return True
+    it = iter(b)                    # a clipped read: "bibi" out of "bilibili"
+    return len(a) >= 3 and 2 * len(a) >= len(b) and all(ch in it for ch in a)
+
+
+def static_marks(texts: list[str]) -> list[str]:
+    """The tokens that are on the screen all through the video (creator logo, channel name):
+    whole OCR boxes of two or more characters seen on ``STATIC_MIN_SHARE`` of the frames and
+    over ``STATIC_SPREAD`` of 10 slices of the video. Dialogue never is — a refrain
+    repeats in one stretch only. Pure."""
+    from collections import Counter
+
+    n = len(texts)
+    if n < 100:
+        return []
+    count: Counter = Counter()
+    slices: dict[str, set[int]] = {}
+    for k, text in enumerate(texts):
+        for tok in set(_TOKEN.findall(text or "")):
+            if len(tok) >= 2:
+                count[tok] += 1
+                slices.setdefault(tok, set()).add(k * 10 // n)
+    return [t for t, c in count.most_common()
+            if c >= STATIC_MIN_SHARE * n and len(slices[t]) >= STATIC_SPREAD]
+
+
+def strip_static(text: str, marks: list[str]) -> str:
+    """``text`` without the static marks (and their misreads: bilbili, 只婵漫画). Pure."""
+    if not marks or not text:
+        return text
+    toks = _TOKEN.findall(text)
+    keep = [t for t in toks if not any(t == m or (len(t) >= 2 and _like_mark(t, m)) for m in marks)]
+    return " ".join(keep) if len(keep) < len(toks) else text
+
+
 def _best(texts: list[str]) -> str:
     """Cleanest read of a subtitle group: most Chinese chars, then longest."""
     return max(texts, key=lambda s: (_cjk_count(s), len(s))) if texts else ""
@@ -361,9 +430,11 @@ def _frame_stream(src: Path, vf: str, start: float = 0.0) -> Iterator:
 
 
 def _checkpoint_key(src: Path, fps: float, vf: str, min_conf: float, engine: str = "rapidocr",
-                    band: tuple[float, float] | None = None) -> str:
+                    band: tuple[float, float] | None = None, logos: list | None = None) -> str:
     st = src.stat()
     tail = "" if engine == "rapidocr" and band is None else f"|{engine}|{band}"
+    if logos:                                  # other logo regions = other pixels read
+        tail += "|logos=" + ";".join(f"{g['x']},{g['y']},{g['w']},{g['h']}" for g in logos)
     return f"{src.name}:{st.st_size}:{int(st.st_mtime)}|{fps}|{vf}|{min_conf}|v1{tail}"
 
 
@@ -422,6 +493,20 @@ def _fmt_eta(sec: float) -> str:
         f"{sec // 60}:{sec % 60:02d}"
 
 
+_CROP_BOX = {                   # the strip each preset cuts, normalized to the full frame (x, y, w, h)
+    "bottom-third": (0, 2 / 3, 1, 1 / 3), "bottom-quarter": (0, 3 / 4, 1, 1 / 4),
+    "bottom-half": (0, 0.5, 1, 0.5), "middle-third": (0, 1 / 3, 1, 1 / 3),
+    "top-third": (0, 0, 1, 1 / 3), "full": (0, 0, 1, 1),
+}
+
+
+def strip_box(crop: str, area: dict | None) -> tuple[float, float, float, float]:
+    """Where the OCR strip sits in the full frame (x, y, w, h, 0..1). Pure."""
+    if area:
+        return (area["x"], area["y"], area["w"], area["h"])
+    return _CROP_BOX.get(crop, _CROP_BOX["bottom-third"])
+
+
 def frame_filter(fps: float, crop: str, area: dict | None = None) -> str:
     """The ffmpeg chain that feeds OCR: the sampling rate, then the owner's band when drawn
     (pipeline/ocr_area.py), else the ``crop`` preset. Pure."""
@@ -437,7 +522,7 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                      progress: Callable[[float, str], None] | None = None,
                      cancel: Callable[[], bool] | None = None,
                      log: Callable[[str], None] | None = None,
-                     area: dict | None = None) -> Job:
+                     area: dict | None = None, logos: list[dict] | None = None) -> Job:
     """OCR burned-in subtitles → job.cn_srt with the OCR engine ``engine`` (a provider in
     the registry: local RapidOCR, or a cloud vision model). Resumable (``ocr_frames.json``).
     ``area`` = the owner's band (pipeline/ocr_area.py): only that rectangle is read."""
@@ -465,7 +550,12 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
     band = (band_rows(_ensure_region(job, crop, log), crop)
             if prov.crop_to_band and not area else None)      # the owner's band is tight already
     ckpt = job.work_dir / CHECKPOINT
-    key = _checkpoint_key(src, fps, vf, min_conf, prov.cache_tag(), band)
+    if logos is None:                                    # the owner's logo regions (project / series)
+        logos = ocr_area.logos_for_job(job)
+    box = strip_box(crop, area)
+    key = _checkpoint_key(src, fps, vf, min_conf, prov.cache_tag(), band, logos)
+    if logos and log:
+        log(f"… bỏ qua {len(logos)} vùng logo khi đọc chữ")
     done: list[list] = _load_checkpoint(ckpt, key)
     total = max(1, int((probe_duration(src) or 0.0) * fps))
     say = progress or (lambda _f, _m: None)
@@ -484,7 +574,7 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         batch: list = []
 
         def flush() -> None:
-            for lines in read([cut(im) for im in batch]):
+            for lines in read([cut(ocr_area.blank_logos(im, logos, box)) for im in batch]):
                 text, conf = _clean_frame_conf(lines, min_conf)
                 done.append([text, round(float(conf), 4)])
             batch.clear()
@@ -505,7 +595,13 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         if batch:
             flush()
 
-    per_frame = [(k / fps, text, conf) for k, (text, conf) in enumerate(done)]
+    marks = static_marks([text for text, _c in done])
+    if marks:
+        if log:
+            log(f"… bỏ logo / watermark luôn có trên màn hình: {' · '.join(marks)}")
+        (job.work_dir / "ocr_marks.json").write_text(
+            json.dumps(marks, ensure_ascii=False), encoding="utf-8")
+    per_frame = [(k / fps, strip_static(text, marks), conf) for k, (text, conf) in enumerate(done)]
     # 2) group consecutive frames showing the same subtitle, keep the cleanest read
     kept = group_frames(per_frame, sim=sim, fps=fps, min_dur=min_dur)
     # 2b) E-0: static banners / watermarks / one-frame Latin junk are not subtitles

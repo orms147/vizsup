@@ -131,6 +131,55 @@ def watermark_events(wm: dict | None, duration: float) -> list[dict]:
     return out
 
 
+# "Che logo, ghi tên phim" (2026-11-02): the owner picks any rectangle of the picture (the
+# creator's logo, a Chinese title) and covers it with a solid box carrying a text of their own
+# (the Vietnamese name of the film). Drawn in the subtitle .ass (a vector box + a text line, whole
+# video), so it scales with the picture, shows in the quick proof and in the vertical copy.
+COVER_DEFAULT = {"on": False, "text": "", "box": None, "fill": "#000000", "opacity": 100,
+                 "color": "#FFFFFF"}
+COVER_FILLS = (("#000000", "Đen"), ("#FFFFFF", "Trắng"), ("#2B2B33", "Xám đậm"), ("#1F3A93", "Xanh đậm"),
+               ("#8B1E2D", "Đỏ đậm"))
+PLAY_W, PLAY_H = 1920, 1080          # the .ass canvas (write_ass PlayRes)
+COVER_MIN_PX = 14
+
+
+def cover_font_px(w_px: float, h_px: float, text: str) -> int:
+    """The text size (px of the 1920×1080 canvas) that fits ``text`` — one or more lines — in a
+    box of ``w_px`` × ``h_px``: bold Vietnamese runs ~0.6 em per character. Pure."""
+    lines = [ln for ln in str(text).split("\n") if ln.strip()] or [""]
+    widest = max(len(ln) for ln in lines) or 1
+    by_w = (w_px * 0.92) / (0.6 * widest)
+    by_h = (h_px * 0.82) / (1.2 * len(lines))
+    return int(max(COVER_MIN_PX, min(by_w, by_h, 220)))
+
+
+def _hex(c: str, default: str) -> str:
+    c = str(c or "").strip().lstrip("#")
+    return c.upper() if len(c) == 6 and all(ch in "0123456789abcdefABCDEF" for ch in c) else default
+
+
+def cover_events(cover: dict | None, duration: float) -> list[dict]:
+    """The ``write_ass`` events of the cover box — ``[]`` when it is off, empty or has no
+    usable rectangle. Each: ``{start, end, x0, y0, x1, y1, fill, alpha, text, tx, ty, fs,
+    color}`` in canvas pixels; ``alpha`` is the ASS transparency 0 (solid)..255. Pure."""
+    from app.pipeline import ocr_area
+
+    if not cover or not cover.get("on"):
+        return []
+    box = ocr_area.clean(cover.get("box"))
+    if box is None:
+        return []
+    text = "\n".join(" ".join(ln.split()) for ln in str(cover.get("text") or "").splitlines())[:120]
+    x0, y0 = round(box["x"] * PLAY_W), round(box["y"] * PLAY_H)
+    x1, y1 = round((box["x"] + box["w"]) * PLAY_W), round((box["y"] + box["h"]) * PLAY_H)
+    opacity = max(0, min(100, int(cover.get("opacity", 100))))
+    return [{"start": 0.0, "end": max(1.0, float(duration or 0) or 36000.0),
+             "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+             "fill": _hex(cover.get("fill"), "000000"), "alpha": round(255 * (100 - opacity) / 100),
+             "text": text, "tx": (x0 + x1) // 2, "ty": (y0 + y1) // 2,
+             "fs": cover_font_px(x1 - x0, y1 - y0, text), "color": _hex(cover.get("color"), "FFFFFF")}]
+
+
 # Series episodes (2026-10-29): "Tập 9" at the start and "Còn tiếp · Tập 10" over the last
 # seconds — viewers of a series look for both. Templates, so one setting fits every episode
 # of a batch: {n} = this episode ("1–5" for a range post), {next} = the one after it.

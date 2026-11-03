@@ -48,6 +48,8 @@ class VideoCanvas(QWidget):
         self.setMouseTracking(True)
         self._frame: QImage | None = None
         self._burned: QImage | None = None     # exact FFmpeg overlay (after a drag)
+        self._still: QImage | None = None      # the finished picture of ONE second (Xem thật)
+        self._still_busy = False
         self._nw, self._nh = ASS_W, ASS_H      # native video size (for letterbox aspect)
         self._caption = ""
         self._style: dict = {}
@@ -75,6 +77,21 @@ class VideoCanvas(QWidget):
         if img is not None and not img.isNull():
             self._burned = img
             self.update()
+
+    def set_final_still(self, img: QImage | None) -> None:
+        """"Xem thật": the whole composition exactly as the render burns it (assemble's still
+        frame) — shown INSTEAD of the live drawing, which only approximates it. None = back
+        to the live drawing."""
+        self._still = img if img is not None and not img.isNull() else None
+        self._still_busy = self._still_busy and self._still is not None
+        self.update()
+
+    def set_still_busy(self, busy: bool) -> None:
+        self._still_busy = bool(busy)
+        self.update()
+
+    def has_still(self) -> bool:
+        return self._still is not None
 
     def set_caption(self, text: str) -> None:
         if text != self._caption:
@@ -229,6 +246,15 @@ class VideoCanvas(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), QColor("#000000"))
+        if self._still is not None:
+            p.drawImage(self._disp, self._still)       # the real picture: nothing drawn over it
+            self._draw_safe_zone(p)
+            if self._still_busy:
+                p.setPen(QColor("#fbbf24"))
+                p.drawText(self.rect().adjusted(10, 8, -10, -8), int(Qt.AlignTop | Qt.AlignLeft),
+                           "Đang dựng khung hình…")
+            p.end()
+            return
         d = self._pic
         if self._burned is not None and not self._burned.isNull():
             p.drawImage(d, self._burned)
@@ -238,6 +264,7 @@ class VideoCanvas(QWidget):
         else:
             p.setPen(QColor("#666"))
             p.drawText(self.rect(), Qt.AlignCenter, "…")
+        self._draw_cover(p)
         self._draw_watermark(p)
         self._draw_safe_zone(p)
         self._draw_box(p)
@@ -246,6 +273,38 @@ class VideoCanvas(QWidget):
     def set_watermark(self, wm: dict | None) -> None:
         self._wm = wm
         self.update()
+
+    def set_cover(self, cover: dict | None) -> None:
+        """"Che logo, ghi tên phim": the owner's box + text, drawn as the render burns it."""
+        self._cover = cover
+        self.update()
+
+    def _draw_cover(self, p: QPainter) -> None:
+        from app.pipeline import disclosure
+
+        cv = getattr(self, "_cover", None)
+        if not cv or self._frame is None:
+            return
+        ev = disclosure.cover_events(cv, 1.0)
+        if not ev:
+            return
+        e = ev[0]
+        d = self._disp
+        sx, sy = d.width() / 1920.0, d.height() / 1080.0
+        r = QRectF(d.x() + e["x0"] * sx, d.y() + e["y0"] * sy, (e["x1"] - e["x0"]) * sx,
+                   (e["y1"] - e["y0"]) * sy)
+        col = QColor("#" + e["fill"])
+        col.setAlpha(255 - e["alpha"])
+        p.fillRect(r, col)
+        if e["text"]:
+            f = QFont(self._font)
+            f.setBold(True)
+            f.setPixelSize(max(6, int(e["fs"] * sy)))
+            p.save()
+            p.setFont(f)
+            p.setPen(QColor("#" + e["color"]))
+            p.drawText(r, int(Qt.AlignCenter | Qt.TextWordWrap), e["text"])
+            p.restore()
 
     def _draw_watermark(self, p: QPainter) -> None:
         """The translator's mark, placed like the render (1920×1080 layout scaled to

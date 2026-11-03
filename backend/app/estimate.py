@@ -179,7 +179,7 @@ def _model(minutes: float, opts: dict) -> tuple[Range, Range, list[str]]:
         per_line = [_line_cost(models["draft"], priced)]
         if opts.get("refine"):
             per_line.append(_line_cost(models["refine"], priced))
-        if opts.get("ai_review", True):
+        if opts.get("ai_review", False):
             per_line.append(_line_cost(models["qa"], priced))
         for lo, hi in per_line:
             cost = (cost[0] + lo * lines[0], cost[1] + hi * lines[1])

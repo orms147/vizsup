@@ -59,7 +59,8 @@ def test_menu_offers_the_editor_actions(view):
     texts = [a.text().split("\t")[0] for a in m.actions() if not a.isSeparator()]
     assert texts == ["Tách tại vị trí phát", "Gộp với câu sau", "Thêm câu sau câu này",
                      "Dịch lại (3 phương án)", "Rút gọn cho vừa thời lượng",
-                     "Tự canh theo giọng nói", "Khóa timing",
+                     "Nghe lại câu này (tiếng gốc)", "AI nghe lại câu này", "Chép chữ Việt",
+                     "Dán vào câu này", "Tự canh theo giọng nói", "Khóa timing",
                      "Đã xem, sang câu cần xem lại tiếp", "Xóa câu này (Ctrl+Z hoàn tác)"]
     assert not _act(m, "Đã xem").isEnabled()           # nothing flagged on this line
     assert not view._cue_menu(5).actions()[1].isEnabled()   # no "next line" to merge with

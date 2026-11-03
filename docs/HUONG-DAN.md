@@ -42,6 +42,9 @@ Tập mới trên Douyin / Bilibili (hoặc bạn gửi link cho bot / dán vào
   «Tập N | Chuyến Xe Tận Thế | Hải Thanh Review», mô tả có hashtag + «Bộ phim:» + ghi nguồn.
   Video đã xuất + mô tả soạn sẵn: `C:\Users\Admin\Videos\Chuyến Xe Tận Thế\`.
 - **Thư viện** ghi «Chuyến Xe Tận Thế · Tập 9» thay tiêu đề tiếng Trung dài.
+- **«Làm nét hình»** (màn Dựng, dưới «Chất lượng», bật sẵn): Douyin chỉ cho tải bản nén mạnh
+  (~1 Mb/s, kể cả khi tác giả đăng 1440p) nên hình gốc đã mờ; app làm sắc nét nhẹ khung hình
+  trước khi in phụ đề. Bỏ chọn nếu video nguồn đã nét (vd. Bilibili chất lượng cao).
 
 ## Cài một lần
 

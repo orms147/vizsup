@@ -225,7 +225,8 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             except Exception as exc:  # noqa: BLE001 - an aid, never fatal
                 print(f"[run] vi lint skipped ({exc})")
         # 3.5) E-5: AI QA pass → qa_report.json (never edits vi.srt)
-        if not getattr(args, "no_qa", False) and args.translator != "passthrough":
+        if (getattr(args, "qa", False) and not getattr(args, "no_qa", False)
+                and args.translator != "passthrough"):
             from app.pipeline import brief, qa
 
             qa.review(job, args.refine or args.translator,
@@ -330,6 +331,38 @@ def cmd_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scriptvideo(args: argparse.Namespace) -> int:
+    """Video từ kịch bản: a .txt script + clips (cycled) or one picture → a voiced video."""
+    from app.config import settings
+    from app.pipeline import scriptvideo
+
+    script = Path(args.script).read_text(encoding="utf-8")
+    out_dir = Path(args.out) if args.out else scriptvideo.new_dir(settings.vizsup_storage_dir)
+    voice = args.voice or None
+    wm = {"on": True, "text": args.watermark, "pos": "tr", "opacity": 35, "size": 14} \
+        if args.watermark else None
+    out = scriptvideo.build(
+        out_dir, script, [Path(b) for b in args.background], provider=args.tts, voice=voice,
+        rate=args.rate or None, watermark=wm, also_vertical=args.vertical,
+        log=print, progress=lambda st, f: print(f"[{st}] {f * 100:.0f}%", end="\r"))
+    print(f"\n✓ {out}")
+    return 0
+
+
+def cmd_scriptaudio(args: argparse.Namespace) -> int:
+    """Tạo audio từ text: a .txt script → narration.mp3 (+ script.srt, the line timings)."""
+    from app.config import settings
+    from app.pipeline import scriptvideo
+
+    script = Path(args.script).read_text(encoding="utf-8")
+    out_dir = Path(args.out) if args.out else scriptvideo.new_dir(settings.vizsup_storage_dir)
+    out = scriptvideo.make_audio(
+        out_dir, script, provider=args.tts, voice=args.voice or None, rate=args.rate or None,
+        log=print, progress=lambda st, f: print(f"[{st}] {f * 100:.0f}%", end="\r"))
+    print(f"\n✓ {out}")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     work_dir = Path(args.workdir)
     if not work_dir.exists():
@@ -429,7 +462,7 @@ def autopilot_opts(ui: dict, providers: dict) -> dict:
         "voice_guess": on("voice_guess", False),
         "voice_hints": on("voice_hints", False),
         "pron_check": on("pron_check", True),
-        "ai_review": on("ai_review", True),
+        "ai_review": on("ai_review", False),
         "ai_frames": on("ai_frames", False),
     }
 
@@ -447,6 +480,7 @@ def autopilot_args(url: str, slug: str, opts: dict, work_dir: Path) -> argparse.
     a.extract_terms = opts["extract_terms"]
     a.auto_context = opts["auto_context"]
     a.ai_frames = opts["ai_frames"]
+    a.qa = a.qa or bool(opts["ai_review"])
     a.no_qa = not opts["ai_review"]
     a.no_snap = not opts["auto_snap"]
     a.no_clause_split = not opts["clause_split"]
@@ -619,8 +653,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ai-frames", action="store_true",
                    help="with --auto-context: also upload ~6 frames so a vision model sees who "
                         "is on screen (better xưng hô)")
-    r.add_argument("--no-qa", action="store_true",
-                   help="skip the AI review pass that flags suspect lines (qa_report.json)")
+    r.add_argument("--qa", action="store_true",
+                   help="run the AI review pass that flags suspect lines (qa_report.json); off by "
+                        "default — it costs ~0.015 $ per 45 minutes")
+    r.add_argument("--no-qa", action="store_true", help=argparse.SUPPRESS)   # old flag: now the default
     r.add_argument("--no-vocal-timing", action="store_true",
                    help="time the lines on the original sound (default: on the speech "
                         "separated from the music by Demucs, when a GPU is available)")
@@ -703,6 +739,25 @@ def build_parser() -> argparse.ArgumentParser:
     cp.set_defaults(func=cmd_compile)
 
     pr.set_defaults(func=cmd_providers)
+
+    sv = sub.add_parser("scriptvideo", help="kịch bản .txt + video (lặp) hoặc 1 ảnh → video có giọng đọc")
+    sv.add_argument("script", help="a UTF-8 .txt file, one paragraph per line")
+    sv.add_argument("background", nargs="+", help="clips (played in order, looped) OR one picture")
+    sv.add_argument("--tts", default="edge", help="TTS provider (default: edge)")
+    sv.add_argument("--voice", default="", help="voice name, e.g. 'vieneu:Ngọc Huyền'")
+    sv.add_argument("--rate", default="", help="speed, e.g. +10%%")
+    sv.add_argument("--watermark", default="", help="burn this text as the translator's watermark")
+    sv.add_argument("--vertical", action="store_true", help="also write the 9:16 copy")
+    sv.add_argument("--out", default="", help="output folder (default: storage/_scriptvideos/<id>)")
+    sv.set_defaults(func=cmd_scriptvideo)
+
+    sa = sub.add_parser("scriptaudio", help="kịch bản .txt → file mp3 giọng đọc (không video)")
+    sa.add_argument("script", help="a UTF-8 .txt file, one paragraph per line")
+    sa.add_argument("--tts", default="edge", help="TTS provider (default: edge)")
+    sa.add_argument("--voice", default="", help="voice name, e.g. 'vieneu:Ngọc Huyền'")
+    sa.add_argument("--rate", default="", help="speed, e.g. +10%%")
+    sa.add_argument("--out", default="", help="output folder (default: storage/_scriptvideos/<id>)")
+    sa.set_defaults(func=cmd_scriptaudio)
 
     au = sub.add_parser("autopilot", help="theo dõi tập mới: run the followed series' new "
                                           "episodes to the edit gate (never approves / renders)")

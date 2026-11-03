@@ -63,6 +63,9 @@ def softsub_cmd(job: Job, dest: Path) -> list[str]:
     if ins:          # F-4 pause notes: the picture freezes exactly like output.mp4's
         pre, v, _a = assemble._pause_graph(ins, float(info.get("duration") or 0), v, [])
         parts += pre
+    if info.get("sharpen"):        # "Làm nét hình": the same picture as output.mp4
+        parts.append(f"{v}cas={assemble.SHARPEN_CAS:g}[vs]")
+        v = "[vs]"
     if info.get("cover_mode") == "blur":
         crop_expr, overlay_pos = assemble._blur_band_filters(assemble._load_region(job))
         parts += [f"{v}split[vsrc][vband]", f"[vband]{crop_expr},boxblur=10:2[vblur]",

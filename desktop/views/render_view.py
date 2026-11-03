@@ -16,6 +16,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -565,6 +566,15 @@ class RenderView(QWidget):
         qrow.addWidget(self.res, 1)
         qrow.addWidget(self.preset, 1)
         ll.addLayout(qrow)
+        # assemble.SHARPEN_CAS before the subtitles are burned (Douyin's best is ~1 Mb/s)
+        self.sharpen_cb = QCheckBox("Làm nét hình (video nguồn mờ, nén mạnh)")
+        self.sharpen_cb.setToolTip(
+            "Làm sắc nét nhẹ khung hình trước khi in phụ đề — video Douyin chỉ tải được bản "
+            "nén mạnh (~1 Mb/s) nên trông mờ. Chữ phụ đề không bị ảnh hưởng. Bỏ chọn nếu "
+            "video nguồn đã nét.")
+        self.sharpen_cb.setChecked(bool(st.get("render_sharpen", True)))
+        self.sharpen_cb.toggled.connect(lambda on: store.update_ui_state(render_sharpen=on))
+        ll.addWidget(self.sharpen_cb)
         self.size_lbl = label("", "small", wrap=True)
         ll.addWidget(self.size_lbl)
         self._src_size: tuple[int, int] | None = None
@@ -592,6 +602,7 @@ class RenderView(QWidget):
         pb.addWidget(self.credit_cb)
         pb.addWidget(self.ai_label_cb)
         pb.addWidget(self._build_watermark(st))
+        pb.addWidget(self._build_cover(st))
         pb.addWidget(self._build_episode_card(st))
         rrow = QHBoxLayout()
         rrow.setSpacing(8)
@@ -724,6 +735,16 @@ class RenderView(QWidget):
         pv.setSpacing(0)
         self.preview = VideoPanel("Video nguồn")
         self.preview.set_min_picture_height(RESULT_MIN_PICTURE)
+        # "Xem thật": the exact frame of the render (the live drawing only approximates it)
+        self.preview.enable_real_view(True)
+        self.preview.realToggled.connect(self._on_real_view)
+        self._real_key = None
+        self._real_busy = False
+        self._real_timer = QTimer(self)
+        self._real_timer.setInterval(600)
+        self._real_timer.timeout.connect(self._real_tick)
+        if store.load_ui_state().get("render_real_view", True):   # on unless the owner turned it off
+            self.preview.set_real_view(True)
         if hasattr(self, "wm_cb"):
             self._on_watermark(save=False)
         self.preview.durationChanged.connect(lambda _d: self._show_commentary())
@@ -909,6 +930,7 @@ class RenderView(QWidget):
     def set_job(self, job, *, cues: int, tts: str = "") -> None:
         changed = job is not self._job
         if changed:
+            self._real_key = None                   # "Xem thật": cut again for this project
             self._suggested = False
             self._joined = None
             self._out = None
@@ -1460,7 +1482,63 @@ class RenderView(QWidget):
             return
         self._right_stack.setCurrentIndex(2 if self._out and Path(self._out).exists() else 0)
 
+    # --- "Xem thật": ONE frame exactly as the render burns it ------------------------------
+    def _on_real_view(self, on: bool) -> None:
+        store.update_ui_state(render_real_view=bool(on))
+        self._real_key = None
+        if on:
+            self.preview.pause()
+            self._real_timer.start()
+            self._real_tick()
+        else:
+            self._real_timer.stop()
+            self.preview.set_final_still(None)
+
+    def _real_opts(self) -> dict:
+        style, size_px, font = getattr(self, "_style_args", ({}, 20, "Be Vietnam Pro"))
+        # the lines come from vi.srt (saved and approved before this page opens)
+        return {**self.collect_opts(), "style": style, "size": size_px, "font": font}
+
+    def _real_tick(self) -> None:
+        """Re-cut the frame when an option, the style or the second changed (and the picture is
+        not playing); one cut at a time, in the background (~1 s)."""
+        import json
+
+        if (not self.preview.real_view() or self._real_busy or self._job is None
+                or self._rendering or self.preview.is_playing()
+                or self._right_stack.currentIndex() != 0 or not self.isVisible()):
+            return
+        t = round(self.preview.current_time(), 1)
+        o = self._real_opts()
+        key = (t, json.dumps(o, sort_keys=True, default=str))
+        if key == self._real_key:
+            return
+        job = self._job
+        self._real_busy = True
+        self.preview.set_still_busy(True)
+
+        def work():
+            from app.pipeline import render
+
+            return str(render.still_job(job, o, t))
+
+        def done(path):
+            self._real_busy = False
+            self._real_key = key
+            self.preview.set_final_still(path)
+            self.preview.set_still_busy(False)
+
+        def failed(msg):
+            self._real_busy = False
+            self._real_key = key                 # do not retry the same thing every 0.6 s
+            self.preview.set_still_busy(False)
+            self.preview.set_real_view(False)
+            self.log.append(f"✗ Xem thật: {msg}") if hasattr(self, "log") else None
+
+        self._bg.run(work, done, failed)
+
     def set_style(self, style: dict, size_px: int, font: str) -> None:
+        self._style_args = (style, size_px, font)
         self.preview.set_style(style, size_px, font)
         self._glass_style = bool((style or {}).get("glass"))
         self._style_cover = str((style or {}).get("cover") or "box")
@@ -1541,6 +1619,95 @@ class RenderView(QWidget):
         self._update_post_summary()
         if save:
             store.update_ui_state(watermark=wm)
+
+    # --- "Che logo, ghi tên phim" (disclosure.cover_events) -------------------------------
+    def _build_cover(self, st: dict) -> QWidget:
+        from app.pipeline import disclosure
+
+        cv = {**disclosure.COVER_DEFAULT, **(st.get("logo_cover") or {})}
+        self._cover_box = cv.get("box")
+        box = QWidget()
+        box.setObjectName("bare")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(6)
+        self.cover_cb = QCheckBox("Che logo, ghi tên phim lên vùng tự chọn")
+        self.cover_cb.setToolTip(
+            "Chọn một vùng bất kỳ trên khung hình (logo, tên kênh gốc…) rồi phủ lên đó một ô màu có "
+            "chữ của bạn, vd. tên tiếng Việt của phim. Chữ gốc bên dưới được che hẳn, suốt video.")
+        self.cover_cb.setChecked(bool(cv["on"]))
+        v.addWidget(self.cover_cb)
+        self.cover_body = QWidget()
+        self.cover_body.setObjectName("bare")
+        g = QGridLayout(self.cover_body)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setHorizontalSpacing(8)
+        self.cover_pick = button("Chọn vùng trên khung hình…", variant="ghost", small=True)
+        self.cover_pick.clicked.connect(self._pick_cover_box)
+        self.cover_box_lbl = label("", "small")
+        g.addWidget(self.cover_pick, 0, 0, 1, 2)
+        g.addWidget(self.cover_box_lbl, 0, 2)
+        self.cover_text = QLineEdit(str(cv["text"]))
+        self.cover_text.setPlaceholderText("Vd. Chuyến Xe Tận Thế")
+        self.cover_text.setMaxLength(60)
+        g.addWidget(label("Chữ", "secondary"), 1, 0)
+        g.addWidget(self.cover_text, 1, 1, 1, 2)
+        self.cover_fill = QComboBox()
+        for color, name in disclosure.COVER_FILLS:
+            self.cover_fill.addItem(name, color)
+        self.cover_fill.setCurrentIndex(max(0, self.cover_fill.findData(cv["fill"])))
+        g.addWidget(label("Màu ô", "secondary"), 2, 0)
+        g.addWidget(self.cover_fill, 2, 1, 1, 2)
+        self.cover_opacity = QSlider(Qt.Horizontal)
+        self.cover_opacity.setRange(30, 100)
+        self.cover_opacity.setValue(int(cv["opacity"]))
+        self.cover_opacity_lbl = label("", "mono")
+        g.addWidget(label("Độ đậm", "secondary"), 3, 0)
+        g.addWidget(self.cover_opacity, 3, 1)
+        g.addWidget(self.cover_opacity_lbl, 3, 2)
+        v.addWidget(self.cover_body)
+        self.cover_cb.toggled.connect(self._on_cover)
+        self.cover_text.textChanged.connect(self._on_cover)
+        self.cover_fill.currentIndexChanged.connect(self._on_cover)
+        self.cover_opacity.valueChanged.connect(self._on_cover)
+        self._on_cover(save=False)
+        return box
+
+    def logo_cover(self) -> dict:
+        return {"on": self.cover_cb.isChecked(), "text": self.cover_text.text().strip(),
+                "box": self._cover_box, "fill": self.cover_fill.currentData() or "#000000",
+                "opacity": self.cover_opacity.value(), "color": "#FFFFFF"}
+
+    def _on_cover(self, *_a, save: bool = True) -> None:
+        cv = self.logo_cover()
+        self.cover_body.setEnabled(cv["on"])
+        self.cover_opacity_lbl.setText(f"{cv['opacity']}%")
+        b = cv["box"]
+        self.cover_box_lbl.setText(f"{b['w'] * 100:.0f}% × {b['h'] * 100:.0f}% khung" if b else
+                                   "chưa chọn vùng")
+        if hasattr(self, "preview"):
+            self.preview.set_cover(cv if cv["on"] and cv["box"] else None)
+        if save:
+            store.update_ui_state(logo_cover=cv)
+
+    def _pick_cover_box(self) -> None:
+        from app.pipeline import ocr_area
+        from desktop.widgets.area_dialog import BoxDialog
+
+        if self._job is None:
+            return
+        frames = sorted((self._job.work_dir / "detect").glob("area_*.jpg"))
+        if not frames:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                frames = ocr_area.sample_frames(self._job, 3)
+            finally:
+                QApplication.restoreOverrideCursor()
+        dlg = BoxDialog(frames, self._cover_box, self)
+        if dlg.exec() and dlg.result_box():
+            self._cover_box = dlg.result_box()
+            self.cover_cb.setChecked(True)
+            self._on_cover()
 
     # --- series: "Tập 9" chip + "Còn tiếp" end card (disclosure.episode_events) ---------
     def _build_episode_card(self, st: dict) -> QWidget:
@@ -1739,10 +1906,13 @@ class RenderView(QWidget):
         opts["tiktok_fill"] = self.fill.currentData() or "blur"
         opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
         opts["preset"] = self.preset.currentData()
+        opts["sharpen"] = self.sharpen_cb.isChecked()
         opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         wm = self.watermark()
         opts["watermark"] = wm if wm["on"] and wm["text"] else None
+        cv = self.logo_cover()
+        opts["logo_cover"] = cv if cv["on"] and cv["box"] else None
         card = self.episode_card()
         opts["episode_card"] = card if card["on"] else None
         opts["safe_caption"] = self.safe_platform() if self.safe_cb.isChecked() else None

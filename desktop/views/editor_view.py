@@ -28,6 +28,7 @@ from app.pipeline import review
 from desktop import cuemodel, store
 from desktop.audio import follow_default_output
 from desktop.cuemodel import EditorCue, fmt_time
+from desktop.selection_actions import SelectionActions
 from desktop.ui_thread import connect_on_ui, emit_quietly, guarded, spawn
 from desktop.widgets.chrome import ProjectBar, badge, button, icon_button, label
 from desktop.widgets.commentary_panel import CommentaryPanel
@@ -161,7 +162,7 @@ class _FullscreenHost(QWidget):
             return
         super().closeEvent(ev)
 
-class EditorView(QWidget):
+class EditorView(SelectionActions, QWidget):
     dirtyChanged = Signal(bool)        # True = pending, False = saved to disk
     saveFailed = Signal(str)           # autosave could not write — retried
     message = Signal(str, str)         # (text, kind ok|busy|warn|err) → status bar
@@ -291,6 +292,8 @@ class EditorView(QWidget):
         cl.csvExportRequested.connect(self._export_csv)
         cl.csvImportRequested.connect(self._import_csv)
         tl.contextRequested.connect(self._show_cue_menu)
+        tl.multiChanged.connect(self._on_timeline_multi)       # Ctrl / Shift + click on blocks
+        cl.view.selectionModel().selectionChanged.connect(lambda *_: self._sync_list_to_timeline())
         cl.editRequested.connect(lambda: ins.focus_text(select_all=True))
         cl.splitRequested.connect(self._split)
         cl.mergeRequested.connect(self._merge)
@@ -401,7 +404,12 @@ class EditorView(QWidget):
         sc("]", lambda: self._set_edge("end"))
         sc("S", self._split)
         sc("M", self._merge)
-        sc("Alt+R", self._retranslate)
+        sc("Alt+R", self._retranslate_rows)             # several lines selected → all of them
+        sc("L", self._listen_rows)                      # the original sound of the line(s)
+        sc("Shift+L", self._ai_listen_rows)             # a listening model writes what it hears
+        QShortcut(QKeySequence.Copy, self, activated=self._clip_copy)       # text fields keep theirs
+        QShortcut(QKeySequence.Paste, self, activated=self._clip_paste)
+        QShortcut(QKeySequence.SelectAll, self, activated=self._select_all_cues)
         sc("A", self._auto_snap_selected)
         sc("Shift+A", self._auto_snap_all)
         # ↑/↓ = previous / next line, ←/→ = 10 s back / ahead like a video player (held
@@ -1946,6 +1954,7 @@ class EditorView(QWidget):
         return ins.vi_edit.hasFocus() or any(f.hasFocus() for f in ins.t_fields.values())
 
     def _on_position(self, t: float) -> None:
+        self._listen_tick(t)
         self.timeline.set_time(t)
         self.inspector.set_playhead(t)
         if not self.video.is_playing():
@@ -2077,6 +2086,10 @@ class EditorView(QWidget):
         m.addSeparator()
         m.addAction("Dịch lại (3 phương án)	Alt+R", self._retranslate)
         m.addAction("Rút gọn cho vừa thời lượng", self._shorten)
+        m.addAction("Nghe lại câu này (tiếng gốc)	L", self._listen_rows)
+        m.addAction("AI nghe lại câu này	Shift+L", self._ai_listen_rows)
+        m.addAction("Chép chữ Việt	Ctrl+C", self._clip_copy)
+        m.addAction("Dán vào câu này	Ctrl+V", self._clip_paste)
         m.addAction("Tự canh theo giọng nói	A", self._auto_snap_selected)
         lock = m.addAction("Khóa timing")
         lock.setCheckable(True)
@@ -2091,7 +2104,8 @@ class EditorView(QWidget):
 
     def _show_cue_menu(self, row: int, global_pos) -> None:
         if 0 <= row < len(self.cues):
-            m = self._cue_menu(row)
+            rows = self._sel_rows()
+            m = self._group_menu(rows) if len(rows) > 1 and row in rows else self._cue_menu(row)
             m.setAttribute(Qt.WA_DeleteOnClose)
             m.popup(global_pos)
 

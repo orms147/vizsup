@@ -66,7 +66,8 @@ def test_synthesize_writes_an_mp3_with_the_voice_and_speed(tmp_path, monkeypatch
             seen["voice"] = voice
             return np.zeros(4800, dtype=np.float32)
 
-    monkeypatch.setattr(vieneu, "_get_engine", lambda: Fake())
+    monkeypatch.setattr(vieneu, "_acquire", lambda: Fake())
+    monkeypatch.setattr(vieneu, "_release", lambda e: None)
     cmds = []
     real_run = vieneu.subprocess.run
     monkeypatch.setattr(vieneu.subprocess, "run", lambda cmd, **kw: (cmds.append(cmd),

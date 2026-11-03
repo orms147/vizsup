@@ -249,6 +249,8 @@ class AppNav(QFrame):
     keysClicked = Signal()
     primaryClicked = Signal()
     libraryClicked = Signal()
+    audioClicked = Signal()
+    scriptVideoClicked = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -272,6 +274,19 @@ class AppNav(QFrame):
         self.steps = StepRail()
         self.steps.clicked.connect(self.stepClicked)
         h.addWidget(self.steps)
+        h.addSpacing(6)
+        h.addWidget(divider(vertical=True))
+        h.addSpacing(6)
+        # two tools of their own (no translation): they sit beside the flow, and what runs there
+        # goes on while the owner works in another tab
+        self.audio_btn = icon_button("AudioLines", "Tạo audio: kịch bản .txt → file mp3 giọng đọc",
+                                     checkable=True, size=19)
+        self.audio_btn.clicked.connect(self.audioClicked)
+        h.addWidget(self.audio_btn)
+        self.video_btn = icon_button("Clapperboard", "Video audio: ghép âm thanh với video / ảnh "
+                                     "(lặp tới hết), có watermark", checkable=True, size=19)
+        self.video_btn.clicked.connect(self.scriptVideoClicked)
+        h.addWidget(self.video_btn)
         h.addStretch(1)
 
         self.saved = button("", "CheckCheck", variant="ghost")
@@ -297,6 +312,14 @@ class AppNav(QFrame):
         h.addWidget(self.primary)
         self.set_primary(None)
         self.set_saved(None)
+
+    def set_tool_busy(self, audio: bool, video: bool) -> None:
+        """The tool tab shows a spinner icon while its build runs (a hidden one is not forgotten)."""
+        for btn, busy, name, tip in ((self.audio_btn, audio, "AudioLines", "Tạo audio"),
+                                     (self.video_btn, video, "Clapperboard", "Video audio")):
+            btn.setIcon(icon("LoaderCircle" if busy else name, V2["purple_bright"] if busy
+                             else V2["secondary"], 19, active=V2["purple_bright"]))
+            btn.setToolTip(tip + (" — đang chạy…" if busy else ""))
 
     def set_primary(self, text: str | None, icon_name: str = "ShieldCheck",
                     enabled: bool = True) -> None:

@@ -21,6 +21,9 @@ class AreaPicker(QWidget):
         super().__init__(parent)
         self._pix: QPixmap | None = None
         self.rect: QRectF | None = None          # normalized 0..1 of the frame
+        self.logos: list[QRectF] = []            # regions OCR must skip (creator logo…)
+        self.mode = "band"                       # "band" = the subtitle band · "logo" = logo regions
+        self.logo_sel = -1
         self._drag: tuple[str, QPointF, QRectF | None] | None = None
         self.setMinimumSize(560, 315)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -47,8 +50,31 @@ class AreaPicker(QWidget):
         return QPointF(min(1.0, max(0.0, (p.x() - v.x()) / v.width())),
                        min(1.0, max(0.0, (p.y() - v.y()) / v.height())))
 
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode
+        self.update()
+
+    def remove_logo(self) -> None:
+        if 0 <= self.logo_sel < len(self.logos):
+            del self.logos[self.logo_sel]
+        elif self.logos:
+            self.logos.pop()
+        self.logo_sel = -1
+        self.update()
+
     def mousePressEvent(self, e) -> None:
         p = self._norm(e.position())
+        if self.mode == "logo":
+            hit = next((i for i in range(len(self.logos) - 1, -1, -1) if self.logos[i].contains(p)), -1)
+            if hit >= 0:
+                self.logo_sel = hit
+                self._drag = ("move", p, QRectF(self.logos[hit]))
+            else:
+                self.logos.append(QRectF(p, p))
+                self.logo_sel = len(self.logos) - 1
+                self._drag = ("draw", p, None)
+            self.update()
+            return
         if self.rect is not None and self.rect.contains(p):
             self._drag = ("move", p, QRectF(self.rect))
         else:
@@ -61,6 +87,16 @@ class AreaPicker(QWidget):
             return
         kind, start, orig = self._drag
         p = self._norm(e.position())
+        if self.mode == "logo" and 0 <= self.logo_sel < len(self.logos):
+            if kind == "draw":
+                self.logos[self.logo_sel] = QRectF(start, p).normalized()
+            else:
+                r = QRectF(orig).translated(p.x() - start.x(), p.y() - start.y())
+                r.moveLeft(min(max(0.0, r.left()), 1.0 - r.width()))
+                r.moveTop(min(max(0.0, r.top()), 1.0 - r.height()))
+                self.logos[self.logo_sel] = r
+            self.update()
+            return
         if kind == "draw":
             self.rect = QRectF(start, p).normalized()
         else:
@@ -73,6 +109,12 @@ class AreaPicker(QWidget):
 
     def mouseReleaseEvent(self, _e) -> None:
         self._drag = None
+        if self.mode == "logo" and 0 <= self.logo_sel < len(self.logos):
+            r = self.logos[self.logo_sel]
+            if r.width() < 0.01 or r.height() < 0.01:         # a click, not a rectangle
+                del self.logos[self.logo_sel]
+                self.logo_sel = -1
+                self.update()
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
@@ -91,7 +133,20 @@ class AreaPicker(QWidget):
             pen = QPen(QColor("#bb99ff"), 2, Qt.DashLine)
             p.setPen(pen)
             p.drawRect(r)
+        for i, lg in enumerate(self.logos):                    # logo regions: red
+            r = QRectF(v.x() + lg.x() * v.width(), v.y() + lg.y() * v.height(),
+                       lg.width() * v.width(), lg.height() * v.height())
+            p.fillRect(r, QColor(255, 60, 60, 90))
+            p.setPen(QPen(QColor("#ff5c5c"), 3 if i == self.logo_sel else 2))
+            p.drawRect(r)
         p.end()
+
+    def logo_values(self) -> list[dict]:
+        out = []
+        for lg in self.logos:
+            r = lg.normalized()
+            out.append({"x": r.x(), "y": r.y(), "w": r.width(), "h": r.height()})
+        return out
 
     def value(self) -> dict | None:
         if self.rect is None:
@@ -104,7 +159,7 @@ class AreaDialog(QDialog):
     """Returns (via :meth:`result_area`) the band, or None for "Để app tự dò"."""
 
     def __init__(self, frames: list[Path], suggestion: dict | None, series_name: str | None,
-                 parent=None) -> None:
+                 parent=None, logos: list[dict] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Khoanh vùng chữ Trung")
         self.frames = list(frames)
@@ -119,7 +174,26 @@ class AreaDialog(QDialog):
         if suggestion:
             self.picker.rect = QRectF(suggestion["x"], suggestion["y"], suggestion["w"],
                                       suggestion["h"])
+        for lg in logos or []:
+            self.picker.logos.append(QRectF(lg["x"], lg["y"], lg["w"], lg["h"]))
         lay.addWidget(self.picker, 1)
+        tools = QHBoxLayout()
+        self.band_btn = button("Khung phụ đề", "Captions", variant="ghost", small=True, checkable=True)
+        self.logo_btn = button("Vùng logo (nhiều vùng)", "EyeOff", variant="ghost", small=True,
+                               checkable=True,
+                               tip="Đánh dấu logo / tên kênh nằm cố định trên video — OCR bỏ qua các vùng này")
+        self.band_btn.setChecked(True)
+        self.band_btn.clicked.connect(lambda: self._set_mode("band"))
+        self.logo_btn.clicked.connect(lambda: self._set_mode("logo"))
+        self.del_logo = button("Xóa vùng logo", "Trash2", variant="ghost", small=True)
+        self.del_logo.clicked.connect(self.picker.remove_logo)
+        tools.addWidget(self.band_btn)
+        tools.addWidget(self.logo_btn)
+        tools.addWidget(self.del_logo)
+        tools.addStretch(1)
+        lay.addLayout(tools)
+        self.hint = label("", "small", wrap=True)
+        lay.addWidget(self.hint)
         nav = QHBoxLayout()
         self.prev_btn = button("Khung trước", "ArrowLeft", variant="ghost", small=True)
         self.next_btn = button("Khung sau", "ArrowRight", variant="ghost", small=True)
@@ -148,6 +222,14 @@ class AreaDialog(QDialog):
         self.resize(900, 640)
         self._show(0)
 
+    def _set_mode(self, mode: str) -> None:
+        self.picker.set_mode(mode)
+        self.band_btn.setChecked(mode == "band")
+        self.logo_btn.setChecked(mode == "logo")
+        self.hint.setText(
+            "Đang chọn VÙNG LOGO: kéo chuột quanh logo / tên kênh để đánh dấu (vẽ được nhiều vùng, "
+            "kéo bên trong để dời). App không đọc chữ trong các vùng đỏ." if mode == "logo" else "")
+
     def _show(self, i: int) -> None:
         if not self.frames:
             self.pos_lbl.setText("Không lấy được khung hình")
@@ -166,7 +248,79 @@ class AreaDialog(QDialog):
             return
         self.accept()
 
+    def result_logos(self) -> list[dict]:
+        """The logo regions (cleaned) when the dialog was accepted; [] otherwise."""
+        from app.pipeline import ocr_area
+
+        return ocr_area.clean_logos(self.picker.logo_values()) if self.result() == QDialog.Accepted else []
+
     def result_area(self) -> dict | None:
+        from app.pipeline import ocr_area
+
+        return ocr_area.clean(self.picker.value()) if self.result() == QDialog.Accepted else None
+
+
+class BoxDialog(QDialog):
+    """"Che logo, ghi tên phim": the owner draws ONE rectangle on a frame (the creator's logo, a
+    Chinese title); the render covers it with their own text. :meth:`result_box` → the rectangle
+    (normalized to the frame) or None."""
+
+    def __init__(self, frames: list[Path], box: dict | None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Chọn vùng che logo")
+        self.frames = list(frames)
+        self.i = 0
+        lay = QVBoxLayout(self)
+        lay.addWidget(label("Chọn vùng cần che", "h2"))
+        lay.addWidget(label("Kéo chuột quanh logo / tên kênh / tiêu đề tiếng Trung cần che — vùng này "
+                            "sẽ được phủ một ô màu có chữ của bạn. Kéo bên trong khung để dời.",
+                            "secondary", wrap=True))
+        self.picker = AreaPicker()
+        if box:
+            self.picker.rect = QRectF(box["x"], box["y"], box["w"], box["h"])
+        lay.addWidget(self.picker, 1)
+        nav = QHBoxLayout()
+        self.prev_btn = button("Khung trước", "ArrowLeft", variant="ghost", small=True)
+        self.next_btn = button("Khung sau", "ArrowRight", variant="ghost", small=True)
+        self.pos_lbl = QLabel()
+        self.prev_btn.clicked.connect(lambda: self._show(self.i - 1))
+        self.next_btn.clicked.connect(lambda: self._show(self.i + 1))
+        nav.addWidget(self.prev_btn)
+        nav.addWidget(self.pos_lbl)
+        nav.addWidget(self.next_btn)
+        nav.addStretch(1)
+        lay.addLayout(nav)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = button("Hủy", variant="ghost")
+        use = button("Dùng vùng này", "Check", variant="primary")
+        cancel.clicked.connect(self.reject)
+        use.clicked.connect(self._accept)
+        row.addWidget(cancel)
+        row.addWidget(use)
+        lay.addLayout(row)
+        self.resize(900, 620)
+        self._show(0)
+
+    def _show(self, i: int) -> None:
+        if not self.frames:
+            self.pos_lbl.setText("Không lấy được khung hình")
+            return
+        self.i = max(0, min(len(self.frames) - 1, i))
+        self.picker.set_frame(self.frames[self.i])
+        self.pos_lbl.setText(f"Khung {self.i + 1}/{len(self.frames)}")
+        self.prev_btn.setEnabled(self.i > 0)
+        self.next_btn.setEnabled(self.i < len(self.frames) - 1)
+
+    def _accept(self) -> None:
+        from app.pipeline import ocr_area
+
+        if ocr_area.clean(self.picker.value()) is None:
+            self.pos_lbl.setText("Vùng quá nhỏ — kéo chuột quanh cả logo")
+            return
+        self.accept()
+
+    def result_box(self) -> dict | None:
         from app.pipeline import ocr_area
 
         return ocr_area.clean(self.picker.value()) if self.result() == QDialog.Accepted else None

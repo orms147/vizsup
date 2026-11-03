@@ -210,3 +210,62 @@ def test_render_view_cover_follows_the_glass_style(qapp):
     assert got[-1]["cover_mode"] == "glass"
     rv.set_style({"primary": "#ffffff"}, 20, "Be Vietnam Pro")    # back to a plain style
     assert rv.cover.currentData() == "box" and rv.cover.isEnabled()
+
+
+def test_sharpen_runs_first_so_the_cover_and_the_text_stay_as_drawn(job):
+    """"Làm nét hình": cas on the source picture, before the blur cover and the burn."""
+    j, segs = job
+    _cmd, graph = _build(j, segs, cover_mode="blur", sharpen=True)
+    assert f"[0:v]cas={assemble.SHARPEN_CAS:g}[vsharp]" in graph
+    assert "[vsharp]split[vsrc][vband]" in graph
+    assert graph.index("cas=") < graph.index("ass=subs.ass")
+    _cmd, graph = _build(j, segs, cover_mode="blur")
+    assert "cas=" not in graph and "[0:v]split[vsrc][vband]" in graph
+
+
+def test_assemble_forwards_sharpen_and_records_it(job, monkeypatch):
+    j, segs = job
+    j.vi_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nxin chào\n", encoding="utf-8")
+    j.source_video.write_bytes(b"v")
+    seen: dict = {}
+    real = assemble._build_render
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(assemble, "_build_render", spy)
+    monkeypatch.setattr(assemble, "_render_dub", lambda *a, **k: "dub/list.txt")
+    monkeypatch.setattr(assemble, "_run_ffmpeg", lambda *a, **k: None)
+    monkeypatch.setattr(assemble, "probe_size", lambda p: (1920, 1080))
+    assemble.assemble(j, segs, sharpen=True)
+    assert seen["sharpen"] is True
+    info = json.loads((j.work_dir / assemble.RENDER_INFO).read_text(encoding="utf-8"))
+    assert info["sharpen"] is True
+
+
+def test_softsub_export_repeats_the_sharpening(tmp_path, monkeypatch):
+    from app.pipeline import export
+
+    monkeypatch.setattr(export, "ffmpeg_bin", lambda: "ffmpeg")
+    j = Job(id="s", work_dir=tmp_path / "s")
+    (j.work_dir / "render.json").write_text(json.dumps({"sharpen": True}), encoding="utf-8")
+    cmd = export.softsub_cmd(j, tmp_path / "o.mkv")
+    assert f"[0:v]cas={assemble.SHARPEN_CAS:g}[vs]" in cmd[cmd.index("-filter_complex") + 1]
+    assert cmd[cmd.index("-map") + 1] == "[vs]" and "libx264" in cmd
+
+
+def test_render_view_sharpens_by_default_and_remembers_the_choice(qapp):
+    from desktop import store
+    from desktop.views.render_view import RenderView
+
+    rv = RenderView()
+    got: list[dict] = []
+    rv.renderRequested.connect(got.append)
+    rv._emit_render()
+    assert got[-1]["sharpen"] is True
+    rv.sharpen_cb.setChecked(False)
+    rv._emit_render()
+    assert got[-1]["sharpen"] is False
+    assert store.load_ui_state()["render_sharpen"] is False
+    assert not RenderView().sharpen_cb.isChecked()

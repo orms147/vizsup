@@ -87,6 +87,7 @@ class Timeline(QWidget):
     marksChanged = Signal()    # cues / flags / reviewed marks / selection / length changed
     timeChanged = Signal(float)   # the playhead moved (every tick of playback — keep listeners cheap)
     contextRequested = Signal(int, object)   # right-click on a block: (index, global QPoint)
+    multiChanged = Signal(object)  # Ctrl / Shift + click: the blocks now selected (sorted rows)
 
     def __init__(self) -> None:
         super().__init__()
@@ -102,6 +103,7 @@ class Timeline(QWidget):
         self._t = 0.0
         self._pps = 40.0
         self._sel = -1
+        self._multi: set[int] = set()    # every selected block (Ctrl / Shift click, Ctrl+A); _sel = the current one
         self._drag = None   # (idx, mode, startX, s0, e0)
         self._snap_t: float | None = None   # a dragged edge is stuck here (drawn as a guide)
         self._scrub = False  # held down outside a cue: the playhead follows the mouse
@@ -168,8 +170,24 @@ class Timeline(QWidget):
 
     def set_selected(self, idx: int) -> None:
         self._sel = idx
+        if idx not in self._multi:       # a plain selection elsewhere drops the extra blocks
+            self._multi = {idx} if idx >= 0 else set()
         self.update()
         self.marksChanged.emit()
+
+    def set_multi(self, rows) -> None:
+        """The blocks selected in the list (kept in step both ways); the current one stays."""
+        rows = {r for r in rows if 0 <= r < len(self._cues)}
+        if rows != self._multi:
+            self._multi = rows
+            self.update()
+            self.marksChanged.emit()
+
+    def multi(self) -> list[int]:
+        return sorted(self._multi)
+
+    def current(self) -> int:
+        return self._sel
 
     def duration(self) -> float:
         return self._dur
@@ -323,7 +341,7 @@ class Timeline(QWidget):
             r = self._block_rect(c)
             if r.right() < clip.left() - 2 or r.left() > clip.right() + 2:
                 continue
-            selected = idx == self._sel
+            selected = idx == self._sel or idx in self._multi
             flagged = idx < len(self._issues) and bool(self._issues[idx])
             if selected:
                 p.setBrush(_c(V2["purple"], 225))
@@ -376,16 +394,40 @@ class Timeline(QWidget):
             if ev.button() == Qt.RightButton:
                 hit = self._hit(ev.position().x(), ev.position().y())
                 if hit:
-                    self._sel = hit[0]
-                    self.blockSelected.emit(hit[0])
+                    if hit[0] not in self._multi:          # right-click inside a selection keeps it
+                        self._sel = hit[0]
+                        self._multi = {hit[0]}
+                        self.blockSelected.emit(hit[0])
                     self.update()
                     self.contextRequested.emit(hit[0], ev.globalPosition().toPoint())
             return
         x, y = ev.position().x(), ev.position().y()
         hit = self._hit(x, y)
+        from PySide6.QtWidgets import QApplication
+
+        fw = QApplication.focusWidget()
+        if fw is not None and hit:              # the keys (Ctrl+C / V / A) now belong to the blocks
+            fw.clearFocus()
+        mods = ev.modifiers()
+        if hit and mods & (Qt.ControlModifier | Qt.ShiftModifier):
+            idx = hit[0]                          # Ctrl: add / remove one · Shift: the range from the current
+            if mods & Qt.ShiftModifier and self._sel >= 0:
+                a, b = sorted((self._sel, idx))
+                self._multi |= set(range(a, b + 1))
+            elif idx in self._multi and len(self._multi) > 1:
+                self._multi.discard(idx)
+                if idx == self._sel:
+                    self._sel = min(self._multi)
+            else:
+                self._multi.add(idx)
+                self._sel = idx
+            self.update()
+            self.multiChanged.emit(self.multi())
+            return                                # selecting is never dragging
         if hit:
             idx, mode = hit
             self._sel = idx
+            self._multi = {idx}
             self.blockSelected.emit(idx)
             c = self._cues[idx]
             if not c.locked:              # locked timing: select only, never drag

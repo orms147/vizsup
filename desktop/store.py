@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from desktop import paths  # noqa: F401
@@ -43,9 +44,18 @@ def load_ui_state() -> dict:
     p = _storage() / "ui_state.json"
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {}
+        if isinstance(data, dict) and not data.get("ai_review_off"):
+            # 2026-11-02: "AI soát bản dịch" is off by default (the owner saves cost); a saved
+            # "on" from the old default is switched off ONCE, a later choice sticks
+            data["ai_review"], data["ai_review_off"] = False, True
+            try:
+                atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError:
+                pass
+        return data
     return {}
 
 
@@ -63,7 +73,8 @@ _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "r
                   "render_quality", "render_split", "recent_colors", "watermark", "render_fill",
                   "episode_card", "voice_by_gender", "cue_density", "safe_zone", "render_post_open",
                   "render_vertical", "render_voice", "render_rate", "render_audio",
-                  "render_pitch", "options_advanced", "render_thumbnail")
+                  "render_pitch", "options_advanced", "render_thumbnail", "render_sharpen",
+                  "ai_review_off", "logo_cover", "render_real_view", "sv_watermark")
 
 
 def update_ui_state(**kv) -> None:
@@ -699,7 +710,17 @@ def trash_paths(targets) -> None:
         if r == base or base not in r.parents:
             raise ValueError(f"Không xóa ngoài thư mục dự án: {p}")
         checked.append(r)
-    trash.move_to_trash(checked)
+    for attempt in range(6):
+        try:
+            trash.move_to_trash(checked)
+            return
+        except PermissionError:
+            # a background scan (library sizes / thumbnails / "Duyệt hàng loạt") still has a file of
+            # the folder open: it lets go within a moment — without this a delete made right
+            # after opening the library failed with "being used by another process" (WinError 32)
+            if attempt == 5:
+                raise
+            time.sleep(0.25)
 
 
 def load_job(job_id: str) -> tuple[Job, dict] | None:

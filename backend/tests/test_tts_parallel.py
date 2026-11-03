@@ -1,288 +1,171 @@
-"""API-10: batch TTS path (tts._synthesize_batch). A batch-capable provider
-synthesizes the whole job on one event loop; the pipeline persists the manifest and
-builds the segment list from the provider's on_done callbacks. Out-of-order
-completions must stay crash-safe (index-keyed manifest), a fatal must persist the
-successes before raising, and a cancel must return a partial list WITHOUT raising.
-The sequential fallback (providers without supports_batch) is covered unchanged by
-test_tts_resume.py.
-"""
+"""2026-11-02: a local voice that can speak several lines at once (VieNeu on a many-core CPU: one
+ONNX session left a 32-thread CPU at ~25 %, 1592 lines took ~25 min). pipeline/tts.py runs
+``tts.parallel`` ``synthesize`` calls together; the cache, the manifest, the order of the result
+and the error / cancel rules stay those of the one-at-a-time loop. A fake voice, no network."""
 from __future__ import annotations
 
-import json
-import sys
-from pathlib import Path
+import threading
+import time
 
 import pytest
 
 from app.models import Job
 from app.pipeline import tts as tts_mod
-from app.pipeline.tts import synthesize
-
-VI = ("1\n00:00:00,000 --> 00:00:01,000\ncâu một\n\n"
-      "2\n00:00:01,000 --> 00:00:02,000\ncâu hai\n\n"
-      "3\n00:00:02,000 --> 00:00:03,000\ncâu ba\n")
+from app.pipeline.srt import write_srt
+from app.models import Cue
 
 
-@pytest.fixture()
-def job(tmp_path):
-    j = Job(id="t", work_dir=tmp_path / "job")
-    j.vi_srt.write_text(VI, encoding="utf-8")
-    return j
+class NoAudioReceived(Exception):          # what edge-tts raises (matched by class name)
+    pass
 
 
-def _use(monkeypatch, fake):
-    monkeypatch.setattr(tts_mod, "get_tts", lambda name: fake)
-    return fake
+WORDS = ["an", "bình", "cường", "dũng", "em", "phúc", "giang", "hà", "khoa", "lan", "mai", "nam"]
 
 
-class FakeBatchTTS:
-    """Drives on_done in a scripted (key, exc) order; snapshots the on-disk manifest
-    after each callback so a test can prove writes are incremental/crash-safe."""
+def lines(over=None):
+    return [Cue(index=i, start=float(i), end=i + 0.9, text=(over or {}).get(i, f"câu {w}"))
+            for i, w in enumerate(WORDS, 1)]
 
-    supports_batch = True
 
-    def __init__(self, manifest_path, script):
-        self.manifest_path = manifest_path
-        self.script = script            # list of (key, exc)
-        self.snapshots: list[list[str]] = []
+class FakeVoice:
+    """Records how many lines were spoken at the same moment."""
+
+    name = "fake"
+    parallel = 4
+
+    def __init__(self, fail_on: str = "", unvoiceable_on: str = ""):
+        self.lock = threading.Lock()
+        self.now = self.peak = self.calls = 0
+        self.fail_on, self.unvoiceable_on = fail_on, unvoiceable_on
 
     def available(self):
         return True
 
-    def synthesize(self, *a, **k):      # the batch path must never call this
-        raise AssertionError("batch provider should use synthesize_many")
+    def voices(self):
+        return ["v"]
 
-    def synthesize_many(self, items, *, voice=None, rate=None, concurrency=3,
-                        retry_delays=(1.0, 4.0), on_done=None, cancel=None):
-        by_key = {k: (k, t, p) for k, t, p in items}
-        out = []
-        for key, exc in self.script:
-            k, t, p = by_key[key]
-            if exc is None:
-                p.write_bytes(b"mp3" + t.encode())
-            on_done(k, exc)
-            self.snapshots.append(
-                sorted(json.loads(self.manifest_path.read_text(encoding="utf-8"))))
-            out.append((k, exc))
-        return out
-
-
-def _mpath(job):
-    return job.tts_dir / "manifest.json"
+    def synthesize(self, text, out_path, *, voice=None, rate=None):
+        with self.lock:
+            self.now += 1
+            self.calls += 1
+            self.peak = max(self.peak, self.now)
+        time.sleep(0.05)
+        with self.lock:
+            self.now -= 1
+        if self.fail_on and self.fail_on in text:
+            raise RuntimeError("boom " + text)
+        if self.unvoiceable_on and self.unvoiceable_on in text:
+            raise NoAudioReceived("No audio was received")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"mp3:" + text.encode())
+        return out_path
 
 
-def test_out_of_order_completion_incremental_and_ordered(job, monkeypatch):
-    fake = _use(monkeypatch, FakeBatchTTS(
-        _mpath(job), script=[("3", None), ("1", None), ("2", None)]))
-    segs = synthesize(job, provider="fake")
-    assert [c.index for c, _ in segs] == [1, 2, 3]        # returned in cue order
-    assert fake.snapshots == [["3"], ["1", "3"], ["1", "2", "3"]]   # each write persisted
-    assert sorted(json.loads(_mpath(job).read_text(encoding="utf-8"))) == ["1", "2", "3"]
+@pytest.fixture()
+def job(tmp_path):
+    j = Job(id="p", work_dir=tmp_path / "p")
+    write_srt(lines(), j.vi_srt)
+    return j
 
 
-def test_fatal_persists_successes_then_raises(job, monkeypatch):
-    _use(monkeypatch, FakeBatchTTS(
-        _mpath(job), script=[("1", None), ("3", None), ("2", RuntimeError("boom"))]))
-    with pytest.raises(RuntimeError, match="boom"):
-        synthesize(job, provider="fake")
-    assert sorted(json.loads(_mpath(job).read_text(encoding="utf-8"))) == ["1", "3"]
+def run(job, voice, monkeypatch, **kw):
+    monkeypatch.setattr(tts_mod, "get_tts", lambda name: voice)
+    kw.setdefault("_sleep", lambda _s: None)
+    return tts_mod.synthesize(job, provider="fake", voice="v", trim=False, **kw)
 
 
-def test_cancel_returns_partial_without_exception(job, monkeypatch):
-    _use(monkeypatch, FakeBatchTTS(
-        _mpath(job), script=[("1", None), ("2", InterruptedError()), ("3", InterruptedError())]))
-    segs = synthesize(job, provider="fake")               # no exception
-    assert [c.index for c, _ in segs] == [1]              # partial, cue 1 only
-    assert sorted(json.loads(_mpath(job).read_text(encoding="utf-8"))) == ["1"]
+def test_lines_are_spoken_together_and_come_back_in_order(job, monkeypatch):
+    voice = FakeVoice()
+    done = []
+    segs = run(job, voice, monkeypatch, progress=lambda a, b: done.append((a, b)))
+    assert [c.index for c, _p in segs] == list(range(1, 13))
+    assert all(p.read_bytes().startswith(b"mp3:") for _c, p in segs)
+    assert 2 <= voice.peak <= 4                                  # really parallel, never above its width
+    assert done[-1] == (12, 12) and [a for a, _b in done] == sorted(a for a, _b in done)
 
 
-def test_muted_cue_popped_and_cached_kept(job, monkeypatch):
-    # first full run dubs 1,2,3
-    _use(monkeypatch, FakeBatchTTS(
-        _mpath(job), script=[("1", None), ("2", None), ("3", None)]))
-    synthesize(job, provider="fake")
-    # mute cue 2, re-run: nothing to synthesize (1,3 cached), 2 popped from manifest
-    (job.work_dir / "overrides.json").write_text(
-        json.dumps([{}, {"mute": True}, {}]), encoding="utf-8")
-    fake2 = _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[]))   # empty todo
-    segs = synthesize(job, provider="fake")
-    assert [c.index for c, _ in segs] == [1, 3]
-    assert fake2.snapshots == []                          # synthesize_many not needed
-    assert "2" not in json.loads(_mpath(job).read_text(encoding="utf-8"))
+def test_a_second_run_speaks_nothing_new(job, monkeypatch):
+    voice = FakeVoice()
+    run(job, voice, monkeypatch)
+    first = voice.calls
+    run(job, voice, monkeypatch)
+    assert voice.calls == first                                   # every line came from the cache
+    assert len(tts_mod._load_manifest(job)) == 12
 
 
-def test_keep_alive_connector_survives_session_close():
-    """Regression for the API-10 shared-connector bug: edge_tts opens one
-    ClientSession(connector_owner=True) per save(), which closes a PLAIN shared
-    connector after the first segment. _keep_alive_connector must survive that and
-    only close on an explicit shutdown() (network-free — no request is made)."""
-    import asyncio
-
-    aiohttp = pytest.importorskip("aiohttp")
-    from app.providers.tts.edge import _keep_alive_connector
-
-    async def _probe():
-        plain = aiohttp.TCPConnector()
-        async with aiohttp.ClientSession(connector=plain):
-            pass
-        assert plain.closed is True                      # a plain pool is torn down
-
-        keep = _keep_alive_connector(3)
-        async with aiohttp.ClientSession(connector=keep):
-            pass
-        assert keep.closed is False                      # ours survives for the next cue
-        await keep.shutdown()
-        assert keep.closed is True                       # closed for real at the end
-
-    asyncio.run(_probe())
+def test_a_changed_line_is_the_only_one_made_again(job, monkeypatch):
+    voice = FakeVoice()
+    run(job, voice, monkeypatch)
+    write_srt(lines({5: "khác hẳn"}), job.vi_srt)
+    before = voice.calls
+    run(job, voice, monkeypatch)
+    assert voice.calls == before + 1
 
 
-def test_unvoiceable_line_skipped_in_batch(job, monkeypatch):
-    class NoAudioReceived(RuntimeError):
-        pass
-
-    _use(monkeypatch, FakeBatchTTS(
-        _mpath(job),
-        script=[("1", None), ("2", NoAudioReceived("no audio")), ("3", None)]))
-    logs: list[str] = []
-    segs = synthesize(job, provider="fake", log=logs.append)
-    assert [c.index for c, _ in segs] == [1, 3]           # line 2 skipped, no raise
-    assert any("không phát âm được" in m for m in logs)
-    assert "2" not in json.loads(_mpath(job).read_text(encoding="utf-8"))
+def test_the_one_at_a_time_loop_is_unchanged_for_other_voices(job, monkeypatch):
+    voice = FakeVoice()
+    voice.parallel = 1
+    run(job, voice, monkeypatch)
+    assert voice.peak == 1
 
 
-def test_progress_counts_cache_hits_then_each_line(job, monkeypatch):
-    """A 717-line dub takes minutes; the render page shows "d/n câu" instead of a bar
-    frozen at one value."""
-    _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[("1", None), ("2", None), ("3", None)]))
-    synthesize(job, provider="fake")
-    seen = []
-    # second run: line 2 changed → 2 cache hits, one new line
-    job.vi_srt.write_text(VI.replace("câu hai", "câu hai mới"), encoding="utf-8")
-    _use(monkeypatch, FakeBatchTTS(_mpath(job), script=[("2", None)]))
-    synthesize(job, provider="fake", progress=lambda d, n: seen.append((d, n)))
-    assert seen == [(2, 3), (3, 3)]
+def test_a_failing_line_raises_but_keeps_what_was_finished(job, monkeypatch):
+    voice = FakeVoice(fail_on="giang")
+    with pytest.raises(Exception) as exc:
+        run(job, voice, monkeypatch)
+    assert "boom" in str(exc.value)
+    kept = tts_mod._load_manifest(job)
+    assert kept and "7" not in kept                               # the finished lines stay cached
+    assert (job.tts_dir / "seg_0001.mp3").exists()
 
 
-def _fake_edge(monkeypatch, empty: dict[str, int]):
-    """edge_tts stand-in: Communicate(text).save() answers "no audio" ``empty[text]`` times."""
-    import types
-
-    from app.providers.tts import edge
-
-    class NoAudioReceived(Exception):
-        pass
-
-    class Communicate:
-        def __init__(self, text, **kw):
-            self.text = text
-
-        async def save(self, path):
-            if empty.get(self.text, 0) > 0:
-                empty[self.text] -= 1
-                raise NoAudioReceived("No audio was received.")
-            Path(path).write_bytes(b"mp3")
-
-    class Conn:
-        async def shutdown(self):
-            pass
-
-    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=Communicate))
-    monkeypatch.setattr(edge, "_keep_alive_connector", lambda n: Conn())
-    monkeypatch.setattr(edge, "THROTTLE_DELAYS", (0.0, 0.0, 0.0))
-    monkeypatch.setattr(edge, "QUICK_RETRIES", (0.0, 0.0, 0.0))
-    return edge.EdgeTTS()
+def test_an_unvoiceable_line_is_dropped_the_rest_is_dubbed(job, monkeypatch):
+    voice = FakeVoice(unvoiceable_on="中文")
+    write_srt(lines({3: "中文"}), job.vi_srt)                       # nothing a vi-VN voice could say
+    logs = []
+    segs = run(job, voice, monkeypatch, log=logs.append)
+    assert [c.index for c, _p in segs] == [i for i in range(1, 13) if i != 3]
+    assert any("Câu 3" in m for m in logs)
 
 
-def test_edge_batch_retries_no_audio_on_normal_text(tmp_path, monkeypatch):
-    prov = _fake_edge(monkeypatch, {"câu hai": 2, "第二句": 9})
-    items = [("1", "câu một", tmp_path / "1.mp3"), ("2", "câu hai", tmp_path / "2.mp3"),
-             ("3", "第二句", tmp_path / "3.mp3")]
-    res = dict(prov.synthesize_many(items))
-    assert res["1"] is None and res["2"] is None          # throttled twice, then spoken
-    assert type(res["3"]).__name__ == "NoAudioReceived"   # Chinese on a vi voice: skip
+def test_cancel_stops_the_queue_and_returns_a_partial_list(job, monkeypatch):
+    voice = FakeVoice()
+    flag = {"n": 0}
+
+    def cancel():
+        flag["n"] += 1
+        return flag["n"] > 3
+
+    segs = run(job, voice, monkeypatch, cancel=cancel)
+    assert len(segs) < 12 and voice.calls < 12
 
 
-def test_edge_batch_sustained_no_audio_is_throttling(tmp_path, monkeypatch):
-    prov = _fake_edge(monkeypatch, {"câu hai": 99})
-    res = dict(prov.synthesize_many([("2", "câu hai", tmp_path / "2.mp3")]))
-    assert type(res["2"]).__name__ == "TTSThrottled"
+def test_vieneu_asks_for_the_cores_it_can_use(monkeypatch):
+    from app.providers.tts import vieneu
+
+    monkeypatch.delenv("VIZSUP_VIENEU_WORKERS", raising=False)
+    monkeypatch.setenv("VIZSUP_VIENEU_DEVICE", "cpu")                   # the CPU pool rules, not the card
+    monkeypatch.setattr(vieneu.os, "cpu_count", lambda: 32)
+    monkeypatch.setitem(__import__("sys").modules, "psutil", None)      # no memory probe: core rule only
+    assert vieneu.workers() == 6 and vieneu._threads_each(6) == 2
+    monkeypatch.setattr(vieneu.os, "cpu_count", lambda: 8)
+    assert vieneu.workers() == 1                                        # a small CPU: as before
+    monkeypatch.setenv("VIZSUP_VIENEU_WORKERS", "3")
+    assert vieneu.workers() == 3
+    monkeypatch.setenv("VIZSUP_VIENEU_WORKERS", "1")
+    assert vieneu.workers() == 1
+    assert vieneu.VieNeuTTS().parallel == 1
 
 
-def test_edge_batch_hung_request_times_out_and_retries(tmp_path, monkeypatch):
-    """A socket that never answers froze the render at "TTS 20%" (and its Hủy)."""
-    import asyncio
+def test_the_graphics_card_is_one_engine_and_can_be_switched_off(monkeypatch):
+    from app.providers.tts import vieneu
 
-    from app.providers.tts import edge
-
-    prov = _fake_edge(monkeypatch, {})
-    hang = {"câu hai": 1}
-    real = sys.modules["edge_tts"].Communicate
-
-    class Hanging(real):
-        async def save(self, path):
-            if hang.get(self.text):
-                hang[self.text] -= 1
-                await asyncio.sleep(3600)
-            await super().save(path)
-
-    sys.modules["edge_tts"].Communicate = Hanging
-    monkeypatch.setattr(edge, "SAVE_TIMEOUT", 0.2)
-    res = dict(prov.synthesize_many([("2", "câu hai", tmp_path / "2.mp3")],
-                                    retry_delays=(0.0,)))
-    assert res["2"] is None and (tmp_path / "2.mp3").exists()
-
-
-def test_edge_batch_cancel_reaches_a_request_in_flight(tmp_path, monkeypatch):
-    import asyncio
-    import time
-
-    from app.providers.tts import edge
-
-    prov = _fake_edge(monkeypatch, {})
-    real = sys.modules["edge_tts"].Communicate
-
-    class Hanging(real):
-        async def save(self, path):
-            await asyncio.sleep(3600)
-
-    sys.modules["edge_tts"].Communicate = Hanging
-    monkeypatch.setattr(edge, "CANCEL_POLL", 0.05)
-    t0 = time.monotonic()
-    stop_at = t0 + 0.3
-    items = [(str(i), f"câu {i}", tmp_path / f"{i}.mp3") for i in range(6)]
-    res = dict(prov.synthesize_many(items, cancel=lambda: time.monotonic() > stop_at))
-    assert time.monotonic() - t0 < 5
-    assert all(isinstance(e, InterruptedError) for e in res.values()) and len(res) == 6
-
-
-def test_edge_batch_keeps_going_until_a_streak_of_empty_lines(tmp_path, monkeypatch):
-    """One unlucky line no longer ends the batch; GIVE_UP_AFTER in a row does."""
-    from app.providers.tts import edge
-
-    texts = [f"câu số {i}" for i in range(12)]
-    prov = _fake_edge(monkeypatch, {t: 99 for t in texts[:1] + texts[2:]})   # 1 is fine
-    monkeypatch.setattr(edge, "GIVE_UP_AFTER", 3)
-    items = [(str(i), t, tmp_path / f"{i}.mp3") for i, t in enumerate(texts)]
-    res = dict(prov.synthesize_many(items, concurrency=1))
-    kinds = [type(res[str(i)]).__name__ if res[str(i)] else "ok" for i in range(12)]
-    assert kinds[:5] == ["TTSThrottled", "ok", "TTSThrottled", "TTSThrottled", "TTSThrottled"]
-    assert set(kinds[5:]) == {"InterruptedError"}             # stopped after 3 in a row
-
-
-def test_a_random_miss_retries_that_line_without_pausing_the_others(tmp_path, monkeypatch):
-    """2026-10-29: random "no audio" answers (~40 %) paused every worker 5–60 s; a line
-    now retries on its own first — the shared cooldown is never reached."""
-    from app.providers.tts import edge
-
-    prov = _fake_edge(monkeypatch, {"câu hai": 2})
-    waits = []
-    monkeypatch.setattr(edge, "THROTTLE_DELAYS", (99.0, 99.0, 99.0, 99.0))  # would hang
-    items = [(str(k), f"câu {w}", tmp_path / f"{k}.mp3") for k, w in
-             enumerate(("một", "hai", "ba", "bốn"), 1)]
-    import time
-
-    t = time.monotonic()
-    res = dict(prov.synthesize_many(items, on_done=lambda k, e: waits.append(k)))
-    assert all(v is None for v in res.values()) and len(waits) == 4
-    assert time.monotonic() - t < 5.0                     # no 99 s shared cooldown
+    monkeypatch.setattr(vieneu, "_gpu_failed", False)
+    monkeypatch.setenv("VIZSUP_VIENEU_DEVICE", "cpu")
+    assert vieneu.use_gpu() is False
+    monkeypatch.setenv("VIZSUP_VIENEU_DEVICE", "auto")
+    monkeypatch.setattr(vieneu, "_gpu_failed", True)             # a failed load: the CPU from then on
+    assert vieneu.use_gpu() is False
+    monkeypatch.setattr(vieneu, "_gpu_failed", False)
+    monkeypatch.setattr(vieneu, "use_gpu", lambda: True)
+    assert vieneu.workers() == 1

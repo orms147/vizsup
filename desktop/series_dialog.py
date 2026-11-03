@@ -298,13 +298,16 @@ class SeriesDialog(QDialog):
         self.render_lbl.setText("Cài đặt dựng (giọng, tốc độ, chế độ âm thanh, watermark…): "
                                 + ("đã lưu" if p.render else "chưa có"))
         self.area_lbl.setText("Vùng chữ Trung (OCR chỉ đọc vùng này ở mọi tập): "
-                              + ("đã khoanh" if p.ocr_area else "chưa có — app tự dò"))
+                              + ("đã khoanh" if p.ocr_area else "chưa có — app tự dò")
+                              + (f" · {len(p.ocr_logos)} vùng logo bỏ qua" if p.ocr_logos else ""))
         self.forget_style.setEnabled(bool(p.style))
         self.forget_render.setEnabled(bool(p.render))
-        self.forget_area.setEnabled(bool(p.ocr_area))
+        self.forget_area.setEnabled(bool(p.ocr_area or p.ocr_logos))
 
     def _forget(self, which: str) -> None:
         setattr(self.profile, which, {})
+        if which == "ocr_area":
+            self.profile.ocr_logos = []          # the logo regions go with the band
         self._refresh_saved()
 
     # --- "Theo dõi tập mới" ---------------------------------------------------------------

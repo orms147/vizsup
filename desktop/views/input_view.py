@@ -598,7 +598,8 @@ class InputView(QWidget):
         self.ai_review = QCheckBox("AI soát bản dịch")
         self.ai_review.setToolTip(
             "Sau khi dịch, một model mạnh đọc lại từng cặp Trung–Việt và đánh dấu câu nghi sai "
-            "(nghĩa, xưng hô, tên riêng…) kèm gợi ý sửa — vào mục “Cần xem lại”. Không tự sửa.")
+            "(nghĩa, xưng hô, tên riêng…) kèm gợi ý sửa — vào mục “Cần xem lại”. Không tự sửa. "
+            "Tắt sẵn để tiết kiệm (~0,015 $ / video 45 phút).")
         g.addWidget(self.ai_review, 7, 0)
         g.addWidget(self.ai_frames, 7, 1)
         g.addWidget(self.extract_terms, 6, 0)
@@ -723,7 +724,7 @@ class InputView(QWidget):
         self.voice_guess.setChecked(bool(st.get("voice_guess", False)))
         self.voice_hints.setChecked(bool(st.get("voice_hints", False)))
         self.pron_check.setChecked(bool(st.get("pron_check", True)))
-        self.ai_review.setChecked(bool(st.get("ai_review", True)))
+        self.ai_review.setChecked(bool(st.get("ai_review", False)))
         self.ai_frames.setChecked(bool(st.get("ai_frames", False)))
         self.split_long.setChecked(bool(st.get("split_long", True)))
         self.ocr_fast.setChecked(bool(st.get("ocr_fast", False)))

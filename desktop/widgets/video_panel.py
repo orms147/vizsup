@@ -148,6 +148,7 @@ class VideoPanel(QFrame):
     playStateChanged = Signal(bool)          # playing?
     dimsChanged = Signal(int, int)           # source frame size (w, h)
     safeZoneChanged = Signal(str)            # platform key, "" = off
+    realToggled = Signal(bool)               # "Xem thật" (the exact frame of the render) on / off
 
     def __init__(self, title: str = "Video nguồn", *, scrub: bool = True) -> None:
         super().__init__()
@@ -173,7 +174,13 @@ class VideoPanel(QFrame):
         self._zone_btn = self._build_zone_button()
         hh.addWidget(self.title)
         hh.addStretch(1)
+        self._real_btn = icon_button(
+            "Eye", "Xem thật: khung hình đúng như video dựng ra (chữ, logo, watermark, nền 9:16…) "
+                   "— cập nhật khi bạn đổi tùy chọn hoặc tua", checkable=True)
+        self._real_btn.setVisible(False)           # only the render page offers it
+        self._real_btn.toggled.connect(self.realToggled)
         hh.addWidget(self._orient)
+        hh.addWidget(self._real_btn)
         hh.addWidget(self._zone_btn)
         hh.addWidget(self._expand)
         root.addWidget(head)
@@ -384,12 +391,32 @@ class VideoPanel(QFrame):
     def set_style(self, style: dict, size_px: int, font: str) -> None:
         self._canvas.set_style(style, size_px, font)
 
+    def enable_real_view(self, on: bool = True) -> None:
+        self._real_btn.setVisible(on)
+
+    def real_view(self) -> bool:
+        return self._real_btn.isChecked()
+
+    def set_real_view(self, on: bool) -> None:
+        self._real_btn.setChecked(on)
+
+    def set_final_still(self, path: str | None) -> None:
+        """The exact frame of the render (assemble.still) over the picture, None = live."""
+        self._canvas.set_final_still(QImage(str(path)) if path else None)
+
+    def set_still_busy(self, busy: bool) -> None:
+        self._canvas.set_still_busy(busy)
+
     def set_burned_overlay(self, path: str) -> None:
         self._canvas.set_burned_overlay(QImage(str(path)))
 
     def set_watermark(self, wm: dict | None) -> None:
         """Show the translator's watermark on the preview as it will be burned."""
         self._canvas.set_watermark(wm)
+
+    def set_cover(self, cover: dict | None) -> None:
+        """Show the "Che logo, ghi tên phim" box on the preview as it will be burned."""
+        self._canvas.set_cover(cover)
 
     def set_fullscreen_icon(self, on: bool) -> None:
         from desktop.icons import icon as _icon

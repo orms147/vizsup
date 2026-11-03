@@ -504,6 +504,11 @@ PRESETS = {                      # crf, cq, audio, ~Mb/s at 1080p (size estimate
     "sharp": {"crf": 20, "cq": 21, "audio": "192k", "mbps": 4.8},
 }
 DEFAULT_PRESET = "sharp"
+# "Làm nét hình": contrast-adaptive sharpening of the picture BEFORE the subtitles are burned
+# (the text stays as drawn). Douyin serves ~1.1 Mb/s 1080p even for a 1440p upload — its best
+# variant (2026-11-01, 《末日校车》09: 1440p h265 is 0.77 Mb/s and no sharper) — so the source
+# itself is soft; cas 0.6 took a face crop's Laplacian variance 10.5 → 27 without halos.
+SHARPEN_CAS = 0.6
 
 
 def _even(v: float) -> int:
@@ -720,6 +725,9 @@ def band_cut(region: dict | None) -> float | None:
 TIKTOK_W, TIKTOK_H = 1080, 1920
 
 
+STILL_PNG = "still.png"
+
+
 def _ass_name(preview: bool) -> str:
     return "preview.ass" if preview else "subs.ass"
 
@@ -752,6 +760,9 @@ def _build_render(
     loudness: bool = True,     # the final mix at FINAL_LUFS — episodes join without jumps
     canvas_ass: str | None = None,   # 9:16: a second .ass (PlayRes = canvas) burned AFTER the bars
     cut: float | None = None,        # 9:16: keep this top fraction of the picture (band_cut)
+    sharpen: bool = False,           # "Làm nét hình": cas on the source picture (SHARPEN_CAS)
+    still_at: float | None = None,   # ONE frame at this source second → still.png (no audio at all)
+    still_h: int = 720,              # …scaled to this height
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -775,14 +786,17 @@ def _build_render(
             audio_mode = "duck"
 
     placements, sped, flagged = plan if plan is not None else _plan_segments(segments)
-    cmd = [ffmpeg_bin(), "-y", "-i", "source.mp4"]
-    dubbed = bool(placements) and dub is not None
+    still = still_at is not None
+    # a single frame is cut from the source second (input seek: cheap on a long video) and
+    # its timestamps put back by setpts, so the .ass shows the lines of THAT second
+    cmd = [ffmpeg_bin(), "-y", *(["-ss", f"{still_at:.3f}"] if still else []), "-i", "source.mp4"]
+    dubbed = bool(placements) and dub is not None and not still
     if dubbed:
         cmd += ["-f", "concat", "-safe", "0", "-i", dub]          # input 1 → the dub track
     bg_idx = 2 if dubbed else 1
     if audio_mode == "keep_music" and dubbed:
         cmd += ["-i", "bg.wav"]                                   # the instrumental
-    music = music or []
+    music = [] if still else (music or [])
     mus_idx = bg_idx + (1 if audio_mode == "keep_music" and dubbed else 0)
     if music:
         from app.pipeline import music as music_mod
@@ -805,8 +819,9 @@ def _build_render(
                  for c in [segments[p["inp"] - 1][0]]
                  if p["carry_s"] > LATE_S and c.index < 100_000],    # not F-4 notes
     }
-    (wd / "fit_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not still:
+        (wd / "fit_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     parts: list[str] = []
     src_v, src_a, bg_a = "[0:v]", "[0:a]", f"[{bg_idx}:a]"
@@ -820,7 +835,10 @@ def _build_render(
             for cue, sd, sp in flagged[:6]:
                 log(f"   • [{cue.start:6.1f}s] cần ~{sd:.1f}s nhưng chỉ có {sp:.1f}s")
 
-    has_audio = _has_audio_stream(job.source_video)
+    has_audio = _has_audio_stream(job.source_video) and not still
+    if still:
+        parts.append(f"[0:v]setpts=PTS+{still_at:.3f}/TB[vseek]")
+        src_v = "[vseek]"
     if audio_mode in ("mix", "duck") and not has_audio:
         if log:
             log("⚠ Video nguồn không có track âm thanh — chuyển sang chế độ thay (replace).")
@@ -915,12 +933,16 @@ def _build_render(
 
     ass = _ass_name(preview)
     vsrc = src_v
+    if sharpen:
+        # a soft (low-bitrate) source looks crisper; first, so a blurred cover stays soft
+        parts.append(f"{vsrc}cas={SHARPEN_CAS:g}[vsharp]")
+        vsrc = "[vsharp]"
     if cover_mode == "blur":
         # blur the hardsub band (the detected region if we have one, else the
         # bottom-third) before burning the VI subs on top — softer than the opaque
         # box, still hides the original
         crop_expr, overlay_pos = _blur_band_filters(_load_region(job))
-        parts.append(f"{src_v}split[vsrc][vband]")
+        parts.append(f"{vsrc}split[vsrc][vband]")
         parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         vsrc = "[vbg]"
@@ -972,8 +994,12 @@ def _build_render(
             parts.append(f"[vt]ass={canvas_ass}{_ass_fonts(wd)}[vc]")
             vmap = "[vc]"
     if preview:                     # same graph, scaled down after the subs are burned
-        parts.append(f"{vmap}scale=-2:640[vp]")
+        parts.append(f"{vmap}scale=-2:{int(still_h) if still else 640}[vp]")
         vmap = "[vp]"
+    if still:
+        (wd / "filter_complex_still.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
+        return [*cmd, "-filter_complex_script", "filter_complex_still.txt", "-map", vmap,
+                "-frames:v", "1", "-an", STILL_PNG]
     (wd / "filter_complex.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
     cmd += [
         "-filter_complex_script", "filter_complex.txt",
@@ -1014,6 +1040,10 @@ def assemble(
     safe_caption: str | None = None,     # platform key: subtitles above its bottom UI (shorts.place)
     canvas_text: bool = False,           # 9:16 + bars: chip / hook / end card on the CANVAS (canvas_text.py)
     bar_subs: bool = False,              # … and the dialogue in the bottom bar (needs canvas_text)
+    sharpen: bool = False,               # "Làm nét hình" (SHARPEN_CAS before the burn)
+    cover: dict | None = None,           # "Che logo, ghi tên phim" (disclosure.COVER_DEFAULT)
+    still_at: float | None = None,       # ONLY one frame of the finished picture (render.still_job)
+    still_h: int = 720,
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
@@ -1111,7 +1141,8 @@ def assemble(
             *clipshort.events(job, out_dur)]
     write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
-              extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark)
+              extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark,
+              cover=disclosure.cover_events(cover, out_dur) or None)
     _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
     canvas_name = None
     if clay is not None and canvas_layer is not None:
@@ -1135,6 +1166,25 @@ def assemble(
         glass_band = glass.band(events)
         if glass_band:
             glass.write_mask(events, job.work_dir / mask_name, glass_band, W=W, H=H)
+
+    if still_at is not None:
+        # the exact picture of the render (same .ass, same graph: bars, cover, watermark,
+        # notes, canvas text) for ONE second — no voice, no encode: about a second of work
+        cmd = _build_render(job, [], audio_mode="replace", orig_volume=1.0, dub_volume=1.0,
+                            cover_mode=mode, preview=True, frame=frame, plan=([], 0, []),
+                            dub=None, encoder="libx264", duration=0.0, inserts=None, res=res,
+                            glass_band=glass_band, glass_mask=mask_name, burn_h=burn[1],
+                            burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
+                            glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name,
+                            cut=cut if clay is not None else None, sharpen=sharpen,
+                            loudness=False, still_at=still_at, still_h=still_h)
+        out = job.work_dir / STILL_PNG
+        out.unlink(missing_ok=True)
+        done = subprocess.run(cmd, cwd=str(job.work_dir), capture_output=True)
+        if done.returncode != 0 or not out.exists():
+            raise RuntimeError("Không dựng được khung hình xem trước: "
+                               + done.stderr.decode("utf-8", "replace")[-300:])
+        return out
 
     say = progress or (lambda _f, _m: None)
     plan = _plan_segments(segments)
@@ -1161,7 +1211,7 @@ def assemble(
                             # own (maybe odd, VP9) size keeps the even-rounding scale=-2
                             burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
                             glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name,
-                            cut=cut if clay is not None else None)
+                            cut=cut if clay is not None else None, sharpen=sharpen)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]
@@ -1199,7 +1249,7 @@ def assemble(
                     "inserts": [[round(a, 3), round(d, 3)] for a, d in ins],
                     "commentary_s": round(note_secs, 2),
                     "commentary_share": round(cm.share(note_secs, total, out_total - total), 4),
-                    "res": res, "preset": preset or DEFAULT_PRESET,
+                    "res": res, "preset": preset or DEFAULT_PRESET, "sharpen": bool(sharpen),
                     "size": list(output_size(src_size, frame, res) or ()),
                     "glass_band": list(glass_band) if glass_band else None,
                     # the glass look in style.json terms (export.py re-reads it via look())

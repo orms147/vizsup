@@ -44,11 +44,13 @@ class PipelineWorker(QObject):
         import threading
 
         self._area_event = threading.Event()
-        self._area_answer: tuple[dict | None, bool] = (None, False)
+        self._area_answer: tuple[dict | None, bool, list | None] = (None, False, None)
 
-    def answer_area(self, rect: dict | None, series_too: bool = True) -> None:
-        """The picker's answer (GUI thread): the band, or None = let the app detect it."""
-        self._area_answer = (rect, series_too)
+    def answer_area(self, rect: dict | None, series_too: bool = True,
+                    logos: list | None = None) -> None:
+        """The picker's answer (GUI thread): the band, or None = let the app detect it, and
+        the logo regions OCR skips."""
+        self._area_answer = (rect, series_too, logos)
         self._area_event.set()
 
     def _ask_area(self, job: Job, o: dict, suggestion: dict | None = None) -> dict | None:
@@ -74,10 +76,15 @@ class PipelineWorker(QObject):
         self._area_event.clear()
         self.area_needed.emit({"frames": frames,
                                "suggestion": suggestion or assemble._load_region(job),
-                               "series": p.name if p is not None else None})
+                               "series": p.name if p is not None else None,
+                               "logos": ocr_area.logos_for_job(job)})
         while not self._area_event.wait(0.2):
             self._check()
-        rect, series_too = self._area_answer
+        rect, series_too, logos = self._area_answer
+        if logos is not None:                            # the logo regions, even without a band
+            ocr_area.remember_logos(job, logos, series_too=series_too)
+            if logos:
+                self.log.emit(f"✓ {len(logos)} vùng logo sẽ được bỏ qua khi đọc chữ")
         if rect is None:
             self.log.emit("↷ Để app tự dò vùng chữ")
             return None
@@ -597,7 +604,7 @@ class PipelineWorker(QObject):
             if o.get("vi_lint", True):
                 self._vi_lint(job)
             # 3.5) E-5: a strong model points at lines worth a human look (never edits)
-            if o.get("ai_review", True) and o.get("translator", "passthrough") != "passthrough":
+            if o.get("ai_review", False) and o.get("translator", "passthrough") != "passthrough":
                 self._check()
                 from app.pipeline import brief, qa
 
