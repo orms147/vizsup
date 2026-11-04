@@ -52,7 +52,7 @@ def test_the_still_shows_the_line_of_that_second_and_nothing_else_is_touched(job
     assert off.name == "still.png" and on.exists() and off.exists()
     assert _white_share(on) > 0 and _white_share(off) == 0         # text only at 1.0 s
     assert (job.work_dir / "fit_report.json").read_text(encoding="utf-8") == "{}"
-    assert not (job.work_dir / "output.mp4").exists() and not (job.work_dir / "subs.ass").exists()
+    assert not any((job.work_dir / n).exists() for n in ("output.mp4", "subs.ass", "preview.ass", "preview_canvas.ass"))
 
 
 def test_the_still_follows_the_9_16_frame_watermark_and_cover(job):

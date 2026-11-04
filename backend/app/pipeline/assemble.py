@@ -931,7 +931,7 @@ def _build_render(
         parts.append(f"{src}loudnorm=I={FINAL_LUFS}:TP=-1.5:LRA=11,aresample=48000[afin]")
         audio_map = "[afin]"
 
-    ass = _ass_name(preview)
+    ass = "still.ass" if still else _ass_name(preview)   # never the quick proof's own files
     vsrc = src_v
     if sharpen:
         # a soft (low-bitrate) source looks crisper; first, so a blurred cover stays soft
@@ -1139,7 +1139,8 @@ def assemble(
         tags = [*(overlays or []), *disclosure.episode_events(
             episode_card, title if episode_card else "", out_dur),
             *clipshort.events(job, out_dur)]
-    write_ass(cues_for_subs, job.work_dir / _ass_name(preview), font=font, size=size,
+    still = still_at is not None
+    write_ass(cues_for_subs, job.work_dir / ("still.ass" if still else _ass_name(preview)), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark,
               cover=disclosure.cover_events(cover, out_dur) or None)
@@ -1148,11 +1149,11 @@ def assemble(
     if clay is not None and canvas_layer is not None:
         from app.pipeline import canvas_text as ct
 
-        name = "preview_canvas.ass" if preview else "canvas.ass"
+        name = "still_canvas.ass" if still else "preview_canvas.ass" if preview else "canvas.ass"
         if ct.write(job.work_dir / name, clay, font=font, **canvas_layer):
             canvas_name = name
     glass_band = None
-    mask_name = "preview_glass.ass" if preview else glass.MASK_FILE
+    mask_name = "still_glass.ass" if still else "preview_glass.ass" if preview else glass.MASK_FILE
     if mode == "glass":
         # geometry on a nominal 1080-line picture of the source's shape (it is stored
         # normalized, so it fits whatever size the picture is scaled to)
