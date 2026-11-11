@@ -110,7 +110,10 @@ def render_state(work_dir: Path) -> str | None:
         return None
     out = d / "output.mp4"
     if not out.exists():
-        return "new"
+        from app.pipeline import cleanup
+
+        # removed by «Dọn dung lượng» after it was posted: still the current render
+        return None if cleanup.archived(d) else "new"
     # a render that names its revision is current exactly when that is the approved one —
     # approving the same text again later (e.g. a project copied in) is not "Cần dựng lại"
     made_from = _read(d / "render.json").get("revision")

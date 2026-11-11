@@ -582,6 +582,11 @@ class LibraryView(QWidget):
         tools.addWidget(icon_label("HardDrive", V2["secondary"], 15))
         self.total = label("", "secondary")
         tools.addWidget(self.total)
+        self.space_btn = button("Dọn dung lượng…", "Sparkles", variant="ghost", small=True,
+                                tip="Cả thư viện: file tạm, video gốc tải lại được và video đã "
+                                    "đăng xong của các tập đã dựng")
+        self.space_btn.clicked.connect(self.clean_library)
+        tools.addWidget(self.space_btn)
         pv.addLayout(tools)
         pv.addLayout(self._build_chips())
         pv.addWidget(self._build_compile_bar())
@@ -1175,6 +1180,73 @@ class LibraryView(QWidget):
         self.refresh()
         self.changed.emit()
         self.message.emit(what, "ok")
+        return True
+
+    # --- Dọn dung lượng (app/pipeline/cleanup.py) ----------------------------------------
+    def clean_library(self) -> None:
+        """Scan the whole library off the GUI thread, then the dialog."""
+        from app.pipeline import cleanup
+
+        self.space_btn.setEnabled(False)
+        self.message.emit("Đang xem dự án nào dọn được…", "busy")
+
+        def done(rows) -> None:
+            self.space_btn.setEnabled(True)
+            self._clean_dialog(rows)
+
+        def fail(msg) -> None:
+            self.space_btn.setEnabled(True)
+            self.message.emit(f"Không đọc được thư viện: {msg}", "warn")
+
+        self._bg.run(lambda: cleanup.scan(store._storage()), done, fail)
+
+    def _clean_rows(self, rows: list[dict]) -> list[dict]:
+        """Rows of projects not in use now (the open / queued / rendering ones keep their files)."""
+        return [r for r in rows
+                if not self._guard({"id": r["id"], "kind": "job", "dirs": [str(r["dir"])]})]
+
+    def _clean_confirm(self, rows: list[dict]):
+        from desktop.widgets.cleanup_dialog import CleanupDialog
+
+        dlg = CleanupDialog(self.window(), rows, store._storage())
+        return dlg.paths() if dlg.exec() else None
+
+    def _clean_dialog(self, rows: list[dict]) -> bool:
+        from app.pipeline import cleanup
+        from desktop.trash import TrashError
+
+        rows = self._clean_rows(rows)
+        if not rows:
+            self._inform("Không có gì để dọn",
+                         f"Chưa có dự án nào dựng xong quá {cleanup.KEEP_DAYS} ngày mà còn file "
+                         "nặng. Dự án đang mở / đang chạy được để nguyên.")
+            return False
+        paths = self._clean_confirm(rows)
+        if not paths:
+            return False
+        freed = sum(cleanup.size_of(p) for p in paths)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            store.trash_paths(paths)
+        except (TrashError, ValueError, OSError) as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self.window(), "Chưa dọn được", str(exc))
+            self.refresh()
+            return False
+        QApplication.restoreOverrideCursor()
+        chosen = set(paths)
+        for r in rows:
+            gone = [p for p in r["output"] if p in chosen]
+            if gone:
+                try:
+                    cleanup.mark_removed(r["dir"], gone)
+                except OSError:
+                    pass
+            self._details.pop(r["id"], None)
+        self.refresh()
+        self.changed.emit()
+        self.message.emit(f"Đã dọn {fmt_size(freed)} từ {len(rows)} dự án — dọn Thùng rác để "
+                          "lấy lại dung lượng", "ok")
         return True
 
     # --- Ghép tập (app/pipeline/compilation.py) ------------------------------------------

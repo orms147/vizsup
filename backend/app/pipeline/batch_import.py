@@ -39,7 +39,9 @@ def project_state(job_id: str) -> str:
     from app.pipeline import approval
 
     d = Path(settings.vizsup_storage_dir) / job_id
-    if (d / "output.mp4").exists():
+    from app.pipeline import cleanup
+
+    if cleanup.rendered(d):             # incl. a posted video removed by «Dọn dung lượng»
         return "rendered"
     if not (d / "vi.srt").exists():
         return "unfinished"

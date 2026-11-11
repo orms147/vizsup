@@ -15,6 +15,9 @@ from desktop import paths  # noqa: F401
 from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 from app.fsutil import atomic_write_text
+from app.pipeline import cleanup
+# "Chỉ xóa file nặng": one list with «Dọn dung lượng» (app/pipeline/cleanup.py)
+from app.pipeline.cleanup import HEAVY_DIRS, HEAVY_FILES  # noqa: F401
 
 
 def _storage() -> Path:
@@ -74,7 +77,8 @@ _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "r
                   "episode_card", "voice_by_gender", "cue_density", "safe_zone", "render_post_open",
                   "render_vertical", "render_voice", "render_rate", "render_audio",
                   "render_pitch", "options_advanced", "render_thumbnail", "render_sharpen",
-                  "ai_review_off", "logo_cover", "render_real_view", "sv_watermark")
+                  "ai_review_off", "logo_cover", "render_real_view", "sv_watermark",
+                  "render_karaoke")
 
 
 def update_ui_state(**kv) -> None:
@@ -131,13 +135,16 @@ def _job_row(d: Path) -> dict:
     has_output = (d / "output.mp4").exists()
     stamps = [p for p in (d / "vi.srt", d / "output.mp4", d / "cn.srt", d / "source.mp4",
                           d / "job.json") if p.exists()]
+    # the posted video was removed by «Dọn dung lượng»: still "Đã dựng", nothing to play
+    is_archived = not has_output and (d / cleanup.MARK).exists() and cleanup.archived(d)
     try:
         mtime = (stamps[0] if stamps else d).stat().st_mtime
     except OSError:
         mtime = 0.0
     info = {"id": d.name, "title": d.name, "opts": {}, "has_vi": has_vi, "platform": None,
             "has_output": has_output, "unfinished": not (has_vi or has_output),
-            "url": None, "mtime": mtime, "group": None, "duration": 0.0}
+            "url": None, "mtime": mtime, "group": None, "duration": 0.0,
+            "archived": is_archived}
     jf = d / "job.json"
     if jf.exists():
         try:
@@ -330,12 +337,6 @@ def debug(msg: str) -> None:
 # --- library: every project on disk (desktop/views/library_view.py) ------------------
 _JOB_ID = re.compile(r"[0-9a-f]{12}")
 _PROJECT_FILES = ("job.json", "metadata.json", "source.mp4", "cn.srt", "vi.srt", "output.mp4")
-# "Chỉ xóa file nặng": media the app rebuilds by itself (render caches, extracted audio,
-# the quick proof). Subtitles, settings, the user's own recordings and output.mp4 stay.
-HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3",
-               "output.rendering.mp4", "preview.rendering.mp4",   # a render cut off mid-encode
-               "vocals.wav", "source.downloading.mp4")
-HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm")   # _norm: a stopped join
 
 
 def is_project_dir(d: Path) -> bool:
@@ -372,7 +373,8 @@ def library_items() -> list[dict]:
             continue
         j = _job_row(d)
         j.update(has_source=(d / "source.mp4").exists(), has_preview=(d / "preview.mp4").exists(),
-                 kind="job", dirs=[str(d)], status=_status(j["has_output"], j["has_vi"]))
+                 kind="job", dirs=[str(d)],
+                 status=_status(j["has_output"] or j["archived"], j["has_vi"]))
         g = j.get("group") if isinstance(j.get("group"), dict) else None
         gid = str(g.get("id") or "") if g else ""
         if not gid or Path(gid).name != gid or gid in (".", ".."):   # not a sibling folder
