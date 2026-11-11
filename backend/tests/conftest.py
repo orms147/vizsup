@@ -14,6 +14,7 @@ def pytest_configure(config):
 
     os.environ["VIZSUP_NO_UPDATE_CHECK"] = "1"     # app/catalog.py: no network from tests
     os.environ["VIZSUP_NO_AUTO_SEPARATE"] = "1"    # voices.py: no real Demucs per worker test
+    os.environ["VIZSUP_VIENEU_PREWARM"] = "0"      # vieneu.prewarm: no model load from a UI test
     try:
         from app.config import settings
     except Exception:  # noqa: BLE001

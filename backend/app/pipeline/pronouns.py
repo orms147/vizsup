@@ -27,6 +27,7 @@ from app.models import Job
 
 REPORT = "pronoun_report.json"
 WINDOW = 150          # lines per call: whole scenes, still one cheap request
+PARALLEL = 8          # windows asked side by side (3 until 2026-11-11)
 CONTEXT = 20          # earlier lines shown read-only before a window
 _MAX_TOKENS = 6000
 
@@ -147,7 +148,7 @@ def check(job: Job, provider_name: str, *, log: Callable[[str], None] | None = N
                 return [("", [])] * n
             return parse(reply, n)
 
-        with ThreadPoolExecutor(3) as ex:
+        with ThreadPoolExecutor(PARALLEL) as ex:     # every window of a 35-min episode at once
             who = [w for part in ex.map(one, range(0, len(rows), WINDOW)) for w in part]
         cues = parse_srt(job.vi_srt)
         if len(cues) != len(rows):

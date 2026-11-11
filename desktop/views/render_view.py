@@ -1385,6 +1385,14 @@ class RenderView(QWidget):
 
     def _sync_voice_sub(self) -> None:
         self.voice_sub.setText(self._voice_engine_label())
+        voice = str(self.voice.currentData() or "") if self._has_real_voices else ""
+        if self._job is not None and (voice.startswith("vieneu:") or self._tts == "vieneu"):
+            try:                       # the model loads while the owner looks at the page
+                from app.providers.tts import vieneu
+
+                vieneu.prewarm()
+            except Exception:  # noqa: BLE001 - vieneu not installed: nothing to warm
+                pass
 
     def _remember_voice(self, *_a) -> None:
         """The user's voice and speed stick to this project (voice.json) across restarts,

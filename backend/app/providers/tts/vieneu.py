@@ -139,6 +139,74 @@ def _release(engine) -> None:
     _pool.put(engine)
 
 
+# Batched lines on the graphics card (2026-11-11): the PyTorch engine runs many lines through
+# ONE forward (``infer_batch``, bucketed by length). Measured on the RTX 4070 Laptop with 96 real
+# subtitle lines (~21 chars): one line at a time 0.37 s/line → 0.087 (8 per forward) → 0.073 (16)
+# → 0.061 (32), peak 0.9 GB of VRAM — a 1019-line episode: ~6 min → ~1 min of speaking.
+BATCH = 32                    # lines sharing a forward
+GROUP = 128                   # lines per call: progress, cancel and the manifest move between calls
+ENCODERS = 8                  # ffmpeg (tempo + mp3) processes at once
+
+
+class NoAudioReceived(Exception):
+    """The engine returned no samples for a line (nothing it can say): the pipeline skips that
+    line's dub, as it does for edge-tts' error of the same name (pipeline/tts._unvoiceable)."""
+
+
+def _save(wav, rate_hz: int, out_path, rate: str | None) -> Path:
+    """One waveform → ``out_path`` (mp3), the speed (``rate``) applied with atempo."""
+    import soundfile as sf
+
+    from app.ffmpegutil import ffmpeg_bin
+
+    if wav is None or len(wav) == 0:
+        raise NoAudioReceived("VieNeu không trả âm thanh cho câu này")
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / "line.wav"
+        sf.write(str(raw), wav, rate_hz)
+        af = ["-af", f"atempo={_tempo(rate):.3f}"] if abs(_tempo(rate) - 1) > 1e-3 else []
+        subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-i", str(raw), *af,
+                        "-c:a", "libmp3lame", "-b:a", "96k", str(out)], check=True)
+    return out
+
+
+def _speak_group(engine, texts: list[str], voice: str) -> list:
+    """A waveform (or the exception) per text: one batched call on the PyTorch engine; when
+    that fails as a whole (out of memory, one bad line) or on the CPU engine, line by line."""
+    if getattr(engine, "backend", "") == "pytorch" and len(texts) > 1:
+        try:
+            return list(engine.infer_batch(texts, voice=voice, batch_size=BATCH))
+        except Exception:  # noqa: BLE001 - fall through: each line on its own
+            pass
+    out: list = []
+    for t in texts:
+        try:
+            out.append(engine.infer(t, voice=voice))
+        except Exception as exc:  # noqa: BLE001 - reported for that line only
+            out.append(exc)
+    return out
+
+
+def prewarm() -> None:
+    """Load the GPU engine in the background (the render page calls this when a VieNeu voice is
+    chosen): the ~25 s model load is over before the owner presses Dựng video. No-op on the CPU
+    path, when the model is not downloaded yet, or when an engine already exists."""
+    if os.environ.get("VIZSUP_VIENEU_PREWARM", "1") == "0":
+        return
+    if _made or not use_gpu() or not model_cached():
+        return
+
+    def load() -> None:
+        try:
+            _release(_acquire())
+        except Exception:  # noqa: BLE001 - the render reports a real failure itself
+            pass
+
+    threading.Thread(target=load, name="vieneu-prewarm", daemon=True).start()
+
+
 class VieNeuTTS(TTSProvider):
     name = "vieneu"
     display_name = "VieNeu (trên máy)"
@@ -157,23 +225,74 @@ class VieNeuTTS(TTSProvider):
     def voices(self) -> list[str]:
         return list(VOICES)
 
+    @property
+    def supports_batch(self) -> bool:
+        """On the graphics card the whole job goes through ``synthesize_many`` (batched
+        forwards); the CPU engines keep the parallel per-line path."""
+        return use_gpu()
+
     def synthesize(self, text, out_path, *, voice=None, rate=None) -> Path:
-        import soundfile as sf
-
-        from app.ffmpegutil import ffmpeg_bin
-
         tts = _acquire()
         try:                                      # one ONNX session = one line at a time
             wav = tts.infer(text, voice=voice if voice in VOICES else DEFAULT_VOICE)
             rate_hz = tts.sample_rate
         finally:
             _release(tts)
-        out = Path(out_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            raw = Path(tmp) / "line.wav"
-            sf.write(str(raw), wav, rate_hz)
-            af = ["-af", f"atempo={_tempo(rate):.3f}"] if abs(_tempo(rate) - 1) > 1e-3 else []
-            subprocess.run([ffmpeg_bin(), "-v", "error", "-y", "-i", str(raw), *af,
-                            "-c:a", "libmp3lame", "-b:a", "96k", str(out)], check=True)
-        return out
+        return _save(wav, rate_hz, out_path, rate)
+
+    def synthesize_many(self, items, *, voice=None, rate=None, concurrency=3,
+                        retry_delays=(1.0, 4.0), on_done=None, cancel=None):
+        """``GROUP`` lines per engine call, ``BATCH`` per forward; the mp3 encodes of a group
+        run on a small pool while ``on_done`` stays on THIS thread (the pipeline's manifest
+        writes are serialized). ``cancel()`` is checked between groups: the lines not started
+        are reported as InterruptedError and every finished one is kept."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        v = voice if voice in VOICES else DEFAULT_VOICE
+        results: list[tuple[str, Exception | None]] = []
+
+        def done(key: str, exc: Exception | None) -> None:
+            results.append((key, exc))
+            if on_done:
+                on_done(key, exc)
+
+        pending = list(items)
+        with ThreadPoolExecutor(max_workers=ENCODERS) as pool:
+            while pending:
+                if cancel and cancel():
+                    for key, _t, _p in pending:
+                        done(key, InterruptedError())
+                    break
+                tts = _acquire()
+                if getattr(tts, "backend", "") != "pytorch":
+                    # the card refused the model (out of memory…): the CPU engines, several
+                    # lines at once, each line through the plain ``synthesize``
+                    _release(tts)
+                    with ThreadPoolExecutor(max_workers=workers()) as cpu:
+                        futs = [(key, cpu.submit(self.synthesize, t, p, voice=v, rate=rate))
+                                for key, t, p in pending]
+                        for key, fut in futs:
+                            try:
+                                fut.result()
+                                done(key, None)
+                            except Exception as exc:  # noqa: BLE001 - that line only
+                                done(key, exc)
+                    break
+                group, pending = pending[:GROUP], pending[GROUP:]
+                try:
+                    wavs = _speak_group(tts, [t for _k, t, _p in group], v)
+                    rate_hz = tts.sample_rate
+                finally:
+                    _release(tts)
+                jobs = [None if isinstance(w, Exception) else pool.submit(_save, w, rate_hz, p, rate)
+                        for w, (_k, _t, p) in zip(wavs, group)]
+                for (key, _t, _p), w, fut in zip(group, wavs, jobs):
+                    if fut is None:
+                        done(key, w)
+                        continue
+                    try:
+                        fut.result()
+                        done(key, None)
+                    except Exception as exc:  # noqa: BLE001 - that line only
+                        done(key, exc)
+        return results

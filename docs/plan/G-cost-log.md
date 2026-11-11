@@ -285,3 +285,50 @@ translate 15–18 s.
 **Spend of this pass:** $0.0463 (key `usage_daily`: Whisper probes $0.0009 · routing calls
 $0.0045 · two judges $0.0373 · two live runs $0.0036). Scripts in the session scratchpad (not
 kept); the judge used `backend/scripts/cost_bench.py judge|report`.
+
+## Latency pass — 2026-11-11: batched VieNeu on the GPU, wider translate fan-out
+
+Owner (2026-11-11): no full autopilot — they find the links and upload themselves; "tối ưu cost
+và latency dịch video, TTS thì hơn". Measured on the real 35:43 episode `794b144e1edb`
+(《暴雪之境》, 1019 lines, hardsubs, VieNeu "Ngọc Huyền" +21 % pitch +2, file times of the run):
+
+| stage | before | after | how |
+|---|---|---|---|
+| OCR (RapidOCR / DirectML, 4287 frames) | 10.6 min | unchanged | see "not shipped" |
+| brief | 17 s | unchanged | |
+| translate: draft + refine + auto-shorten + xưng hô | 213 s | ≈ 60 s (draft + refine + shorten measured: 45.7 s for the whole episode; the 7 xưng hô windows now go at once, not timed) | 16 batches in flight instead of 4; shorten chunks and pronoun windows side by side |
+| TTS (speak + mp3 + trim + pitch) | ≈ 265 s (0.26 s/line) | ≈ 107 s (0.105 s/line) | `infer_batch`, 32 lines per forward |
+| VieNeu model load | 11–25 s inside the render | 0 (loaded while the page is open) | `vieneu.prewarm` |
+| encode 1080p NVENC + vertical copy + cover | 5.3 + 2.7 + 0.8 min | unchanged | |
+
+**Cost** of that episode to the gate: **$0.035** (luna refine + xưng hô + shorten $0.0236, DeepSeek
+draft $0.0108, brief $0.0003; OCR / TTS / render free) = $0.001 per video minute. Nothing here
+changes it; there is no saving left that is worth a quality risk.
+
+**TTS numbers** (RTX 4070 Laptop, 96 real lines, ~21 chars): one line per call 0.368 s/line;
+`infer_batch` 8 per forward 0.087 · 16 → 0.073 · 32 → 0.061 (peak VRAM 0.46 / 0.62 / 0.91 GB).
+Whole stage on 300 lines through `tts.synthesize`'s parts: speak + encode 20.2 s, trim 6.7 s,
+pitch 3.8 s. Same lines vs the per-line segments of the real run: total speech 322.5 s vs 321.5 s,
+per-line length ratio median 1.00 (p5 0.92, p95 1.09) — no cut-off or babble pattern.
+
+**Translate numbers** (first 400 lines, real `translate_cues`, no brief): width 4 → 43.9 s, width
+8 → 21.5 s. The slow call is the DRAFT on the cheapest host (Morph, `sort: price`): ~15 s per
+50-line batch; refine on luna ~3.5 s. One round of 4 draft batches under other routings:
+
+| draft routing | wall | $ / 200 lines | host |
+|---|---|---|---|
+| `sort: price`, no 4-bit (shipped 10-31) | 15.5 s | 0.00118 | Morph |
+| OpenRouter's own choice, no 4-bit | 5.4 s | 0.00258 | DigitalOcean, Alibaba |
+| `sort: throughput`, no 4-bit | 5.4 s | 0.00457 | Together |
+| gpt-6-luna as the draft | 3.7 s | 0.00188 | Amazon Bedrock |
+
+16 draft batches at once on the price route: all fine, 13.7–22.6 s each (wall 22.6 s); 16 refine
+batches: 3.9 s. So the width buys the latency for free and the routing stays the cheap one
+(a faster route would save ~25 s per 35-min episode for +$0.007…0.018).
+
+**Not shipped — OCR frame skipping.** Reusing the previous read when the white-text mask of the
+band is unchanged: a naive rule skipped 54 % of the frames, but most of those are "empty" frames,
+and trusting an empty mask loses coloured captions. With the safe rules (reuse only a confident
+text read while the mask holds; empty reuse only once the video's text frames are known to be
+white) it skipped 23 % (`794b144e1edb`) and 7 % (`fab77333de2b`) — not worth the risk. The lever
+that exists is "OCR nhanh" (1 frame/s, 2× faster; fine for films). Spend of this pass: ≈ $0.03.

@@ -32,6 +32,12 @@ from app.providers.translation._common import _completion_cap, parse_numbered
 
 # Batch size keeps each request bounded while giving the model surrounding context.
 BATCH = 50
+# Batches in flight at once (draft, refine, auto-shorten). 4 until 2026-11-11: a 35-min episode
+# (1019 lines = 21 batches) spent 3.5 min here, most of it waiting for its turn — the calls are
+# independent and OpenRouter takes them side by side (16 at once measured: no error, the
+# cheapest host answers in ~20 s instead of ~15). A provider can ask for less
+# (``parallel_batches``).
+WIDTH = 16
 _RETRY_DELAYS = (2.0, 8.0)   # 3 attempts: try, wait 2s, try, wait 8s, final try
 # Client errors that retrying only re-pays for (bad key, bad request, not-found).
 _NON_RETRYABLE = {400, 401, 403, 404, 422}
@@ -293,7 +299,7 @@ def translate_cues(
             log(f"↷ Tiếp tục từ điểm dừng trước: {have}/{len(src)} dòng nháp đã có")
         missing = [bi for bi in range(n_batches) if bi not in completed]
         if missing:
-            width = min(4, getattr(provider, "parallel_batches", 1), len(missing))
+            width = min(WIDTH, getattr(provider, "parallel_batches", 1), len(missing))
 
             def task(bi: int) -> list[str]:
                 batch = src[bi * BATCH:(bi + 1) * BATCH]
@@ -346,7 +352,7 @@ def translate_cues(
         budgets = _draft_budgets(vi_draft)
         missing = [bi for bi in range(n_batches) if bi not in completed]
         if missing:
-            width = min(4, getattr(provider, "parallel_batches", 1), len(missing))
+            width = min(WIDTH, getattr(provider, "parallel_batches", 1), len(missing))
 
             def task(bi: int) -> tuple[list[str], Exception | None]:
                 cn_b = cn_src[bi * BATCH:(bi + 1) * BATCH]
@@ -431,13 +437,23 @@ def _autoshorten(cues: list[Cue], vi: list[str], provider_name: str,
         return vi
     # Pass 2: one rewrite() round-trip per chunk instead of one per overlong line.
     shortened = 0
-    for chunk in _batched(todo, BATCH):
+    chunks = list(_batched(todo, BATCH))
+
+    def ask(chunk) -> str | None:
         body = "\n".join(f"{k}| (rút còn ~{pct}%) {out[i]}"
                          for k, (i, pct) in enumerate(chunk, 1))
         try:
-            reply = prov.rewrite(body, SHORTEN_BATCH_INSTRUCTION,
-                                 max_tokens=_completion_cap(len(chunk)))
+            return prov.rewrite(body, SHORTEN_BATCH_INSTRUCTION,
+                                max_tokens=_completion_cap(len(chunk)))
         except Exception:  # noqa: BLE001 - optional polish; keep the draft lines
+            return None
+
+    # the chunks are independent (a line is in exactly one): asked side by side, applied in order
+    width = max(1, min(WIDTH, getattr(prov, "parallel_batches", 1), len(chunks)))
+    with ThreadPoolExecutor(max_workers=width) as ex:
+        replies = list(ex.map(ask, chunks))
+    for chunk, reply in zip(chunks, replies):
+        if reply is None:
             continue
         current = [out[i] for i, _ in chunk]
         for (i, _), cand in zip(chunk, parse_numbered(reply, len(chunk), current)):
