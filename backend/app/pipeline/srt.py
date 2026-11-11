@@ -185,6 +185,7 @@ def write_ass(
     mark: list[dict] | None = None,
     mark_look: dict | None = None,
     cover: list[dict] | None = None,
+    karaoke: dict | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
@@ -194,7 +195,9 @@ def write_ass(
     ``cover_hardsubs=True`` forces an opaque box on every style. ``extra``: corner notes
     ``{start, end, text, align}`` (credit, "Lồng tiếng AI") in a small boxed "Tag" style.
     ``comments``: the user's own commentary (F-4), in the same look but warm yellow italic
-    so viewers can tell it from the translation."""
+    so viewers can tell it from the translation. ``karaoke``: ``{"colour", "spans"}`` — every
+    dialogue word lights up in ``colour`` as it is spoken (``karaoke.tagged``; ``spans`` maps a
+    cue's ``index`` to its speech span, else the cue's own span)."""
     base = {**DEFAULT_STYLE, **(style or {})}
     ordered: list[tuple[str, dict]] = []   # (name, merged style) — Default first
     seen: dict[str, str] = {}              # json(merged) → name
@@ -212,12 +215,14 @@ def write_ass(
     cue_names: list[str] = []
     cue_prefixes: list[str] = []
     cue_texts: list[str] = []
+    cue_colours: list[str] = []
     for i, c in enumerate(cues):
         ov = (cue_styles or {}).get(i + 1)
         merged = {**base, **ov} if ov else base
         cue_names.append(name_for(merged) if ov else default_name)
         cue_prefixes.append(_inline_prefix(merged))
         cue_texts.append(display_text(c.text, merged))
+        cue_colours.append(str(merged.get("primary") or "#FFFFFF"))
 
     style_block = "\n".join(_style_line(nm, st, font, size, cover_hardsubs) for nm, st in ordered)
     if extra:
@@ -248,8 +253,14 @@ def write_ass(
         style_block += "\n" + _style_line("Comment", note, font, size, cover_hardsubs)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
-    for c, nm, pfx, shown in zip(cues, cue_names, cue_prefixes, cue_texts):
-        text = pfx + shown.replace("\n", "\\N")
+    for c, nm, pfx, shown, base_colour in zip(cues, cue_names, cue_prefixes, cue_texts, cue_colours):
+        body = shown.replace("\n", "\\N")
+        if karaoke:
+            from app.pipeline import karaoke as kara
+
+            body = kara.tagged(body, c.start, c.end, (karaoke.get("spans") or {}).get(c.index),
+                               colour=karaoke.get("colour") or kara.HIGHLIGHT, base=base_colour)
+        text = pfx + body
         lines.append(
             f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},{nm},,0,0,0,,{text}"
         )

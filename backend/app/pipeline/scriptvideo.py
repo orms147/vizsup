@@ -202,7 +202,7 @@ def build_narration(work_dir: Path, lines: list[str], wavs: list[Path | None], *
     gap_wav = wd / "tts" / "_gap.wav"
     if not gap_wav.exists():
         subprocess.run([ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
-                        f"anullsrc=r=48000:cl=mono", "-t", f"{gap:.3f}", "-c:a", "pcm_s16le",
+                        "anullsrc=r=48000:cl=mono", "-t", f"{gap:.3f}", "-c:a", "pcm_s16le",
                         str(gap_wav)], check=True, capture_output=True)
     items = [(t, w) for t, w in zip(lines, wavs, strict=True) if w is not None]
     if not items:

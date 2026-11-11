@@ -584,6 +584,29 @@ class RenderView(QWidget):
         self._src_size: tuple[int, int] | None = None
         self._src_dur = 0.0
         ll.addWidget(label("Kiểu chữ lấy từ màn Sửa phụ đề.", "small", wrap=True))
+        # pipeline/karaoke.py: each word lights up while the dub speaks it (Shorts style)
+        kara = st.get("render_karaoke") if isinstance(st.get("render_karaoke"), dict) else {}
+        krow = QHBoxLayout()
+        krow.setSpacing(8)
+        self.karaoke_cb = QCheckBox("Chữ chạy theo lời (karaoke)")
+        self.karaoke_cb.setToolTip(
+            "Từng chữ của phụ đề đổi màu đúng lúc giọng lồng đọc tới — kiểu phụ đề hay gặp trên "
+            "Short / TikTok. Thời gian mỗi chữ chia theo số âm tiết đọc thật của câu.")
+        self.karaoke_color = QComboBox()
+        from app.pipeline import karaoke as _kara
+
+        for text, hexc in _kara.COLOURS:
+            self.karaoke_color.addItem(text, hexc)
+        self.karaoke_color.setToolTip("Màu chữ đã đọc (trên kính mờ trắng luôn dùng cam đậm)")
+        self.karaoke_color.setCurrentIndex(max(self.karaoke_color.findData(kara.get("color")), 0))
+        self.karaoke_cb.setChecked(bool(kara.get("on")))
+        self.karaoke_color.setEnabled(self.karaoke_cb.isChecked())
+        self.karaoke_cb.toggled.connect(self.karaoke_color.setEnabled)
+        self.karaoke_cb.toggled.connect(lambda _on: self._save_karaoke())
+        self.karaoke_color.currentIndexChanged.connect(lambda _i: self._save_karaoke())
+        krow.addWidget(self.karaoke_cb, 1)
+        krow.addWidget(self.karaoke_color)
+        ll.addLayout(krow)
 
         # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md) — folded
         # into one section with a one-line summary: it is set once per channel, not per episode
@@ -907,16 +930,18 @@ class RenderView(QWidget):
         self.thumb_btn.clicked.connect(self._show_thumb)
         back = button("Quay lại sửa", "ArrowLeft", variant="ghost")
         back.clicked.connect(self.backRequested)
-        for b in (self.save_btn, self.open_btn, self.export_btn, self.post_btn, self.orient_btn):
+        for b in (self.save_btn, self.open_btn, self.export_btn, self.orient_btn):
             al.addWidget(b)
         al.addStretch(1)
         # a long "N câu lồng tiếng vào trễ…" line used to sit in the button row and made the
         # whole pane (and the page) wider than a laptop window: it wraps on its own row now
         sr = QHBoxLayout()
         sr.setSpacing(8)
-        # "Ảnh bìa" opens this row: one more button in the row above made the page wider than a
-        # 1000-px window (test_ux_render_narrow)
+        # "Ảnh bìa" + "Mô tả đăng bài" open this row: with the options column's minimum width
+        # (LEFT_MIN) one more button in the row above made the page wider than a 1000-px window
+        # (test_ux_render_narrow)
         sr.addWidget(self.thumb_btn, 0, Qt.AlignTop)
+        sr.addWidget(self.post_btn, 0, Qt.AlignTop)
         self.res_status = label("", "small", wrap=True)
         sr.addWidget(self.res_status, 1)
         sr.addWidget(back, 0, Qt.AlignTop)
@@ -1437,10 +1462,26 @@ class RenderView(QWidget):
         self._safe_touched = True
         self.canvas_cb.setChecked(bool(cfg.get("canvas_text", True)))
         self.bars_cb.setChecked(bool(cfg.get("bar_subs", False)) and self.canvas_cb.isChecked())
+        kara = cfg.get("karaoke") if isinstance(cfg.get("karaoke"), dict) else None
+        self.karaoke_cb.setChecked(bool(kara and kara.get("on")))
+        if kara and kara.get("color"):
+            i = self.karaoke_color.findData(kara["color"])
+            if i >= 0:
+                self.karaoke_color.setCurrentIndex(i)
         plat = cfg.get("platform") or "tiktok"
         if self.preview.safe_zone() != plat:
             self.preview.set_safe_zone(plat)
         self._short_applied = True
+
+    def karaoke(self) -> dict | None:
+        """«Chữ chạy theo lời» as the render option, None when off."""
+        if not self.karaoke_cb.isChecked():
+            return None
+        return {"on": True, "color": self.karaoke_color.currentData()}
+
+    def _save_karaoke(self) -> None:
+        store.update_ui_state(render_karaoke={"on": self.karaoke_cb.isChecked(),
+                                              "color": self.karaoke_color.currentData()})
 
     @staticmethod
     def episode_card_defaults() -> dict:
@@ -1911,6 +1952,7 @@ class RenderView(QWidget):
         opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
         opts["preset"] = self.preset.currentData()
         opts["sharpen"] = self.sharpen_cb.isChecked()
+        opts["karaoke"] = self.karaoke()
         opts["credit_overlay"] = self.credit_cb.isChecked() and self.credit_cb.isEnabled()
         opts["ai_label"] = self.ai_label_cb.isChecked() and self._audio_mode() != "original"
         wm = self.watermark()

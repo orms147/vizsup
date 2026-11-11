@@ -35,8 +35,11 @@ SIZE_MAX = 120                  # .ass font units (1080 canvas)
 # the dialogue stays ON the picture, over the (covered) Chinese band — where the owner expects
 # it (2026-11-01: "phụ đề nằm linh tinh" in the bar); "Phụ đề ở dải nền" remains a choice.
 # A Short is always the source's resolution (1080×1920 for a 1080p source), never learned.
+# The words light up as they are spoken ("Chữ chạy theo lời", pipeline/karaoke.py) — the caption
+# look Shorts viewers expect; a long render keeps the owner's own choice.
 DEFAULT_SHORT = {"platform": "tiktok", "frame": "tiktok", "tiktok_fill": "blur", "res": "source",
-                 "episode_card": {"on": True}, "canvas_text": True, "bar_subs": False}
+                 "episode_card": {"on": True}, "canvas_text": True, "bar_subs": False,
+                 "karaoke": {"on": True, "color": "#FFD400"}}
 
 
 def _canvas(frame: str, pic: tuple[int, int] | None, res: str) -> tuple[int, int] | None:
@@ -109,7 +112,7 @@ def learn(work_dir: Path, opts: dict) -> bool:
         return False
     keep = ("platform", "frame", "tiktok_fill", "preset", "episode_card", "cover_mode",
             "credit_overlay", "ai_label", "audio_mode", "orig_volume", "dub_volume", "voice", "rate",
-            "watermark", "canvas_text", "bar_subs")
+            "watermark", "canvas_text", "bar_subs", "karaoke")
     p.short = {"platform": opts.get("safe_caption") or "tiktok",
                **{k: opts[k] for k in keep if k in opts and k != "platform"}}
     series.save(p)

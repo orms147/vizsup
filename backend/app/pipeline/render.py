@@ -115,6 +115,7 @@ def picture_args(o: dict) -> dict:
         preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
         sharpen=bool(o.get("sharpen", True)),   # "Làm nét hình" (on unless turned off)
         cover=o.get("logo_cover"),              # "Che logo, ghi tên phim": a box + the owner's text
+        karaoke=o.get("karaoke"),               # "Chữ chạy theo lời": words light up as spoken
         watermark=o.get("watermark"),      # the translator's own mark
         fill=o.get("tiktok_fill") or "blur",   # 9:16 bars: blurred picture / black
         episode_card=o.get("episode_card"),    # "Tập 9" chip + "Còn tiếp" end card

@@ -1042,6 +1042,7 @@ def assemble(
     bar_subs: bool = False,              # … and the dialogue in the bottom bar (needs canvas_text)
     sharpen: bool = False,               # "Làm nét hình" (SHARPEN_CAS before the burn)
     cover: dict | None = None,           # "Che logo, ghi tên phim" (disclosure.COVER_DEFAULT)
+    karaoke: dict | None = None,         # "Chữ chạy theo lời": {"on", "color"} (pipeline/karaoke.py)
     still_at: float | None = None,       # ONLY one frame of the finished picture (render.still_job)
     still_h: int = 720,
 ) -> Path:
@@ -1140,10 +1141,17 @@ def assemble(
             episode_card, title if episode_card else "", out_dur),
             *clipshort.events(job, out_dur)]
     still = still_at is not None
+    kara = None
+    if karaoke and karaoke.get("on") and cues_for_subs:
+        from app.pipeline import karaoke as kmod
+
+        # each word lights up while the dub speaks it: the spans the dub track will use
+        kara = {"colour": kmod.colour_for(style, karaoke.get("color")),
+                "spans": kmod.spans(segments) if audio_mode != "original" else {}}
     write_ass(cues_for_subs, job.work_dir / ("still.ass" if still else _ass_name(preview)), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark,
-              cover=disclosure.cover_events(cover, out_dur) or None)
+              cover=disclosure.cover_events(cover, out_dur) or None, karaoke=kara)
     _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
     canvas_name = None
     if clay is not None and canvas_layer is not None:
