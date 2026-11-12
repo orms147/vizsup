@@ -357,7 +357,21 @@ class RenderView(QWidget):
         ll.setContentsMargins(16, 14, 16, 14)
         ll.setSpacing(10)
 
-        ll.addWidget(label("Giọng lồng tiếng", "h3"))
+        # 2026-11-12: the column was ~1130 px of settings on a ~590 px window, most of them the
+        # same every episode. Three folding sections, each with a one-line summary while folded
+        # (all folded = "dựng như lần trước": read three lines, press Dựng video).
+        col = ll
+        open_ = store.load_ui_state().get("render_sections")
+        open_ = open_ if isinstance(open_, dict) else {}
+        self.sec_voice = Collapsible("Giọng và âm thanh", expanded=bool(open_.get("voice")))
+        self.sec_pic = Collapsible("Hình và chữ", expanded=bool(open_.get("pic")))
+        self.sec_more = Collapsible("Phần thêm", expanded=bool(open_.get("more")))
+        self.sections = {"voice": self.sec_voice, "pic": self.sec_pic, "more": self.sec_more}
+        for key, sec in self.sections.items():
+            sec.toggled.connect(lambda _on, k=key: self._save_sections())
+        col.addWidget(self.sec_voice)
+        ll = self.sec_voice.body
+        more = self.sec_more.body
         card = QFrame()
         card.setObjectName("inset")
         ch = QHBoxLayout(card)
@@ -415,7 +429,7 @@ class RenderView(QWidget):
         fit_row.addWidget(self.fit_hint, 1)
         fit_row.addWidget(self.fit_lines_btn)
         fit_row.addWidget(self.fit_btn)
-        ll.addLayout(fit_row)
+        col.addLayout(fit_row)
         self._fit_rows: list[int] = []
         self._fit_cues: list = []
         self._fit_rate = 1.0
@@ -425,9 +439,12 @@ class RenderView(QWidget):
         self.speed.valueChanged.connect(lambda _v: self._update_fit_hint())
         self.speed.valueChanged.connect(self._remember_voice)   # slider, keys, "Dùng 1.30×"
 
-        ll.addWidget(_hline())
-        ll.addWidget(label("Âm thanh bạn muốn nghe", "h3"))
-        grid = QGridLayout()
+        ll.addWidget(label("Âm thanh bạn muốn nghe", "secondary"))
+        # the four cards took ~220 px for a choice that rarely changes: a combo shows it now.
+        # The cards remain the (hidden) model — one checked button, the same signals.
+        self._cards_box = QWidget()
+        grid = QGridLayout(self._cards_box)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
         self.audio_group = QButtonGroup(self)
         self.audio_group.setExclusive(True)
@@ -441,7 +458,17 @@ class RenderView(QWidget):
         self.mode_cards[default_audio_mode(False)].setChecked(True)
         self.audio_group.buttonToggled.connect(lambda *_: self._sync_audio_enabled())
         self.audio_group.buttonClicked.connect(self._on_mode_clicked)   # the user's own choice
-        ll.addLayout(grid)
+        self._cards_box.setVisible(False)
+        ll.addWidget(self._cards_box)
+        self.audio_combo = QComboBox()
+        for key, _ic, title, _desc in MODES:
+            self.audio_combo.addItem(title, key)
+            self.audio_combo.setItemData(self.audio_combo.count() - 1, MODE_TIPS.get(key, ""),
+                                         Qt.ToolTipRole)
+        self.audio_combo.activated.connect(self._on_audio_combo)
+        ll.addWidget(self.audio_combo)
+        self.audio_desc = label("", "small", wrap=True)
+        ll.addWidget(self.audio_desc)
         # no separation engine: say so next to the cards, offer the install hook
         self.sep_box = QFrame()
         sb = QHBoxLayout(self.sep_box)
@@ -463,8 +490,9 @@ class RenderView(QWidget):
         ll.addWidget(self.music_lbl)
         self._sync_audio_enabled()
 
-        ll.addWidget(_hline())
-        ll.addWidget(label("Che phụ đề Trung trên video gốc", "h3"))
+        col.addWidget(self.sec_pic)
+        ll = self.sec_pic.body
+        ll.addWidget(label("Che phụ đề Trung trên video gốc", "secondary"))
         self.cover = QComboBox()
         for text, key in COVERS:
             self.cover.addItem(text, key)
@@ -480,7 +508,7 @@ class RenderView(QWidget):
                                     "Lần dựng Short sau được nhớ cho cả bộ phim.")
         self.short_btn.toggled.connect(self._on_short)
         ll.addWidget(self.short_btn)
-        ll.addWidget(label("Khung hình", "h3"))
+        ll.addWidget(label("Khung hình", "secondary"))
         self.frame = QComboBox()
         for text, key in FRAMES:
             self.frame.addItem(text, key)
@@ -515,7 +543,7 @@ class RenderView(QWidget):
         self.frame.currentIndexChanged.connect(
             lambda _i: self.vertical_cb.setVisible(self.frame.currentData() == "source"))
         self.vertical_cb.setVisible(self.frame.currentData() == "source")
-        ll.addWidget(self.vertical_cb)
+        more.addWidget(self.vertical_cb)
         # "Ảnh bìa tự động" (pipeline/thumbnail.py): thumb.jpg, what YouTube shows
         self.thumb_cb = QCheckBox("Tạo ảnh bìa (thumbnail YouTube)")
         self.thumb_cb.setToolTip(
@@ -523,7 +551,7 @@ class RenderView(QWidget):
             "1280×720 (tự đăng gửi kèm lên YouTube). Ảnh bạn đã chọn ở nút Ảnh bìa được giữ.")
         self.thumb_cb.setChecked(bool(store.load_ui_state().get("render_thumbnail", False)))
         self.thumb_cb.toggled.connect(lambda on: store.update_ui_state(render_thumbnail=on))
-        ll.addWidget(self.thumb_cb)
+        more.addWidget(self.thumb_cb)
         self.safe_cb = QCheckBox("Phụ đề nằm trên vùng ứng dụng che (TikTok / Reels / Shorts)")
         self.safe_cb.setToolTip(
             "Đặt phụ đề phía trên dải tên + mô tả ở đáy và tránh cột nút bên phải, theo bảng "
@@ -547,7 +575,7 @@ class RenderView(QWidget):
         self._sync_canvas_opts()
         self._safe_touched = False       # the user's own choice for this project beats the auto one
         self._short_applied = False
-        ll.addWidget(label("Chất lượng", "h3"))
+        ll.addWidget(label("Chất lượng", "secondary"))
         st = store.load_ui_state()
         qrow = QHBoxLayout()
         qrow.setSpacing(8)
@@ -578,7 +606,7 @@ class RenderView(QWidget):
             "video nguồn đã nét.")
         self.sharpen_cb.setChecked(bool(st.get("render_sharpen", True)))
         self.sharpen_cb.toggled.connect(lambda on: store.update_ui_state(render_sharpen=on))
-        ll.addWidget(self.sharpen_cb)
+        more.addWidget(self.sharpen_cb)
         self.size_lbl = label("", "small", wrap=True)
         ll.addWidget(self.size_lbl)
         self._src_size: tuple[int, int] | None = None
@@ -606,17 +634,16 @@ class RenderView(QWidget):
         self.karaoke_color.currentIndexChanged.connect(lambda _i: self._save_karaoke())
         krow.addWidget(self.karaoke_cb, 1)
         krow.addWidget(self.karaoke_color)
-        ll.addLayout(krow)
+        more.addLayout(krow)
 
         # F-1/F-2/F-3: credit, AI-voice label, right to use (docs/plan/F-roadmap.md) — folded
         # into one section with a one-line summary: it is set once per channel, not per episode
-        ll.addWidget(_hline())
         st = store.load_ui_state()
         self.post_section = Collapsible("Watermark · ghi nguồn · nhãn AI · thẻ tập",
                                         expanded=bool(st.get("render_post_open", False)))
         self.post_section.toggled.connect(lambda on: store.update_ui_state(render_post_open=on))
         pb = self.post_section.body
-        ll.addWidget(self.post_section)
+        more.addWidget(self.post_section)
         self.credit_cb = QCheckBox("Ghi nguồn trên video (5 giây đầu)")
         self.credit_cb.setChecked(bool(st.get("credit_overlay", True)))
         self.credit_cb.toggled.connect(lambda on: store.update_ui_state(credit_overlay=on))
@@ -660,8 +687,9 @@ class RenderView(QWidget):
             cb.toggled.connect(lambda _on: self._update_post_summary())
         self._update_post_summary()
         self.comment_lbl = label("", "small", wrap=True)          # F-4
-        ll.addWidget(self.comment_lbl)
-        ll.addStretch(1)
+        col.addWidget(self.sec_more)
+        col.addWidget(self.comment_lbl)
+        col.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -729,6 +757,12 @@ class RenderView(QWidget):
                     self.audio_group.buttonToggled, self.preset.currentIndexChanged,
                     self.res.currentIndexChanged, self.frame.currentIndexChanged):
             sig.connect(lambda *_a: self._update_summary())
+        for sig in (self.pitch.valueChanged, self.cover.currentIndexChanged,
+                    self.orig_vol.valueChanged, self.dub_vol.valueChanged,
+                    self.vertical_cb.toggled, self.thumb_cb.toggled, self.sharpen_cb.toggled,
+                    self.karaoke_cb.toggled, self.short_btn.toggled, self.safe_cb.toggled):
+            sig.connect(lambda *_a: self._update_sections())
+        compact_combo(self.audio_combo, 10)
         self._update_summary()
         return panel
 
@@ -1103,6 +1137,56 @@ class RenderView(QWidget):
         bits.append(self.preset.currentText().split(" · ")[0])
         bits += size[1:]                                              # ước tính ~223 MB
         self.summary_lbl.setText(" · ".join(b for b in bits if b))
+        self._update_sections()
+
+    def _save_sections(self) -> None:
+        store.update_ui_state(render_sections={k: s.is_expanded()
+                                               for k, s in self.sections.items()})
+
+    def _update_sections(self, *_a) -> None:
+        """The one-line summaries of the three folded sections — what «Dựng video» will use."""
+        if not hasattr(self, "sec_more") or not hasattr(self, "karaoke_cb"):
+            return                                   # still being built
+        mode = self._audio_mode()
+        bits = []
+        if mode != "original" and self.voice.currentText():
+            v = f"{self.voice.currentText()} · {self.speed.value() / 100:.2f}×"
+            if self.pitch.value():
+                v += f" · cao độ {self.pitch.value():+d}"
+            bits.append(v)
+        bits.append(next((t for k, _i, t, _d in MODES if k == mode), ""))
+        self.sec_voice.set_summary(" · ".join(b for b in bits if b))
+        pic = [self.cover.currentText().split(" · ")[0],
+               "Dọc 9:16" if self.frame.currentData() == "tiktok" else "Khung gốc",
+               f"{self.res.currentText().split(' (')[0]} {self.preset.currentText().split(' · ')[0]}"]
+        if self.short_btn.isChecked():
+            pic.append("Short")
+        self.sec_pic.set_summary(" · ".join(pic))
+        extra = [name for on, name in (
+            (self.vertical_cb.isChecked() and self.frame.currentData() == "source", "bản dọc 9:16"),
+            (self.thumb_cb.isChecked(), "ảnh bìa"),
+            (self.sharpen_cb.isChecked(), "làm nét hình"),
+            (self.karaoke_cb.isChecked(), "chữ chạy theo lời")) if on]
+        self.sec_more.set_summary(("Bật: " + ", ".join(extra)) if extra else "Không bật gì thêm")
+
+    def _on_audio_combo(self, index: int) -> None:
+        """The owner picked an audio kind: the same as clicking its (hidden) card."""
+        card = self.mode_cards.get(self.audio_combo.itemData(index))
+        if card is not None and not card.isChecked():
+            card.click()
+        self._sync_audio_combo()
+
+    def _sync_audio_combo(self) -> None:
+        if not hasattr(self, "audio_combo"):
+            return
+        mode = self._audio_mode()
+        i = self.audio_combo.findData(mode)
+        if i >= 0 and i != self.audio_combo.currentIndex():
+            self.audio_combo.setCurrentIndex(i)
+        desc = next((d for k, _i, _t, d in MODES if k == mode), "")
+        if mode == "keep_music" and not self._sep_ok:
+            desc = "Cần bộ tách giọng AI — chưa cài"
+        self.audio_desc.setText(desc)
 
     def _update_post_summary(self, *_a) -> None:
         """What the folded "Đăng tải & thương hiệu" section holds, in one line. A missing
@@ -1241,6 +1325,7 @@ class RenderView(QWidget):
         if hasattr(self, "ai_label_cb"):           # built after the audio cards
             self.ai_label_cb.setEnabled(dub)
         self._update_fit_hint()                    # no dub → no "late lines" warning
+        self._sync_audio_combo()
 
     def suggest_original(self, singing: str | None) -> None:
         """E-8: a mostly-sung video starts on "Giữ giọng gốc" (once per job; the user's
@@ -1315,6 +1400,7 @@ class RenderView(QWidget):
         """Without an engine, "Giữ nhạc nền" stays visible but says what it needs."""
         card = self.mode_cards["keep_music"]
         desc = MODES[0][3]
+        self._sync_audio_combo()
         if self._sep_ok:
             card.set_desc(desc)
             self.sep_box.setVisible(False)

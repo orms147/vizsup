@@ -185,6 +185,7 @@ def test_a_native_vertical_source_gets_safe_captions_by_itself(qapp, storage):
 
 def test_short_preset_turns_on_the_bar_text_and_it_only_shows_in_the_9_16_frame(qapp, storage):
     v = _view(qapp)
+    v.sec_pic.set_expanded(True)                 # the options live in "Hình và chữ"
     assert not v.canvas_cb.isVisibleTo(v) and v.collect_opts()["canvas_text"] is False
     v.short_btn.click()
     assert v.canvas_cb.isVisibleTo(v) and v.bars_cb.isVisibleTo(v)

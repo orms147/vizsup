@@ -36,19 +36,57 @@ def _in(card, w):
     return QRect(w.mapTo(card, w.rect().topLeft()), w.size())
 
 
-def test_mode_cards_do_not_overlap_their_text(rv):
-    for key, card in rv.mode_cards.items():
-        t, d = _in(card, card._title), _in(card, card._desc)
-        assert not t.intersects(d), key
-        assert card.rect().contains(t) and card.rect().contains(d), key
+def test_three_folded_sections_say_what_the_render_will_use(rv):
+    """2026-11-12: the options column is three folding sections, folded by default, each with a
+    one-line summary — no scrolling to press Dựng video."""
+    from PySide6.QtWidgets import QScrollArea
+
+    for sec in rv.sections.values():
+        assert not sec.is_expanded() and not sec.summary.isHidden()
+    assert "Giữ" in rv.sec_voice.summary.text() or "giọng" in rv.sec_voice.summary.text().lower()
+    assert "Khung gốc" in rv.sec_pic.summary.text()
+    left = rv._split.widget(0)
+    area = left.findChildren(QScrollArea)[0]
+    assert area.verticalScrollBar().maximum() == 0           # everything fits: nothing to scroll
+    rv.thumb_cb.setChecked(True)
+    assert "ảnh bìa" in rv.sec_more.summary.text()
+    rv.thumb_cb.setChecked(False)
+    rv.sharpen_cb.setChecked(False)
+    rv.karaoke_cb.setChecked(False)
+    assert rv.sec_more.summary.text() == "Không bật gì thêm"
+    rv.frame.setCurrentIndex(rv.frame.findData("tiktok"))
+    assert "Dọc 9:16" in rv.sec_pic.summary.text()
 
 
-def test_cards_fit_at_the_narrowest_options_width(rv):
-    rv._split.setSizes([360, 740])
+def test_sections_remember_open_and_closed(tmp_path, monkeypatch):
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    v = render_view.RenderView()
+    v.sec_voice.header.click()
+    assert v.sec_voice.is_expanded()
+    v2 = render_view.RenderView()
+    assert v2.sec_voice.is_expanded() and not v2.sec_more.is_expanded()
+
+
+def test_audio_kind_is_one_combo_that_drives_the_same_choice(rv):
+    """The four tall cards are the hidden model; the combo shows and sets the choice."""
+    from desktop import store
+
+    rv.sec_voice.set_expanded(True)
     QApplication.processEvents()
-    for key, card in rv.mode_cards.items():
-        t, d = _in(card, card._title), _in(card, card._desc)
-        assert not t.intersects(d) and card.rect().contains(d), key
+    assert rv.audio_combo.isVisible() and not rv._cards_box.isVisible()
+    assert rv.audio_combo.count() == 4
+    assert rv.audio_combo.currentData() == rv._audio_mode()
+    i = rv.audio_combo.findData("replace")
+    rv.audio_combo.setCurrentIndex(i)
+    rv.audio_combo.activated.emit(i)                       # what a pick by the owner sends
+    assert rv._audio_mode() == "replace" and rv.mode_cards["replace"].isChecked()
+    assert rv.collect_opts()["audio_mode"] == "replace"
+    assert store.load_ui_state()["render_audio"] == "replace"      # the next project's default
+    assert "Bỏ hết âm gốc" in rv.audio_desc.text()
+    assert "Chỉ giọng Việt" in rv.sec_voice.summary.text() or rv.sec_voice.is_expanded()
+    rv.mode_cards["duck"].setChecked(True)                 # code picks one: the combo follows
+    assert rv.audio_combo.currentData() == "duck"
 
 
 def test_no_dub_mode_says_it_keeps_the_original_audio(rv):

@@ -67,6 +67,7 @@ def test_posting_options_are_in_one_folded_section_with_a_summary(qapp, storage)
     from desktop.theme import V2
 
     assert V2["amber"] in sec.summary.styleSheet()              # no right to use recorded: amber
+    v.sec_more.set_expanded(True)                               # it nests in "Phần thêm"
     sec.header.click()                                          # open
     for _ in range(3):
         qapp.processEvents()
