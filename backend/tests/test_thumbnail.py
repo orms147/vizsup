@@ -404,11 +404,13 @@ def test_the_render_page_offers_it_and_saves_the_cover_with_the_video(
     from desktop.views.render_view import RenderView
 
     v = RenderView()
-    assert v.thumb_cb.isChecked() and v.collect_opts()["thumbnail"] is True
-    v.thumb_cb.setChecked(False)
-    assert store.load_ui_state()["render_thumbnail"] is False
+    # 2026-11-12: an option, off until ticked (the owner makes the cover himself)
+    assert not v.thumb_cb.isChecked() and not v.vertical_cb.isChecked()
     assert v.collect_opts()["thumbnail"] is False and not thumbnail.wanted(v.collect_opts())
+    assert v.collect_opts()["also_vertical"] is False
     v.thumb_cb.setChecked(True)
+    assert store.load_ui_state()["render_thumbnail"] is True
+    assert v.collect_opts()["thumbnail"] is True
     assert v.thumb_btn.parent() is v.save_btn.parent()           # the result pane's row
     d = _project(storage, clips)
     thumbnail.make(d)

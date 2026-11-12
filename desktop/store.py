@@ -50,10 +50,19 @@ def load_ui_state() -> dict:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {}
+        changed = False
         if isinstance(data, dict) and not data.get("ai_review_off"):
             # 2026-11-02: "AI soát bản dịch" is off by default (the owner saves cost); a saved
             # "on" from the old default is switched off ONCE, a later choice sticks
             data["ai_review"], data["ai_review_off"] = False, True
+            changed = True
+        if isinstance(data, dict) and not data.get("render_extras_off"):
+            # 2026-11-12: the vertical copy and the automatic cover are plain options, off by
+            # default (the owner makes the cover himself; each costs render time) — reset ONCE
+            data["render_vertical"] = data["render_thumbnail"] = False
+            data["render_extras_off"] = True
+            changed = True
+        if changed:
             try:
                 atomic_write_text(p, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError:
@@ -78,7 +87,7 @@ _OTHER_UI_KEYS = ("render_frame", "export_dir", "credit_overlay", "ai_label", "r
                   "render_vertical", "render_voice", "render_rate", "render_audio",
                   "render_pitch", "options_advanced", "render_thumbnail", "render_sharpen",
                   "ai_review_off", "logo_cover", "render_real_view", "sv_watermark",
-                  "render_karaoke")
+                  "render_karaoke", "render_extras_off")
 
 
 def update_ui_state(**kv) -> None:

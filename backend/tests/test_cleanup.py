@@ -207,3 +207,20 @@ def test_cleanup_dialog_ticks(lib):
     dlg.checks["source"].setChecked(False)
     assert job.work_dir / "source.mp4" not in dlg.paths()
     dlg.close()
+
+
+def test_saved_extras_are_switched_off_once(tmp_path, monkeypatch):
+    """2026-11-12: the vertical copy and the automatic cover are options, off by default — a
+    saved "on" from the old default is reset ONCE; a later tick sticks."""
+    pytest.importorskip("PySide6.QtWidgets")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from app.config import settings
+    from desktop import store
+
+    monkeypatch.setattr(settings, "vizsup_storage_dir", tmp_path)
+    (tmp_path / "ui_state.json").write_text(json.dumps(
+        {"render_vertical": True, "render_thumbnail": True, "ai_review_off": True}), encoding="utf-8")
+    st = store.load_ui_state()
+    assert st["render_vertical"] is False and st["render_thumbnail"] is False
+    store.update_ui_state(render_vertical=True)
+    assert store.load_ui_state()["render_vertical"] is True

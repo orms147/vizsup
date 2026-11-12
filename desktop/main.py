@@ -1305,6 +1305,12 @@ class MainWindow(QMainWindow):
             job, jopts = loaded
             opts = batch.opts_for(job.work_dir, template)
             opts["tts"] = template.get("tts") or jopts.get("tts") or settings.vizsup_default_tts
+            # the two extras follow the render page's ticks NOW, not what the template's
+            # render happened to make (an old template still says "vertical + cover")
+            ui = store.load_ui_state()
+            opts["also_vertical"] = (bool(ui.get("render_vertical", False))
+                                     and (opts.get("frame") or "source") == "source")
+            opts["thumbnail"] = bool(ui.get("render_thumbnail", False))
             items.append({"id": jid, "opts": opts,
                           "title": job.metadata.get("title") or jid})
         added = self._batch_add(items)

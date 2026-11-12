@@ -510,7 +510,7 @@ class RenderView(QWidget):
         self.vertical_cb.setToolTip(
             "Dựng xong bản ngang thì làm thêm output.vertical.mp4: cùng video, phụ đề và giọng, "
             "đặt giữa khung 1080×1920 trên nền hình mờ. Chỉ mã hóa thêm, không lồng tiếng lại.")
-        self.vertical_cb.setChecked(bool(store.load_ui_state().get("render_vertical", True)))
+        self.vertical_cb.setChecked(bool(store.load_ui_state().get("render_vertical", False)))
         self.vertical_cb.toggled.connect(lambda on: store.update_ui_state(render_vertical=on))
         self.frame.currentIndexChanged.connect(
             lambda _i: self.vertical_cb.setVisible(self.frame.currentData() == "source"))
@@ -521,7 +521,7 @@ class RenderView(QWidget):
         self.thumb_cb.setToolTip(
             "Dựng xong thì chọn một khung hình đẹp, thêm tên phim + số tập chữ lớn → thumb.jpg "
             "1280×720 (tự đăng gửi kèm lên YouTube). Ảnh bạn đã chọn ở nút Ảnh bìa được giữ.")
-        self.thumb_cb.setChecked(bool(store.load_ui_state().get("render_thumbnail", True)))
+        self.thumb_cb.setChecked(bool(store.load_ui_state().get("render_thumbnail", False)))
         self.thumb_cb.toggled.connect(lambda on: store.update_ui_state(render_thumbnail=on))
         ll.addWidget(self.thumb_cb)
         self.safe_cb = QCheckBox("Phụ đề nằm trên vùng ứng dụng che (TikTok / Reels / Shorts)")
