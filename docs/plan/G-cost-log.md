@@ -347,3 +347,27 @@ decode + cas + ass with no encoder 13.2×; the full encode 12.6×; without cas 1
 `-filter_threads 8` slower (9.3×). The audio chain (two loudnorm passes) takes 5.9 s per 240 s.
 So the CPU filter chain and the encoder are each at ~13–14× and no flag buys more; a faster
 render would need the filters on the GPU — not attempted.
+
+### 2026-11-12 — OCR: detection at the strip's own size (10.6 → 3.9 min, and more lines)
+
+Profile of one frame (RapidOCR PP-OCRv6 small, DirectML, the real 1920×360 bottom-third strip):
+detection 167–175 ms, direction classifier 7–9 ms, recognition 10–13 ms. rapidocr's default
+`Det.limit_type=min, limit_side_len=736` scales the SHORT side up to 736 — the strip became
+~3925×736 before detection. With `limit_type=max, limit_side_len=1920` (no upscale) detection
+is 32 ms. "max 1280" and "min 352" gave byte-identical reads to "max 1920"; "min 480" was slower
+(76–92 ms) and found fewer lines.
+
+| | old sizing | native size |
+|---|---|---|
+| `794b144e1edb` (35:43, 4287 frames), whole `extract_hardsubs` | 637 s (149 ms/frame) | **231 s (54 ms/frame)** |
+| cues | 1025 | 1160 (after the scrap filter; 1247 before) |
+| new high-confidence Chinese lines | — | **98** (对啊, 快跑, 快走, 等等, 好了, 记住 … checked on frames) |
+| suspect cues | 58 | 45 |
+| `fab77333de2b` (30:01, 3603 frames, a second stylised text line under the Chinese) | — | 260 s (72 ms/frame) |
+| cues / suspect | 652 / 288 | 548 / 168 |
+
+On `fab77…` the Chinese-character streams differ almost only in misreads of the second text
+line; real lines: 3 gained (这位同学, 什么钥匙, 一个), 1 lost (原来你在这里). The old sizing missed
+short lines because the upscaled glyphs are too large for the detector — likely a large part of
+the "sentences with no cue" seen on earlier series. Scrap filter (`ocr.is_scrap`): 87 / 88 cues
+dropped on the two videos, all picture fragments (digits, single characters, Latin bits).

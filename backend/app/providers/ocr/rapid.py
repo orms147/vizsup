@@ -28,6 +28,11 @@ class RapidOCRLocal(OCRProvider):
     def available(self) -> bool:
         return _installed("rapidocr") or _installed("rapidocr_onnxruntime")
 
+    def cache_tag(self) -> str:
+        from app.pipeline import ocr
+
+        return f"{self.name}+{ocr.DET_TAG}"       # a checkpoint read with the old sizing restarts
+
     @contextmanager
     def reader(self, *, log=None, cancel=None):
         from app.pipeline import ocr

@@ -200,6 +200,16 @@ def accelerator() -> str:
     return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
 
 
+# Text detection at the strip's OWN size (2026-11-12). rapidocr's default (limit_type "min",
+# 736) scales the SHORT side up to 736 px: a 1920x360 bottom-third strip became ~3925x736 before
+# detection — 167 of 189 ms per frame, and it MISSED short lines (the glyphs end up too large for
+# the detector): on two real episodes, 5 minutes each, the native size read 23 / 27 more real
+# lines (快走, 等等, 好了, 记住 … — checked on the frames) and lost none, at 49-66 ms per frame
+# instead of 133-143. "max 1920" = never upscaled; a 4K strip is brought down to 1920 wide.
+DET_NATIVE = {"Det.limit_type": "max", "Det.limit_side_len": 1920}
+DET_TAG = "native1920"          # part of the OCR checkpoint key (reads of the old sizing differ)
+
+
 def _build_ocr():
     """Construct a RapidOCR engine. Prefer the current `rapidocr` package (PP-OCRv5+,
     on the GPU through DirectML or CUDA when the matching onnxruntime build is there);
@@ -233,8 +243,11 @@ def _build_ocr():
         # to PP-OCRv6+ and *reject* the v5 enum for some model types; when the pin and
         # the CUDA keys rode in one params dict, that rejection silently cost the GPU
         # too (observed on rapidocr 3.x: v5 refused → fell through to CPU defaults).
-        for params in (v5 | gpu, gpu, v5):        # gpu == {} on a CPU-only build
-            if not params:
+        # the detection sizing rides on every rung; a build that rejects the key falls through
+        # to the same rung without it
+        ladder = [v5 | gpu, gpu, v5]
+        for params in [p | DET_NATIVE for p in ladder] + [DET_NATIVE] + ladder:
+            if not params:                        # gpu == {} on a CPU-only build
                 continue
             try:
                 return RapidOCR(params=params)
@@ -609,6 +622,17 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
                                        uploader=(job.metadata or {}).get("uploader"))
     alive = {id(c) for c in survivors}
     kept = [t for t in kept if id(t[0]) in alive]
+    # 2c) scraps: detection at the native size also picks up bits of the picture ("1", "YA",
+    # "一", "公"). Local engines only (they give a score): see ``is_scrap``.
+    if prov.local:
+        scraps = [t for t in kept if is_scrap(t[0], t[1])]
+        if scraps:
+            gone = {id(t) for t in scraps}
+            kept = [t for t in kept if id(t) not in gone]
+            dropped += [{"start": c.start, "end": c.end, "text": c.text, "why": "scrap"}
+                        for c, _cf, _rf in scraps]
+            if log:
+                log(f"… bỏ {len(scraps)} mẩu chữ rác (ký tự lẻ, độ tin cậy thấp)")
     (job.work_dir / "ocr_dropped.json").write_text(
         json.dumps(dropped, ensure_ascii=False, indent=1), encoding="utf-8")
     cues = []
@@ -627,6 +651,24 @@ def extract_hardsubs(job: Job, *, fps: float = 2.0, crop: str = "bottom-third",
         json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     write_srt(cues, job.cn_srt)
     return job
+
+
+SCRAP_CONF = 0.8                # under this a one-character / no-Chinese read is a scrap
+SCRAP_DUR = 1.0                 # … when it also stays on screen no longer than this
+
+
+def is_scrap(cue: Cue, conf: float) -> bool:
+    """A short, low-confidence read with no Chinese word in it: no Chinese character at all,
+    or a single one ("一", "公", "1", "YA" — pieces of the background the detector boxes at the
+    native size). A real one-character line ("好", "行", "快") is read with confidence ~1.0 and
+    stays; two or more Chinese characters always stay. A bare one- or two-digit number that
+    flashes by is dropped at any score (they came back at 0.8-0.98). Pure."""
+    if (cue.end - cue.start) > SCRAP_DUR:
+        return False
+    text = "".join(cue.text.split())
+    if len(text) <= 2 and text.isdigit():
+        return True               # "1", "7", "11": a number off the picture, whatever the score
+    return conf < SCRAP_CONF and _cjk_count(cue.text) <= 1
 
 
 def _suspect_indexes(job: Job, n: int) -> list[int] | None:
