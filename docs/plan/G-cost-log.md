@@ -332,3 +332,18 @@ and trusting an empty mask loses coloured captions. With the safe rules (reuse o
 text read while the mask holds; empty reuse only once the video's text frames are known to be
 white) it skipped 23 % (`794b144e1edb`) and 7 % (`fab77333de2b`) — not worth the risk. The lever
 that exists is "OCR nhanh" (1 frame/s, 2× faster; fine for films). Spend of this pass: ≈ $0.03.
+
+### 2026-11-12 — the real app on a scratch copy (first 4 min of `794b144e1edb`, 88 lines)
+
+Driven in-process (real window, real worker threads; scratch storage, the owner's `ui_state.json`
+copied). Dựng video, VieNeu on the GPU, 1080p "Nét", sharpen on, karaoke on, no vertical copy /
+cover (the new defaults): **41.7 s** — TTS 7.7 s (6.4 s of it before the first line came back:
+the first batched forward), dub mix 1.5 s, encode 29.5 s (8× real time). "Xem nhanh" with the
+voice cached: 26.6 s → **15.9 s** after scaling the proof first.
+
+Where the encode goes (same clip, video only, NVENC p5 CQ 21): decode alone 125× real time;
+decode + cas + ass with no encoder 13.2×; the full encode 12.6×; without cas 14.3×; `null` filter
+14.2×; p1 / p4 / p3 no faster (11–11.2×); x264 veryfast 10.2×; `-hwaccel d3d11va` 11.1×;
+`-filter_threads 8` slower (9.3×). The audio chain (two loudnorm passes) takes 5.9 s per 240 s.
+So the CPU filter chain and the encoder are each at ~13–14× and no flag buys more; a faster
+render would need the filters on the GPU — not attempted.

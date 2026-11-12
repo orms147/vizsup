@@ -728,6 +728,9 @@ TIKTOK_W, TIKTOK_H = 1080, 1920
 STILL_PNG = "still.png"
 
 
+PROOF_H = 640          # the quick proof's picture height
+
+
 def _ass_name(preview: bool) -> str:
     return "preview.ass" if preview else "subs.ass"
 
@@ -933,6 +936,16 @@ def _build_render(
 
     ass = "still.ass" if still else _ass_name(preview)   # never the quick proof's own files
     vsrc = src_v
+    # The quick proof scaled down AFTER everything was drawn at full size, so "Xem nhanh" took
+    # as long as the real render (measured 2026-11-12, 4 min of 1080p: proof 26.6 s, render
+    # 29.5 s). For the plain case — source frame, no glass mask (its geometry is in pixels) —
+    # the picture is made small FIRST; libass lays the .ass out by PlayRes, so the text sits
+    # where the render puts it. The 9:16 canvas and the glass cover keep the old order.
+    small_first = (preview and not still and frame != "tiktok"
+                   and not (cover_mode == "glass" and glass_band))
+    if small_first:
+        parts.append(f"{vsrc}scale=-2:{PROOF_H}[vsmall]")
+        vsrc = "[vsmall]"
     if sharpen:
         # a soft (low-bitrate) source looks crisper; first, so a blurred cover stays soft
         parts.append(f"{vsrc}cas={SHARPEN_CAS:g}[vsharp]")
@@ -993,8 +1006,8 @@ def _build_render(
         if canvas_ass:      # text in the bars (hook, chip, end card, dialogue): on the whole frame
             parts.append(f"[vt]ass={canvas_ass}{_ass_fonts(wd)}[vc]")
             vmap = "[vc]"
-    if preview:                     # same graph, scaled down after the subs are burned
-        parts.append(f"{vmap}scale=-2:{int(still_h) if still else 640}[vp]")
+    if preview and not small_first:  # same graph, scaled down after the subs are burned
+        parts.append(f"{vmap}scale=-2:{int(still_h) if still else PROOF_H}[vp]")
         vmap = "[vp]"
     if still:
         (wd / "filter_complex_still.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")

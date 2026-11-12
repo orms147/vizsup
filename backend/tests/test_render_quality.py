@@ -94,7 +94,7 @@ def test_tiktok_canvas_scales_proportionally(job):
 def test_preview_stays_640p_whatever_the_quality(job):
     j, segs = job
     _cmd, graph = _build(j, segs, res="480", preview=True)
-    assert "[vscl]" not in graph and "scale=-2:640[vp]" in graph
+    assert "[vscl]" not in graph and "scale=-2:640[vsmall]" in graph      # small first
 
 
 def test_burn_and_output_sizes():

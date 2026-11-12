@@ -404,6 +404,9 @@ class MainWindow(QMainWindow):
             self.render.set_group(_group_status(self.job))
             self.editor.reload_fit_report()             # F-10: late dub lines
         quick = Path(path).name == "preview.mp4"
+        # the bar kept saying "Chọn âm thanh rồi dựng video" under a finished video (2026-11-12)
+        self.status.set_status("Bản xem nhanh đã xong — nghe thử rồi bấm Dựng video" if quick
+                               else "Đã dựng xong — xem lại, rồi Lưu video", "ok")
         self._notify("Bản xem nhanh đã sẵn sàng" if quick else "Đã dựng xong video",
                      Path(path).name)
 

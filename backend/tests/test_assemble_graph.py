@@ -203,8 +203,21 @@ def test_preview_is_the_same_graph_scaled_down_and_fast(big_job):
     assert "ultrafast" in quick and "veryfast" in final
     # same mix + subs; its own .ass so subs.ass keeps matching output.mp4 (soft-sub export)
     assert "preview.ass" in graph_quick and "subs.ass" not in graph_quick
-    assert graph_quick.replace("preview.ass", "subs.ass").startswith(graph_final.rstrip("\n"))
-    assert "[v]scale=-2:640[vp]" in graph_quick and "[vp]" in quick
+    # 2026-11-12: the proof is made small FIRST (scaling after the burn made "Xem nhanh" as slow
+    # as the render); the rest of the graph is the render's, on the small picture
+    assert "[0:v]scale=-2:640[vsmall]" in graph_quick and "[vp]" not in graph_quick
+    same = graph_quick.replace("preview.ass", "subs.ass").replace(
+        "[0:v]scale=-2:640[vsmall];\n[vsmall]", "[0:v]")
+    assert same == graph_final
+    assert quick[quick.index("-map") + 1] == "[v]"
+
+
+def test_preview_of_a_9_16_render_keeps_the_old_order(big_job):
+    """Its geometry is in output pixels: drawn at full size, scaled down last."""
+    job, segments = big_job
+    quick = _build(job, segments[:3], preview=True, frame="tiktok")
+    graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
+    assert "[vsmall]" not in graph and "scale=-2:640[vp]" in graph and "[vp]" in quick
 
 
 def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
