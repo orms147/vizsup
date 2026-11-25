@@ -65,6 +65,33 @@ def test_one_changed_line_resynthesizes_one(job, monkeypatch):
     assert fake.calls == ["câu hai ĐÃ SỬA"]
 
 
+def test_output_word_rules_apply_once_to_dub_and_keep_the_editor_text(job, monkeypatch):
+    from app.pipeline import word_filter
+
+    fake = _use(monkeypatch, FakeTTS())
+    original = VI.replace("câu một", "GIẾT, chết chệt. Đồ súc sinh!")
+    job.vi_srt.write_text(original, encoding="utf-8")
+    rules = [*word_filter.DEFAULT_RULES, ("súc sinh", "con vật"), ("dít", "làm hại")]
+    word_filter.save(job, True, rules)
+
+    synthesize(job, provider="fake", trim=False)
+
+    assert fake.calls[0] == "DÍT, chớt chệt. Đồ khả ái!"
+    assert job.vi_srt.read_text(encoding="utf-8") == original
+
+
+def test_default_word_rules_do_not_leave_half_a_phrase(tmp_path):
+    from types import SimpleNamespace
+
+    from app.pipeline import word_filter
+
+    job = SimpleNamespace(work_dir=tmp_path)
+    word_filter.save(job, True, list(word_filter.DEFAULT_RULES))
+    apply = word_filter.transform(job)
+    assert apply("Đồ khốn kiếp!") == "Đồ đáng ghét!"
+    assert apply("khốn kiếp thật") == "quá đáng thật"
+
+
 def test_voice_change_resynthesizes_all(job, monkeypatch):
     fake = _use(monkeypatch, FakeTTS())
     synthesize(job, provider="fake", voice="vi-VN-HoaiMyNeural")

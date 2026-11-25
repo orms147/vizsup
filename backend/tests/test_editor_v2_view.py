@@ -58,6 +58,36 @@ def test_locked_cue_refuses_nudges_without_an_undo_step(view):
     assert not view.cues[0].locked
 
 
+def test_region_dialog_keeps_ocr_area_and_output_position_independent(view, monkeypatch):
+    from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRectF
+    from PySide6.QtGui import QPixmap
+
+    from desktop.widgets.region_dialog import RegionDialog, _RegionEntry
+
+    pending = []
+    monkeypatch.setattr(view, "_run_async", lambda *args: pending.append(args))
+    manager = RegionDialog(view, None, [], 3, 6)
+    entry = _RegionEntry(manager, None)
+    entry.show()
+    array = QByteArray()
+    buffer = QBuffer(array)
+    buffer.open(QIODevice.WriteOnly)
+    pixmap = QPixmap(640, 360)
+    pixmap.fill()
+    assert pixmap.save(buffer, "JPG")
+    buffer.close()
+    pending.pop()[1](bytes(array))
+    entry.picker.rect = QRectF(.2, .2, .5, .2)
+    entry._translate()
+    pending.pop()[1](("Movie title", "Tên phim"))
+    entry._place(.6, .4)
+    entry._save()
+
+    assert entry.caption.text == "Tên phim"
+    assert (entry.caption.x, entry.caption.y) == (.6, .4)
+    assert entry.caption.area == {"x": .2, "y": .2, "w": .5, "h": .2}
+
+
 def test_typing_is_one_undo_step_per_session(view):
     ed = view.inspector.vi_edit
     depth = len(view._undo_stack)

@@ -65,3 +65,54 @@ def test_the_still_follows_the_9_16_frame_watermark_and_cover(job):
     png = render.still_job(job, o, 1.0, height=640)
     img = QImage(str(png))
     assert img.height() == 640 and img.width() == 360          # the 9:16 canvas, scaled
+
+
+def test_region_caption_overlaps_dialogue_and_uses_filtered_text(job):
+    from PySide6.QtGui import QImage
+
+    from app.pipeline import approval, region_captions, word_filter
+
+    before = approval.revision(job)
+    region_captions.save(job, [region_captions.RegionCaption(
+        1.0, {"x": .2, "y": .2, "w": .4, "h": .2}, .7, 1.5, "标题", "Đồ súc sinh", .5, .3)])
+    assert approval.revision(job) != before
+    word_filter.save(job, True, list(word_filter.DEFAULT_RULES))
+
+    path = render.still_job(job, {}, 1.0)
+    ass = (job.work_dir / "still.ass").read_text(encoding="utf-8")
+    assert r"{\an5\pos(960,324)}Đồ khả ái" in ass
+    assert "Câu một" in ass
+    still = QImage(str(path))
+    assert not still.isNull()
+    assert any(still.pixelColor(x, y).red() > 170
+               for x in range(still.width() * 2 // 5, still.width() * 3 // 5, 2)
+               for y in range(still.height() // 4, still.height() * 7 // 20, 2))
+    assert _white_share(path) > 0
+
+    image = QImage()
+    assert image.loadFromData(region_captions.frame(job, 1.0, {"x": .2, "y": .2, "w": .4, "h": .2}))
+    assert (image.width(), image.height()) == (256, 72)
+
+
+def test_region_translation_sends_only_the_selected_crop(job, monkeypatch):
+    from base64 import b64decode
+    from types import SimpleNamespace
+
+    from PySide6.QtGui import QImage
+
+    from app.pipeline import region_captions
+    from app.providers import registry
+
+    def chat(**kwargs):
+        image = QImage()
+        content = kwargs["messages"][0]["content"]
+        cropped = b64decode(content[1]["image_url"]["url"].partition(",")[2])
+        assert image.loadFromData(cropped)
+        assert (image.width(), image.height()) == (256, 72)
+        answer = SimpleNamespace(content='{"source": "Movie title", "translation": "Tên phim"}')
+        return SimpleNamespace(choices=[SimpleNamespace(message=answer)])
+
+    monkeypatch.setattr(registry, "get_translator",
+                        lambda name: SimpleNamespace(available=lambda: True, _chat=chat))
+    assert region_captions.translate(job, 1.0, {"x": .2, "y": .2, "w": .4, "h": .2}) == (
+        "Movie title", "Tên phim")

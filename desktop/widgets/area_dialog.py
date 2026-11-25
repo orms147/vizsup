@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -17,12 +17,15 @@ from desktop.widgets.chrome import button, label
 class AreaPicker(QWidget):
     """A frame fitted into the widget + one normalized rectangle the mouse draws / moves."""
 
+    pointPicked = Signal(float, float)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._pix: QPixmap | None = None
         self.rect: QRectF | None = None          # normalized 0..1 of the frame
         self.logos: list[QRectF] = []            # regions OCR must skip (creator logo…)
         self.mode = "band"                       # "band" = the subtitle band · "logo" = logo regions
+        self.target: QPointF | None = None
         self.logo_sel = -1
         self._drag: tuple[str, QPointF, QRectF | None] | None = None
         self.setMinimumSize(560, 315)
@@ -30,7 +33,9 @@ class AreaPicker(QWidget):
         self.setCursor(Qt.CrossCursor)
 
     def set_frame(self, path: Path) -> None:
-        pix = QPixmap(str(path))
+        self.set_pixmap(QPixmap(str(path)))
+
+    def set_pixmap(self, pix: QPixmap) -> None:
         self._pix = pix if not pix.isNull() else None
         self.update()
 
@@ -64,6 +69,10 @@ class AreaPicker(QWidget):
 
     def mousePressEvent(self, e) -> None:
         p = self._norm(e.position())
+        if self.mode == "point":
+            if self._view().contains(e.position()):
+                self.pointPicked.emit(p.x(), p.y())
+            return
         if self.mode == "logo":
             hit = next((i for i in range(len(self.logos) - 1, -1, -1) if self.logos[i].contains(p)), -1)
             if hit >= 0:
@@ -139,6 +148,11 @@ class AreaPicker(QWidget):
             p.fillRect(r, QColor(255, 60, 60, 90))
             p.setPen(QPen(QColor("#ff5c5c"), 3 if i == self.logo_sel else 2))
             p.drawRect(r)
+        if self.target is not None:
+            center = QPointF(v.x() + self.target.x() * v.width(),
+                             v.y() + self.target.y() * v.height())
+            p.setPen(QPen(QColor("#6ee7d5"), 2))
+            p.drawEllipse(center, 6, 6)
         p.end()
 
     def logo_values(self) -> list[dict]:

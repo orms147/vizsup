@@ -332,6 +332,8 @@ class CueList(QFrame):
     followToggled = Signal(bool)
     csvExportRequested = Signal()
     csvImportRequested = Signal()
+    regionRequested = Signal()
+    wordFilterRequested = Signal()
     contextRequested = Signal(int, object)   # right-click on a row: (row, global QPoint)
 
     def __init__(self) -> None:
@@ -522,6 +524,9 @@ class CueList(QFrame):
         m.addAction("Nhập lại bảng CSV đã sửa…", self.csvImportRequested.emit)
         m.addAction("Chỉnh thời gian chuẩn (khoảng cách, độ dài)", self.timingPassRequested.emit)
         m.addAction("Soát lỗi tiếng Việt", self.viLintRequested.emit)
+        m.addSeparator()
+        m.addAction("Dịch vùng chữ…", self.regionRequested.emit)
+        m.addAction("Lọc từ trong bản xuất…", self.wordFilterRequested.emit)
         self.more_btn.setMenu(m)
         self.more_btn.setPopupMode(self.more_btn.ToolButtonPopupMode.InstantPopup)
 

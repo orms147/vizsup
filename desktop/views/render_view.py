@@ -1612,7 +1612,12 @@ class RenderView(QWidget):
         self.preview.set_frame_aspect(9 / 16 if self.frame.currentData() == "tiktok" else None)
 
     def set_preview(self, video_path: Path, cues: list | None = None) -> None:
+        from app.pipeline import region_captions, word_filter
+
         self.preview.load(video_path)
+        if self._job is not None:
+            self.preview.set_caption_output(region_captions.load(self._job),
+                                            word_filter.transform(self._job))
         if cues is not None:
             self.preview.set_cues(cues)
             self._fit_cues = list(cues)

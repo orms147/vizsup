@@ -407,8 +407,8 @@ class VideoPanel(QFrame):
     def set_still_busy(self, busy: bool) -> None:
         self._canvas.set_still_busy(busy)
 
-    def set_burned_overlay(self, path: str) -> None:
-        self._canvas.set_burned_overlay(QImage(str(path)))
+    def set_burned_overlay(self, path: str | None) -> None:
+        self._canvas.set_burned_overlay(QImage(str(path)) if path else None)
 
     def set_watermark(self, wm: dict | None) -> None:
         """Show the translator's watermark on the preview as it will be burned."""
@@ -446,6 +446,12 @@ class VideoPanel(QFrame):
 
     def set_cues(self, cues: list) -> None:
         self._cues = cues or []
+        self._refresh_caption(self.current_time())
+
+    def set_caption_output(self, regions: list, apply_words=str) -> None:
+        self._regions = regions
+        self._apply_words = apply_words
+        self.set_burned_overlay(None)
         self._refresh_caption(self.current_time())
 
     def toggle(self) -> None:
@@ -543,7 +549,12 @@ class VideoPanel(QFrame):
         return ""
 
     def _refresh_caption(self, t: float) -> None:
-        self._canvas.set_caption(self._active_text(t))
+        apply_words = getattr(self, "_apply_words", str)
+        self._canvas.set_caption(apply_words(self._active_text(t)))
+        self._canvas.set_region_captions([
+            (c.x, c.y, apply_words(c.text)) for c in getattr(self, "_regions", [])
+            if c.start <= t < c.end
+        ])
 
     def _on_pos(self, ms: int) -> None:
         if not self._scrub.isSliderDown():

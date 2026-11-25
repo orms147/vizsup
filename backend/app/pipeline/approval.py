@@ -53,6 +53,13 @@ def revision(job: Job) -> str:
         h.update(p.read_bytes() if p.exists() else b"")
     h.update(b"overrides.json")
     h.update(_overrides_bytes(job))
+    from app.pipeline import region_captions, word_filter
+
+    for name in (region_captions.FILE, word_filter.FILE):
+        p = job.work_dir / name
+        if p.exists():
+            h.update(name.encode())
+            h.update(p.read_bytes())
     return h.hexdigest()[:16]
 
 

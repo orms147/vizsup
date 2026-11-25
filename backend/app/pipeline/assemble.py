@@ -188,10 +188,16 @@ def style_preview_frame(
 ) -> Path:
     """Burn the styled subtitles onto a single source frame → a PNG, for a fast
     WYSIWYG style preview in the UI (no full render). Returns the PNG path."""
+    from app.pipeline import glass, region_captions, word_filter
+
     wd = job.work_dir
     cue_styles = {i + 1: c.style for i, c in enumerate(cues) if getattr(c, "style", None)} or None
+    apply_words = word_filter.transform(job)
+    cues = [Cue(i, c.start, c.end, apply_words(c.vi if hasattr(c, "vi") else c.text))
+            for i, c in enumerate(cues, 1)]
     write_ass(cues, wd / "_preview.ass", font=font, size=size,
-              cover_hardsubs=cover_hardsubs, style=style, cue_styles=cue_styles)
+              cover_hardsubs=cover_hardsubs, style=style, cue_styles=cue_styles,
+              regions=region_captions.for_render(region_captions.load(job), apply_words))
     if at is None:
         at = 1.0
         for c in cues:
@@ -201,8 +207,6 @@ def style_preview_frame(
     out = wd / "_preview.png"
     burn = f"ass=_preview.ass{_ass_fonts(wd, font)}"
     video = ["-vf", burn]
-    from app.pipeline import glass
-
     if glass.is_glass(style):           # the frosted glass under the line, as rendered
         src = probe_size(job.source_video) or (1920, 1080)
         W, H = 1080.0 * src[0] / src[1], 1080.0
@@ -1061,7 +1065,7 @@ def assemble(
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
-    from app.pipeline import glass
+    from app.pipeline import glass, region_captions, word_filter
 
     mode = cover_mode or ("box" if cover_hardsubs else "off")
     # the glass look is one thing: the "Kính mờ trắng" style always renders the glass
@@ -1078,6 +1082,8 @@ def assemble(
     res = res if res in RESOLUTIONS else "source"
     preset = preset if preset in PRESETS else None
     cues_for_subs = burn_cues if burn_cues is not None else parse_srt(job.vi_srt)
+    apply_words = word_filter.transform(job)
+    cues_for_subs = word_filter.apply_cues(cues_for_subs, apply_words)
     voiced = commentary or []
     ins = cm.inserts(voiced)
     # everything below lives on the OUTPUT timeline (pause notes push the rest later)
@@ -1110,6 +1116,9 @@ def assemble(
     # covered (an empty glass / blur box in the middle of a Short looked dirty, 2026-10-31)
     cut = (band_cut(_load_region(job)) if frame == "tiktok" and canvas_text and bar_subs
            and src_size else None)
+    regions = region_captions.load(job)
+    if cut and any(c.y >= cut for c in regions):
+        cut = None
     pic_src = (src_size[0], int(src_size[1] * cut)) if cut and src_size else src_size
     burn = burn_size(pic_src, frame, "source" if preview else res) or (1920, 1080)
     # 9:16 with bars: a second layer on the canvas carries the big text (chip, hook, end card and,
@@ -1161,10 +1170,12 @@ def assemble(
         # each word lights up while the dub speaks it: the spans the dub track will use
         kara = {"colour": kmod.colour_for(style, karaoke.get("color")),
                 "spans": kmod.spans(segments) if audio_mode != "original" else {}}
+    region_subs = region_captions.for_render(regions, apply_words, ins, cut=cut)
     write_ass(cues_for_subs, job.work_dir / ("still.ass" if still else _ass_name(preview)), font=font, size=size,
               cover_hardsubs=(mode == "box"), style=style, cue_styles=cue_styles,
               extra=tags or None, comments=note_subs, mark=marks, mark_look=watermark,
-              cover=disclosure.cover_events(cover, out_dur) or None, karaoke=kara)
+              cover=disclosure.cover_events(cover, out_dur) or None, karaoke=kara,
+              regions=region_subs)
     _ass_fonts(job.work_dir, font)      # the chosen family's files (a Windows font too)
     canvas_name = None
     if clay is not None and canvas_layer is not None:
@@ -1282,7 +1293,8 @@ def assemble(
     # "Xuất .srt" and the long-video join use, since vi.srt stays on the source timeline
     from app.pipeline.srt import write_srt
 
-    write_srt(sorted([*cues_for_subs, *note_subs], key=lambda c: c.start),
+    write_srt(sorted([*(bar_cues if bar_cues is not None else cues_for_subs),
+                      *note_subs, *region_subs], key=lambda c: c.start),
               job.work_dir / OUTPUT_SRT)
     return job.output_video
 

@@ -302,7 +302,7 @@ def make(parent: Job, start: float, end: float, hook: str, storage: Path, *,
     """The derived project for [start, end) of ``parent`` (see the module doc). Refuses an episode
     that is not approved, has no source video any more, or a range with no line / outside
     RANGE_MIN–RANGE_MAX. The new project has no approval."""
-    from app.pipeline import approval, compilation
+    from app.pipeline import approval, compilation, region_captions, word_filter
     from app.pipeline.srt import write_srt
 
     say = log or (lambda _m: None)
@@ -353,9 +353,11 @@ def make(parent: Job, start: float, end: float, hook: str, storage: Path, *,
             {"id": child.id, "url": child.url, "opts": {}, "stage": "await_edit",
              "title": md["title"], "platform": md.get("platform")}, ensure_ascii=False, indent=2),
             encoding="utf-8")
-        for name in ("style.json", "hardsub_region.json", "context_brief.json", "series_link.json"):
+        for name in ("style.json", "hardsub_region.json", "context_brief.json", "series_link.json",
+                     word_filter.FILE):
             if (parent.work_dir / name).exists():
                 shutil.copy2(parent.work_dir / name, child.work_dir / name)
+        region_captions.copy_range(parent, child, a, b)
         reused = _reuse_tts(parent, child, kept)
         say(f"✓ {len(vi_cues)} câu" + (f" · giữ {reused} đoạn giọng đã tạo" if reused else ""))
     except BaseException:

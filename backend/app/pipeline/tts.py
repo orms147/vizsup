@@ -341,7 +341,9 @@ def _synthesize(
         if not vieneu.model_cached():
             log("⬇ Tải giọng VieNeu lần đầu (~580 MB, vài phút) — các lần sau dùng ngay")
 
-    cues = parse_srt(job.vi_srt)
+    from app.pipeline import word_filter
+
+    cues = word_filter.apply_cues(parse_srt(job.vi_srt), word_filter.transform(job))
     ov = load_overrides(job)
     manifest = _load_manifest(job)
     rules = speak.load_rules(job)

@@ -285,6 +285,52 @@ class EditorView(SelectionActions, QWidget):
         self.project.add_action(gl)
         return self.project
 
+    def _edit_regions(self) -> None:
+        if self.job is None or not self.job.source_video.exists():
+            self.message.emit("Cần video nguồn để chọn vùng chữ.", "warn")
+            return
+        from app.pipeline import region_captions
+        from desktop.widgets.region_dialog import RegionDialog
+
+        job = self.job
+        self.video.pause()
+        old = region_captions.load(job)
+        duration = self.video.duration()
+        at = self.video.current_time()
+        if duration:
+            at = min(at, max(0.0, duration - 0.05))
+        dialog = RegionDialog(self, job, old, at, duration)
+        if dialog.exec() and dialog.captions != old and self.job is job:
+            self._save_caption_output(lambda: region_captions.save(job, dialog.captions))
+
+    def _edit_word_filter(self) -> None:
+        if self.job is None:
+            return
+        from app.pipeline import word_filter
+        from desktop.widgets.word_filter_dialog import WordFilterDialog
+
+        job = self.job
+        old = word_filter.load(job)
+        dialog = WordFilterDialog(*old, parent=self)
+        if dialog.exec() and (dialog.enabled.isChecked(), dialog.rules) != old and self.job is job:
+            self._save_caption_output(
+                lambda: word_filter.save(job, dialog.enabled.isChecked(), dialog.rules))
+
+    def _save_caption_output(self, save) -> None:
+        try:
+            save()
+        except OSError as exc:
+            self.message.emit(f"Không lưu được thay đổi: {exc}", "err")
+            return
+        self._load_caption_output()
+        self.refresh_approval()
+        self.message.emit("Đã lưu thay đổi phụ đề.", "ok")
+
+    def _load_caption_output(self) -> None:
+        from app.pipeline import region_captions, word_filter
+
+        self.video.set_caption_output(region_captions.load(self.job), word_filter.transform(self.job))
+
     def _wire(self) -> None:
         cl, ins, tl, vid = self.cue_list, self.inspector, self.timeline, self.video
         cl.rowSelected.connect(self._on_row_selected)
@@ -308,6 +354,8 @@ class EditorView(SelectionActions, QWidget):
         cl.timingPassRequested.connect(self._timing_pass)
         cl.viLintRequested.connect(self._vi_lint)
         cl.findRequested.connect(lambda: self._toggle_find())
+        cl.regionRequested.connect(self._edit_regions)
+        cl.wordFilterRequested.connect(self._edit_word_filter)
         cl.reviewedRequested.connect(self._mark_reviewed)
         cl.nextPendingRequested.connect(lambda: self._goto_pending(+1))
         cl.view.selectionModel().selectionChanged.connect(lambda *_: self._update_scope_hint())
@@ -1339,7 +1387,9 @@ class EditorView(SelectionActions, QWidget):
         approval (the inspector disables it before) — no TTS on unapproved text."""
         if not (0 <= self._sel < len(self.cues)) or self._dub_player is None or self.job is None:
             return
-        text = self.cues[self._sel].vi.strip()
+        from app.pipeline import word_filter
+
+        text = word_filter.transform(self.job)(self.cues[self._sel].vi).strip()
         if not text:
             return
         gain_db = self.cues[self._sel].gain_db
@@ -1439,6 +1489,7 @@ class EditorView(SelectionActions, QWidget):
         self._update_project()
         self._aspect = 0.0               # the new video reports its size when it loads
         self.video.load(job.source_video)
+        self._load_caption_output()
         self.timeline.set_peaks([])
         self._undo_stack.clear()
         self._redo_stack.clear()
@@ -1896,7 +1947,8 @@ class EditorView(SelectionActions, QWidget):
                 job, cues, at=at, font=font, size=size, cover_hardsubs=False, style=style))
 
         def done(path):
-            self.video.set_burned_overlay(path)
+            if self.job is job and abs(self.video.current_time() - at) < 0.05:
+                self.video.set_burned_overlay(path)
             self._burning = False
 
         def fail(_msg):

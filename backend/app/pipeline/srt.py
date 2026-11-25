@@ -186,6 +186,7 @@ def write_ass(
     mark_look: dict | None = None,
     cover: list[dict] | None = None,
     karaoke: dict | None = None,
+    regions: list | None = None,
 ) -> Path:
     """Write styled ASS. ``style`` is the global style (overrides DEFAULT_STYLE).
     ``cue_styles`` maps a 1-based cue position → a sparse style override applied on
@@ -251,6 +252,10 @@ def write_ass(
         # warm yellow; a dark amber on the white glass, where yellow would not read
         note = {**base, "primary": "#7A4A00" if base.get("glass") else "#FFD966", "italic": True}
         style_block += "\n" + _style_line("Comment", note, font, size, cover_hardsubs)
+    if regions:
+        region_style = {**DEFAULT_STYLE, "alignment": 5, "border_style": 3,
+                        "box_alpha": 64, "outline_w": 3}
+        style_block += "\n" + _style_line("Region", region_style, font, 48, False)
     header = _HEADER_PRE + "\n" + style_block + "\n\n" + _HEADER_POST + "\n"
     lines = [header]
     for c, nm, pfx, shown, base_colour in zip(cues, cue_names, cue_prefixes, cue_texts, cue_colours):
@@ -268,6 +273,12 @@ def write_ass(
         text = c.text.replace("\n", "\\N")
         lines.append(f"Dialogue: 0,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Comment,,"
                      f"0,0,0,,{text}")
+    for c in regions or []:
+        pos = _inline_prefix({"pos": (c.x, c.y)})
+        text = c.text.translate(str.maketrans({"{": "｛", "}": "｝", "\\": "＼"}))
+        text = text.replace("\r", "").replace("\n", "\\N")
+        lines.append(f"Dialogue: 2,{_fmt_ass_time(c.start)},{_fmt_ass_time(c.end)},Region,,"
+                     f"0,0,0,,{pos}{text}")
     for e in cover or []:
         bgr = e["fill"][4:6] + e["fill"][2:4] + e["fill"][0:2]
         box = ("{\\an7\\pos(0,0)\\bord0\\shad0\\blur2\\1c&H%s&\\1a&H%02X&\\p1}"

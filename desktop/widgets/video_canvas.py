@@ -52,6 +52,7 @@ class VideoCanvas(QWidget):
         self._still_busy = False
         self._nw, self._nh = ASS_W, ASS_H      # native video size (for letterbox aspect)
         self._caption = ""
+        self._region_captions = []
         self._style: dict = {}
         self._size_px = 20
         self._font = "Be Vietnam Pro"
@@ -73,10 +74,9 @@ class VideoCanvas(QWidget):
         self._burned = None       # a fresh frame supersedes the burned still
         self.update()
 
-    def set_burned_overlay(self, img: QImage) -> None:
-        if img is not None and not img.isNull():
-            self._burned = img
-            self.update()
+    def set_burned_overlay(self, img: QImage | None) -> None:
+        self._burned = img if img is not None and not img.isNull() else None
+        self.update()
 
     def set_final_still(self, img: QImage | None) -> None:
         """"Xem thật": the whole composition exactly as the render burns it (assemble's still
@@ -96,6 +96,11 @@ class VideoCanvas(QWidget):
     def set_caption(self, text: str) -> None:
         if text != self._caption:
             self._caption = text
+            self.update()
+
+    def set_region_captions(self, captions: list) -> None:
+        if captions != self._region_captions:
+            self._region_captions = captions
             self.update()
 
     def set_style(self, style: dict, size_px: int, font: str) -> None:
@@ -261,6 +266,7 @@ class VideoCanvas(QWidget):
         elif self._frame is not None and not self._frame.isNull():
             p.drawImage(d, self._frame)
             self._draw_caption(p)
+            self._draw_region_captions(p)
         else:
             p.setPen(QColor("#666"))
             p.drawText(self.rect(), Qt.AlignCenter, "…")
@@ -269,6 +275,24 @@ class VideoCanvas(QWidget):
         self._draw_safe_zone(p)
         self._draw_box(p)
         p.end()
+
+    def _draw_region_captions(self, p: QPainter) -> None:
+        if not self._region_captions:
+            return
+        d = self._pic
+        p.save()
+        p.setClipRect(d)
+        font = QFont(self._font)
+        font.setPixelSize(max(6, round(d.height() * 48 / ASS_H)))
+        p.setFont(font)
+        flags = Qt.AlignCenter | Qt.TextWordWrap
+        for x, y, text in self._region_captions:
+            box = p.boundingRect(QRectF(0, 0, d.width() * .95, d.height()), flags, text)
+            box.moveCenter(QPointF(d.left() + x * d.width(), d.top() + y * d.height()))
+            p.fillRect(box.adjusted(-3, -2, 3, 2), QColor(0, 0, 0, 191))
+            p.setPen(QColor("white"))
+            p.drawText(box, flags, text)
+        p.restore()
 
     def set_watermark(self, wm: dict | None) -> None:
         self._wm = wm
