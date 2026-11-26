@@ -707,11 +707,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="hide leftover CN hardsubs: opaque box, a blurred bottom band, or "
                          "frosted white glass under each line (dark text)")
     rn.add_argument("--res", choices=["source", "1440", "1080", "720", "480"], default="source",
-                    help="output resolution (short side; only 1440 may go above the source — "
-                         "YouTube serves 1440p uploads sharper)")
+                    help="highest output resolution (short side): a smaller source is upscaled "
+                         "to it, a bigger one scaled down (1440: YouTube serves it sharper)")
     rn.add_argument("--upscale", choices=["fast", "ai"], default="fast",
-                    help="with --res 1440: fast (graphics card / CPU) or ai (Real-ESRGAN, "
-                         "~5x the video's length the first time, cached)")
+                    help="fast: upscale on the graphics card when the source is smaller; ai: "
+                         "Real-ESRGAN at any size (~3x the video's length at 1080p the first "
+                         "time, cached)")
     rn.add_argument("--quality", choices=["light", "balanced", "sharp"], default="sharp",
                     help="encode quality/size: light (small) | balanced | sharp (default)")
     rn.add_argument("--font", default="Be Vietnam Pro", help="subtitle font (Vietnamese-diacritic)")

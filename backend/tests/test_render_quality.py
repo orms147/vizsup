@@ -102,7 +102,7 @@ def test_burn_and_output_sizes():
     assert assemble.burn_size(src, "source", "source") == (1920, 1080)
     assert assemble.burn_size(src, "source", "720") == (1280, 720)
     assert assemble.burn_size(src, "source", "480") == (854, 480)
-    assert assemble.burn_size((1280, 720), "source", "1080") == (1280, 720)   # no upscale
+    assert assemble.burn_size((1280, 720), "source", "1080") == (1920, 1080)  # up to the choice
     assert assemble.burn_size((1080, 1920), "source", "720") == (720, 1280)   # portrait
     assert assemble.burn_size(src, "tiktok", "720") == (720, 404)    # as ffmpeg's fit does
     assert assemble.output_size(src, "tiktok", "720") == (720, 1280)
@@ -179,7 +179,9 @@ def test_render_view_quality_is_sent_and_remembered(qapp):
     assert again.res.currentData() == "720" and again.preset.currentData() == "light"
 
 
-def test_render_view_greys_out_upscales_and_shows_a_size(qapp):
+def test_render_view_upscales_to_the_chosen_size_and_shows_it(qapp):
+    """The quality is the HIGHEST size: a 720p source at "1080" is made 1920×1080; 9:16 keeps
+    its 1080×1920 canvas (1440 greyed there); «AI làm nét» is a tick of its own."""
     from desktop.views.render_view import RenderView
 
     rv = RenderView()
@@ -187,13 +189,20 @@ def test_render_view_greys_out_upscales_and_shows_a_size(qapp):
     rv._src_size, rv._src_dur = (1280, 720), 600.0
     rv._sync_quality()
     model = rv.res.model()
-    assert not model.item(rv.res.findData("1080")).isEnabled()
-    assert model.item(rv.res.findData("720")).isEnabled()
-    assert rv.res.currentData() == "source"                      # moved off the upscale
-    assert "1280×720" in rv.size_lbl.text() and "MB" in rv.size_lbl.text()
+    assert model.item(rv.res.findData("1080")).isEnabled()
+    assert rv.res.currentData() == "1080"
+    assert "1920×1080" in rv.size_lbl.text() and "MB" in rv.size_lbl.text()
     rv.frame.setCurrentIndex(rv.frame.findData("tiktok"))         # 9:16: up to 1080×1920
     assert model.item(rv.res.findData("1080")).isEnabled()
+    assert not model.item(rv.res.findData("1440")).isEnabled()
     assert "1080×1920" in rv.size_lbl.text()
+    got: list[dict] = []
+    rv.renderRequested.connect(got.append)
+    rv._emit_render()
+    assert got[-1]["upscale"] == "fast"
+    rv.upscale.setChecked(True)
+    rv._emit_render()
+    assert got[-1]["upscale"] == "ai"
 
 
 def test_render_view_cover_follows_the_glass_style(qapp):

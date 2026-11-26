@@ -502,10 +502,11 @@ def _video_encoder() -> str:
 # the AAC bitrate. "sharp" = the values every render used before the choice existed;
 # its 1080p NVENC output measured ~4.8 Mb/s on a talking-head video (1 GB / 28 min).
 RESOLUTIONS = {"source": None, "1440": 1440, "1080": 1080, "720": 720, "480": 480}
-# "1440" is the one size allowed ABOVE the source: YouTube serves a 1440p upload with its better
-# codec at a far higher bitrate, so a soft 1080p source looks sharper there (pipeline/upscale.py).
-# A source frame is upscaled; the 9:16 canvas stays 1080×1920 (Shorts / TikTok / Reels play ≤1080).
-UPSCALE_RES = ("1440",)
+# The chosen size is the HIGHEST the owner wants (2026-11-26): a smaller source frame is made
+# bigger up to it (pipeline/upscale.py — a 720p Douyin source → 1080p; "1440" for YouTube, which
+# serves a 1440p upload with its better codec), a bigger one scaled down. The 9:16 canvas stays
+# 1080×1920 at most (Shorts / TikTok / Reels play ≤1080).
+UPSCALE_RES = ("1440", "1080", "720", "480")
 PRESETS = {                      # crf, cq, audio, ~Mb/s at 1080p (size estimate only)
     "light": {"crf": 27, "cq": 30, "audio": "128k", "mbps": 1.5},
     "balanced": {"crf": 23, "cq": 25, "audio": "192k", "mbps": 2.8},
@@ -810,7 +811,9 @@ def _build_render(
     # its timestamps put back by setpts, so the .ass shows the lines of THAT second
     # an upscale (res "1440", a source frame, the real render only) happens before everything
     # else, so the sharpening, the cover and the subtitles are drawn at the final size
-    upscaled = bool(upscale) and bool(burn_w) and frame != "tiktok" and not preview
+    # "ai": the cached AI copy IS the picture input, at the burn size (also same size, 9:16 fit)
+    upscaled = bool(upscale) and not preview and (
+        upscale == "ai" or (bool(burn_w) and frame != "tiktok"))
     from app.pipeline import upscale as upmod
 
     cmd = [ffmpeg_bin(), "-y", *(upmod.hw_args(upscale) if upscaled else []),
@@ -983,7 +986,7 @@ def _build_render(
         # box, still hides the original
         crop_expr, overlay_pos = _blur_band_filters(_load_region(job))
         parts.append(f"{vsrc}split[vsrc][vband]")
-        radius = max(1, round(10 * burn_h / 1080)) if upscaled else 10   # px: same look at 1440
+        radius = max(1, round(10 * burn_h / 1080)) if upscaled and frame != "tiktok" else 10
         parts.append(f"[vband]{crop_expr},boxblur={radius}:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         vsrc = "[vbg]"
@@ -1057,32 +1060,36 @@ def _build_render(
 def _upscale_input(job: Job, src_size: tuple[int, int] | None, burn: tuple[int, int], frame: str,
                    res: str, preview: bool, upscale: str | None, *, log, say, cancel
                    ) -> tuple[str | None, str]:
-    """(engine for _build_render, picture input) of a render: None / source.mp4 unless res
-    "1440" makes a source-frame picture bigger than the source. "ai" runs (or reuses) the
-    Real-ESRGAN pass first; when it can't, the fast upscale is used and the owner told why."""
+    """(engine for _build_render, picture input) of a render. "ai" (the «AI làm nét» tick) runs
+    or reuses the Real-ESRGAN pass at the burn size — whatever the size, also for the 9:16
+    picture; when it can't, the render goes on as without it. Otherwise a source-frame picture
+    is upscaled by the fast engine only when the chosen size is bigger than the source."""
     from app.pipeline import upscale as upmod
 
-    if (preview or frame == "tiktok" or res not in UPSCALE_RES or not src_size
-            or burn[0] * burn[1] <= src_size[0] * src_size[1]):
+    if preview or not src_size:
         return None, "source.mp4"
+    grows = frame != "tiktok" and burn[0] * burn[1] > src_size[0] * src_size[1]
     if upmod.engine(upscale) == "ai":
         dur = probe_duration(job.source_video)
         if log:
-            mins = upmod.ai_seconds(dur) / 60
-            log(f"… AI làm nét {burn[0]}×{burn[1]} (Real-ESRGAN, ~{mins:.0f} phút lần đầu; "
-                "dựng lại dùng bản đã làm)")
-        try:
-            path = upmod.ensure_ai(job, burn[0], burn[1], log=log, cancel=cancel,
+            mins = upmod.ai_seconds(dur, src_size, burn[0], burn[1]) / 60
+            log(f"… AI làm nét {burn[0]}×{burn[1]} (Real-ESRGAN, ~{max(1, round(mins))} phút lần "
+                "đầu; dựng lại dùng bản đã làm)")
+        try:                       # yuv420p: even sides (a VP9 source can be odd)
+            path = upmod.ensure_ai(job, burn[0] // 2 * 2, burn[1] // 2 * 2, log=log, cancel=cancel,
                                    progress=lambda f: say(f, f"AI làm nét · {int(f * 100)}%"))
             return "ai", path.relative_to(job.work_dir).as_posix()
         except InterruptedError:
             raise
-        except Exception as exc:  # noqa: BLE001 - the render goes on with the fast upscale
+        except Exception as exc:  # noqa: BLE001 - the render goes on without the AI copy
             if log:
-                log(f"⚠ AI làm nét không chạy được ({exc}) — phóng to bằng cách nhanh.")
+                log(f"⚠ AI làm nét không chạy được ({exc}) — "
+                    + ("phóng to bằng cách nhanh." if grows else "dựng như bình thường."))
+    if not grows:
+        return None, "source.mp4"
     kind = upmod.fast_kind()
     if log:
-        log(f"… Phóng to {burn[0]}×{burn[1]} cho YouTube ("
+        log(f"… Phóng to {src_size[0]}×{src_size[1]} → {burn[0]}×{burn[1]} ("
             + ("card đồ họa" if kind == "gpu" else "CPU") + ")")
     return kind, "source.mp4"
 

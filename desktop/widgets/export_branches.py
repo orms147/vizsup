@@ -17,16 +17,29 @@ from app.pipeline.export import safe_name
 from desktop.widgets.chrome import button, label
 
 
-# "Độ nét" of a branch → the render options (assemble.UPSCALE_RES, pipeline/upscale.py); a 9:16
-# branch always stays 1080×1920
+# "Độ phân giải tối đa" of a branch → render options (assemble.UPSCALE_RES: a smaller source is
+# made bigger up to it); "AI làm nét" is its own tick (pipeline/upscale.py). A 9:16 branch keeps
+# its 1080×1920 canvas, the AI tick still applies to its picture.
 QUALITIES = (("Theo bộ phim / trang Dựng", ""),
              ("Giữ độ phân giải nguồn", "source"),
-             ("1440p · YouTube (phóng to nhanh)", "1440"),
-             ("1440p · YouTube · AI làm nét (chậm)", "1440ai"))
+             ("Tối đa 1080p", "1080"),
+             ("Tối đa 1440p · YouTube", "1440"))
 QUALITIES_BY_KEY = {"": {},                  # the series' / app's own resolution
                     "source": {"res": "source"},
-                    "1440": {"res": "1440", "upscale": "fast"},
-                    "1440ai": {"res": "1440", "upscale": "ai"}}
+                    "1080": {"res": "1080"},
+                    "1440": {"res": "1440"},
+                    "1440ai": {"res": "1440", "upscale": "ai"}}     # saved before 2026-11-26
+
+
+def branch_render(node: dict) -> dict:
+    """The render options a branch carries: its resolution (not for 9:16) and the AI tick."""
+    out: dict = {}
+    quality = node.get("quality") or ""
+    if node.get("frame", "source") != "tiktok":
+        out.update(QUALITIES_BY_KEY.get(quality, {}))
+    if node.get("ai") or quality == "1440ai":
+        out["upscale"] = "ai"
+    return out
 
 
 class ExportBranches(QWidget):
@@ -125,9 +138,7 @@ class ExportBranches(QWidget):
         node = next((n for n in self.nodes if n["id"] == self._selection()), {})
         out = {"folder": node.get("folder", ROOT), "frame": node.get("frame", "source"),
                "frames": self.frames.isChecked()}
-        quality = node.get("quality") or ""
-        if out["frame"] != "tiktok" and quality in QUALITIES_BY_KEY:
-            out.update(QUALITIES_BY_KEY[quality])
+        out.update(branch_render(node))
         return out
 
     def _edit(self, *, new: bool) -> None:
@@ -161,16 +172,23 @@ class ExportBranches(QWidget):
         quality = QComboBox()
         for text, key in QUALITIES:
             quality.addItem(text, key)
-        quality.setCurrentIndex(max(quality.findData(old.get("quality") or ""), 0))
-        quality.setToolTip("Video dài đăng YouTube: 1440p nét hơn rõ sau khi YouTube nén lại. "
-                           "AI làm nét: hợp hoạt hình / phim AI, lần đầu ~5× thời lượng video.")
+        saved = old.get("quality") or ""
+        quality.setCurrentIndex(max(quality.findData("1440" if saved == "1440ai" else saved), 0))
+        quality.setToolTip("Độ phân giải tối đa: video nguồn nhỏ hơn được phóng to bằng card đồ "
+                           "họa (Douyin 720p → 1080p). Video dài đăng YouTube: 1440p nét hơn trên "
+                           "màn lớn sau khi YouTube nén lại (file ~3×).")
+        ai = QCheckBox("AI làm nét (chậm, cần card NVIDIA)")
+        ai.setChecked(bool(old.get("ai")) or saved == "1440ai")
+        ai.setToolTip("Real-ESRGAN: viền tóc, mắt, nét vẽ sắc và sạch — hợp hoạt hình / phim AI; "
+                      "da người thật mịn hơn. Lần đầu ~3× thời lượng video ở 1080p.")
         frame.currentIndexChanged.connect(
             lambda _i: quality.setEnabled(frame.currentData() != "tiktok"))
         quality.setEnabled(frame.currentData() != "tiktok")
         form.addRow("Tên nhánh", name)
         form.addRow("Thư mục đích", row)
         form.addRow("Mẫu dựng", frame)
-        form.addRow("Độ nét", quality)
+        form.addRow("Độ phân giải", quality)
+        form.addRow("", ai)
         error = label("", "small", wrap=True)
         form.addRow(error)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -186,7 +204,7 @@ class ExportBranches(QWidget):
             node = {"id": uuid.uuid4().hex if new else selected, "name": title,
                     "parent": selected if new else old["parent"],
                     "folder": str(target), "frame": frame.currentData(),
-                    "quality": quality.currentData()}
+                    "quality": quality.currentData(), "ai": ai.isChecked()}
             if new:
                 self.nodes.append(node)
             else:

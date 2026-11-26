@@ -145,7 +145,7 @@ def describe(opts: dict | None) -> str:
     bits.append(_MODES.get(mode, mode))
     res = opts.get("res") or "source"
     bits.append("Cỡ gốc" if res == "source" else f"{res}p"
-                + (" · AI làm nét" if res == "1440" and opts.get("upscale") == "ai" else ""))
+                + (" · AI làm nét" if opts.get("upscale") == "ai" else ""))
     bits.append(_PRESETS.get(opts.get("preset") or "sharp", "Nét"))
     if (opts.get("frame") or "source") == "tiktok":
         bits.append("khung 9:16")

@@ -1,23 +1,26 @@
-"""Upscale for the "1440p · YouTube" render quality (2026-11-26, docs/plan sharpness lab).
+"""Bigger / cleaner picture for the render (2026-11-26, docs/plan sharpness lab).
 
-YouTube serves a 1440p upload with its better codec (VP9/AV1) at a far higher bitrate than a
-1080p one, so a soft 1080p Douyin / Bilibili source looks sharper on the platform when it is
-uploaded at 1440p. The picture is made big FIRST — clean → upscale → light sharpen — and the
-cover, the glass and the subtitles are then drawn at the final size (libass renders crisp text).
+The render's "Chất lượng" is the HIGHEST resolution the owner wants (short side): a source
+smaller than it is made bigger here, one bigger is scaled down (assemble.burn_size). YouTube
+serves a 1440p upload with its better codec, so "1440" helps a soft source on big screens;
+"1080" lifts a 720p / 576p Douyin source to the size most viewers watch. The picture is made big
+FIRST — clean → upscale → light sharpen — and the cover, the glass and the subtitles are then
+drawn at the final size (libass renders crisp text).
 
 Engines (o["upscale"]):
 
-* "fast" (default): a light hqdn3d denoise at the source size, then libplacebo's
-  ewa_lanczossharp on the graphics card (Vulkan); the CPU lanczos scaler when no Vulkan
-  device works. Measured (backend/scripts/sharp_lab.py): 60–100 fps at 1440p.
-* "ai": Real-ESRGAN realesr-animevideov3 (made for animation; also cleans the soft AI-film
-  look; skin gets smoother) run once per source as a pre-pass in its own process
-  (app.pipeline.upscale_ai, torch CUDA fp16 channels_last, ~5.8 fps on an RTX 4070 Laptop —
-  about 5× the video's length) into a cached near-lossless intermediate upscaled/<key>.mkv
-  (the source's audio copied in), so a re-render with another style or voice costs no AI time.
+* "fast" (default, only when the picture grows): a light hqdn3d denoise at the source size, then
+  libplacebo's ewa_lanczossharp on the graphics card (Vulkan); the CPU lanczos scaler when no
+  Vulkan device works. 60–100 fps at 1440p (backend/scripts/sharp_lab.py).
+* "ai" (the render page's «AI làm nét» tick, any size — also 1080 → 1080 to clean a heavily
+  compressed source, and the 9:16 picture): Real-ESRGAN realesr-animevideov3 run once per
+  source and size as a pre-pass in its own process (app.pipeline.upscale_ai, torch CUDA fp16;
+  the model reads at 2/3 of the target — ~10 fps for a 1080p target on an RTX 4070 Laptop, ~3×
+  the video's length) into a cached near-lossless intermediate upscaled/<key>.mkv (the source's
+  audio as FLAC), so a re-render with another style or voice costs no AI time.
 
 Measured on 3 clips: denoising with nlmeans_vulkan cost 2× time for no visible gain (not used);
-cas after the upscale at 0.4 (the 1080p render keeps SHARPEN_CAS before everything).
+cas after the upscale at 0.4 (a render at the source size keeps SHARPEN_CAS before everything).
 """
 from __future__ import annotations
 
@@ -44,10 +47,10 @@ MODEL_URL = ("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/
              "realesr-animevideov3.pth")
 MODEL_SHA256 = "b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d"
 MODEL_CONVS = 16                  # SRVGGNetCompact depth of this model (x4, 64 features)
-AI_FPS = 5.8
+AI_PIXELS_S = 9.4e6   # model-input pixels per second end to end (720p in → ~10 fps, 2026-11-26)
 # bumped when the AI copy's making changes so old copies are made again: 2 = picture encoded
 # alone + audio copied in after (version 1 muxed live and could start the picture 1 s late)
-PIPELINE = 2
+PIPELINE = 3     # 3 = the model reads at 2/3 of the target + FLAC audio (no 1 s shift)
 # 2026-11-26: with 1.1 GB free (Edge, an IDE … holding 6.6 GB) the same model ran ~1 fps
 LOW_VRAM_GB = 2.0                      # measured frames per second at 1080p input (time estimate)
 
@@ -156,9 +159,13 @@ def ai_path(job, w: int, h: int) -> Path:
     return job.work_dir / DIR / f"{ai_key(job.source_video, w, h)}.mkv"
 
 
-def ai_seconds(duration: float, fps: float = 30.0) -> float:
-    """Rough time of the AI pass for a video of 'duration' seconds."""
-    return duration * fps / AI_FPS
+def ai_seconds(duration: float, src: tuple[int, int] | None = None, w: int = 1920,
+               h: int = 1080, fps: float = 30.0) -> float:
+    """Rough time of the AI pass for a video of 'duration' seconds made w×h from src."""
+    from app.pipeline.upscale_ai import model_input
+
+    iw, ih = model_input(*(src or (w, h)), w, h)
+    return duration * fps * iw * ih / AI_PIXELS_S
 
 
 def ensure_ai(job, w: int, h: int, *, log: Callable[[str], None] | None = None,

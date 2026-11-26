@@ -428,3 +428,25 @@ sharpness; no visible shimmer). Speed with only 1.1 GB VRAM free (Edge / an IDE 
 Bug found and fixed: muxing the source audio live while the model fed the pipe slowly made the
 AI copy's video start 1.021 s late (picture behind the sound) — the picture is now encoded alone,
 the audio copied in after, and a start time > 0.05 s fails the pass.
+
+**1080p as the target, AI as an option (2026-11-26, later).** The quality is now the HIGHEST size:
+a 720p / 576p source is made bigger up to it on the card (fast path), and «AI làm nét» is a tick
+of its own at any size. Tuning the AI pass for a 1080p target (RTX 4070 Laptop, 6.9 GB free):
+
+| model input → 1080p | bare model | old pass (fp32 bicubic) | new pass end to end |
+|---|---|---|---|
+| 576p | 15.8 fps | 10.9 | — |
+| 720p | 11.8 fps | 7.7 | **10.2** |
+| 1080p | 5.6 fps | 4.7 | (now read at 720p: **9.9**) |
+
+- fp16 bicubic downscale of the x4 output: same picture (mean |Δ| 0.03 / 255); the fp32 copy of a
+  4× frame was ~40 % of the time at 720 in. Bilinear: softer (Laplacian 48 vs 68) — not used.
+- Model input at 2/3 of the target (`upscale_ai.model_input`): on Douyin / Bilibili 1080p sources
+  reading 720 lines kept skin / lash / hand-crease detail closer to the source than reading all
+  1080 (smoother, waxy); reading 540 was soft. 2× faster.
+- Batches of 4 frames: +30 % for the bare model, nothing end to end once decode / card / encode run
+  in parallel threads (9.6 vs 10.2 fps) → 1.
+- Found by the start-time check: the shift was NOT the live mux — copying an AAC track with
+  priming packets (a source cut with -ss … -c copy) into the mkv shifted every stream +1.021 s.
+  The audio is now decoded to FLAC. Real render, 20 s 720p cut → 1080p: fast 36 s, AI 65 s
+  (incl. the AI pass), both 1920×1080, picture / sound start 0, frames in step (min |Δ| at 0 s).

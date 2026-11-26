@@ -114,11 +114,10 @@ COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
           ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
           ("Không che", "off"),
           ("Kính mờ trắng · theo Kiểu chữ", "glass"))
-# "Chất lượng": output lines (short side; only 1440 goes above the source) × size/sharpness preset
-RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1440p · YouTube (phóng to)", "1440"),
+# "Chất lượng": the HIGHEST output lines (short side — a smaller source is made bigger, a bigger
+# one smaller; assemble.UPSCALE_RES) × size/sharpness preset
+RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1440p · YouTube", "1440"),
                ("1080p", "1080"), ("720p", "720"), ("480p", "480"))
-UPSCALES = (("Phóng to nhanh (card đồ họa)", "fast"),
-            ("AI làm nét · chậm (~5× thời lượng lần đầu)", "ai"))
 PRESETS = (("Nhẹ · file nhỏ", "light"), ("Cân bằng", "balanced"), ("Nét · file lớn", "sharp"))
 DEFAULT_PRESET = "sharp"          # text sharpness: the subtitles are the point of the video
 SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của bạn."
@@ -584,9 +583,10 @@ class RenderView(QWidget):
         self.res = QComboBox()
         for text, key in RESOLUTIONS:
             self.res.addItem(text, key)
-        self.res.setToolTip("Độ phân giải video xuất (cạnh ngắn). Chỉ 1440p được lớn hơn video "
-                            "nguồn: YouTube phát bản 1440p bằng bộ nén tốt hơn nên nét hơn rõ. "
-                            "Khung dọc 9:16 giữ 1080×1920 (Shorts / TikTok / Reels).")
+        self.res.setToolTip("Độ phân giải tối đa của video xuất (cạnh ngắn). Video nguồn nhỏ hơn "
+                            "được phóng to bằng card đồ họa (vd. Douyin 720p → 1080p), lớn hơn thì "
+                            "thu nhỏ. 1440p: YouTube phát bằng bộ nén tốt hơn, nét hơn trên màn "
+                            "lớn, file ~3×. Khung dọc 9:16 tối đa 1080×1920.")
         self.res.setCurrentIndex(max(self.res.findData(st.get("render_res")), 0))
         self.preset = QComboBox()
         for text, key in PRESETS:
@@ -601,18 +601,17 @@ class RenderView(QWidget):
         qrow.addWidget(self.res, 1)
         qrow.addWidget(self.preset, 1)
         ll.addLayout(qrow)
-        # res 1440: how the picture is made bigger (pipeline/upscale.py)
-        self.upscale = QComboBox()
-        for text, key in UPSCALES:
-            self.upscale.addItem(text, key)
+        # «AI làm nét»: an option at any size (pipeline/upscale.py, o["upscale"] = "ai")
+        self.upscale = QCheckBox("AI làm nét (chậm, cần card NVIDIA)")
         self.upscale.setToolTip(
-            "Nhanh: khử nhiễu nhẹ + phóng to bằng card đồ họa, gần như không thêm thời gian.\n"
-            "AI làm nét (Real-ESRGAN): viền tóc, mắt, nét vẽ sắc và sạch hơn hẳn — hợp hoạt hình "
-            "và phim AI; da mịn hơn. Lần đầu chạy ~5× thời lượng video (cần card NVIDIA), "
-            "dựng lại dùng bản đã làm.")
-        self.upscale.setCurrentIndex(max(self.upscale.findData(st.get("render_upscale")), 0))
-        self.upscale.currentIndexChanged.connect(
-            lambda _i: store.update_ui_state(render_upscale=self.upscale.currentData()))
+            "Real-ESRGAN làm lại từng khung ở độ phân giải đã chọn: viền tóc, mắt, nét vẽ sắc và "
+            "sạch hơn hẳn — hợp hoạt hình và phim AI; da người thật mịn hơn (có thể trông như "
+            "sáp), nền tranh màu nước phẳng hơn.\nLần đầu ~3× thời lượng video ở 1080p "
+            "(chậm hơn nhiều khi ứng dụng khác chiếm bộ nhớ card); dựng lại dùng bản đã làm.\n"
+            "Bỏ chọn: nguồn nhỏ hơn được phóng to nhanh bằng card đồ họa.")
+        self.upscale.setChecked(st.get("render_upscale") == "ai")
+        self.upscale.toggled.connect(lambda on: (
+            store.update_ui_state(render_upscale="ai" if on else "fast"), self._update_summary()))
         ll.addWidget(self.upscale)
         # assemble.SHARPEN_CAS before the subtitles are burned (Douyin's best is ~1 Mb/s)
         self.sharpen_cb = QCheckBox("Làm nét hình (video nguồn mờ, nén mạnh)")
@@ -690,7 +689,6 @@ class RenderView(QWidget):
             compact_combo(combo, 10)
         for combo in (self.res, self.preset):     # two per row
             compact_combo(combo, 6)
-        compact_combo(self.upscale, 10)
         compact_combo(self.rights, 6)            # shares its row with a caption + button
         rrow.addWidget(self.rights, 1)
         self.proof_btn = button("Bằng chứng…", "Upload", variant="ghost", small=True,
@@ -1176,6 +1174,8 @@ class RenderView(QWidget):
         pic = [self.cover.currentText().split(" · ")[0],
                "Dọc 9:16" if self.frame.currentData() == "tiktok" else "Khung gốc",
                f"{self.res.currentText().split(' (')[0]} {self.preset.currentText().split(' · ')[0]}"]
+        if self.upscale.isChecked():
+            pic.append("AI làm nét")
         if self.short_btn.isChecked():
             pic.append("Short")
         self.sec_pic.set_summary(" · ".join(pic))
@@ -1956,32 +1956,21 @@ class RenderView(QWidget):
         self._sync_quality()
 
     def _sync_quality(self) -> None:
-        """Grey out resolutions above the source (only 1440 upscales, a source frame only) and
-        show a rough size."""
+        """Grey out what the frame can't make (9:16: at most 1080×1920) and show a rough size."""
         from app.pipeline import assemble
 
         frame = self.frame.currentData()
         src = self._src_size
         for i in range(self.res.count()):
-            t = assemble.RESOLUTIONS.get(self.res.itemData(i))
             item = self.res.model().item(i)
-            if item is None:
-                continue
-            # 9:16 keeps today's 1080×1920 canvas at most; a source frame grows only to 1440
-            key = self.res.itemData(i)
-            if frame == "tiktok":
-                ok = key not in assemble.UPSCALE_RES
-            else:
-                ok = not t or src is None or t <= min(src) or key in assemble.UPSCALE_RES
-            item.setEnabled(ok)
+            if item is not None:      # 9:16 keeps the 1080×1920 canvas at most
+                t = assemble.RESOLUTIONS.get(self.res.itemData(i))
+                item.setEnabled(frame != "tiktok" or not t or t <= assemble.TIKTOK_W)
         cur = self.res.model().item(self.res.currentIndex())
         if cur is not None and not cur.isEnabled():
             self.res.blockSignals(True)          # not the user's choice: don't remember it
             self.res.setCurrentIndex(0)
             self.res.blockSignals(False)
-        up = (frame != "tiktok" and self.res.currentData() in assemble.UPSCALE_RES
-              and (src is None or min(src) < 1440))
-        self.upscale.setVisible(up)
         size = assemble.output_size(src, frame, self.res.currentData())
         mb = assemble.estimate_size_mb(src, frame, self.res.currentData(),
                                        self.preset.currentData(), self._src_dur)
@@ -2073,8 +2062,8 @@ class RenderView(QWidget):
         opts["also_vertical"] = opts["frame"] == "source" and self.vertical_cb.isChecked()
         opts["thumbnail"] = self.thumb_cb.isChecked()   # never for the quick proof (wanted())
         opts["tiktok_fill"] = self.fill.currentData() or "blur"
-        opts["res"] = self.res.currentData()       # "Chất lượng" ("1440" may upscale)
-        opts["upscale"] = self.upscale.currentData()
+        opts["res"] = self.res.currentData()       # "Chất lượng": the highest size (may upscale)
+        opts["upscale"] = "ai" if self.upscale.isChecked() else "fast"
         opts["preset"] = self.preset.currentData()
         opts["sharpen"] = self.sharpen_cb.isChecked()
         opts["karaoke"] = self.karaoke()

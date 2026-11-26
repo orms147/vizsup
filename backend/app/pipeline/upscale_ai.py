@@ -112,50 +112,126 @@ def encoder_args(encoder: str) -> list[str]:
     return ["-c:v", "libx264", "-preset", "fast", "-crf", "12"]
 
 
+def model_input(w: int, h: int, W: int, H: int) -> tuple[int, int]:
+    """The size the model reads: the source, or smaller when the target is not much bigger.
+    Its x4 output is scaled down to the target anyway, and on a compressed 1080p source
+    (Douyin ~1.2 Mb/s, Bilibili 3 Mb/s) reading at 2/3 of the target kept skin / lash detail
+    closer to the source than reading every 1080 line (smoother, "waxy") and ran 2x faster
+    (2026-11-26: 1080 in 5.6 fps, 720 in 11.8). Never below a quarter of the target. Pure."""
+    short, tshort = min(w, h), min(W, H)
+    want = max(_even(tshort * IN_RATIO), _even(tshort / 4 + 1))
+    if short <= want:
+        return w, h
+    s = want / short
+    return _even(w * s), _even(h * s)
+
+
+def _even(x: float) -> int:
+    return max(2, int(round(x / 2)) * 2)
+
+
+IN_RATIO = 2 / 3
+# frames per forward: 4 gained ~30 % for the bare model but nothing end to end once the
+# decoder / encoder run beside the card (2026-11-26: 10.2 vs 9.6 fps) — kept at 1
+BATCH = 1
+
+
 def main(src: str, out: str, W: int, H: int, model_path: str, encoder: str) -> None:
+    import queue
+    import threading
+
     import torch
     from torch.nn import functional as F
 
     from app.pipeline.upscale import MODEL_CONVS
 
     torch.backends.cudnn.benchmark = True
-    w, h, rate, dur = probe(src)
+    w0, h0, rate, dur = probe(src)
+    w, h = model_input(w0, h0, W, H)
     num, den = (int(x) for x in rate.split("/"))
     total = max(1, int(round(dur * num / den)))
     m = load_model(model_path, MODEL_CONVS)
     free, _total = torch.cuda.mem_get_info()
     print(f"M {free / 2**30:.2f}", flush=True)       # free graphics memory, for upscale.ensure_ai
+    # x4 output of a batch in fp16 + the model's 64-channel maps: ~0.45 GB per 720p frame
+    batch = BATCH if free > (w * h / (1280 * 720)) * 0.6 * 2**30 * BATCH + 2**30 else 1
     ff = ffmpeg_bin()
     # constant frame rate in and out: the raw pipe carries no timestamps
-    dec = subprocess.Popen([ff, "-v", "error", "-i", src, "-vf", f"fps={rate}", "-f", "rawvideo",
+    vf = f"fps={rate}" + (f",scale={w}:{h}:flags=lanczos" if (w, h) != (w0, h0) else "")
+    dec = subprocess.Popen([ff, "-v", "error", "-i", src, "-vf", vf, "-f", "rawvideo",
                             "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
-    # picture only: muxed live with the source's audio, a slow pipe (the model) made ffmpeg
-    # start the video ~1 s late (start_time 1.021, 2026-11-26) — the sound is added after
+    # picture only; the sound is added after (see the mux below)
     pic = str(Path(out).with_suffix(".video.mkv"))
     enc = subprocess.Popen([ff, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
                             "-s", f"{W}x{H}", "-r", rate, "-i", "-", *encoder_args(encoder),
                             "-pix_fmt", "yuv420p", pic], stdin=subprocess.PIPE)
     assert dec.stdout is not None and enc.stdin is not None
     size = w * h * 3
-    done = 0
-    try:
-        with torch.inference_mode():
+    # the decoder, the card and the encoder work at the same time (one thread each side)
+    inq: queue.Queue = queue.Queue(maxsize=batch * 3)
+    outq: queue.Queue = queue.Queue(maxsize=batch * 3)
+    failed: list[BaseException] = []
+
+    def read() -> None:
+        try:
             while True:
                 buf = dec.stdout.read(size)
                 if len(buf) < size:
                     break
-                x = (torch.frombuffer(bytearray(buf), dtype=torch.uint8).cuda()
-                     .view(h, w, 3).permute(2, 0, 1)[None].half().div_(255)
+                inq.put(buf)
+        except BaseException as exc:  # noqa: BLE001 - reported by the main thread
+            failed.append(exc)
+        finally:
+            inq.put(None)
+
+    def write() -> None:
+        try:
+            while (data := outq.get()) is not None:
+                enc.stdin.write(data)
+        except BaseException as exc:  # noqa: BLE001
+            failed.append(exc)
+            while outq.get() is not None:      # keep draining: the GPU side must not block
+                pass
+
+    reader = threading.Thread(target=read, daemon=True)
+    writer = threading.Thread(target=write, daemon=True)
+    reader.start()
+    writer.start()
+    done = 0
+    try:
+        with torch.inference_mode():
+            end = False
+            while not end and not failed:
+                bufs = []
+                while len(bufs) < batch:
+                    b = inq.get()
+                    if b is None:
+                        end = True
+                        break
+                    bufs.append(b)
+                if not bufs:
+                    break
+                x = (torch.frombuffer(bytearray(b"".join(bufs)), dtype=torch.uint8).cuda()
+                     .view(len(bufs), h, w, 3).permute(0, 3, 1, 2).half().div_(255)
                      .contiguous(memory_format=torch.channels_last))
-                y = F.interpolate(m(x).float(), size=(H, W), mode="bicubic", antialias=True)
-                enc.stdin.write((y.clamp_(0, 1) * 255).byte()[0].permute(1, 2, 0)
-                                .contiguous().cpu().numpy().tobytes())
-                done += 1
-                if done % 30 == 0:
+                # fp16 bicubic: same picture as fp32 (mean difference 0.03 / 255), the fp32
+                # copy of a 4x frame cost ~40 % of the time at 720 in
+                y = F.interpolate(m(x), size=(H, W), mode="bicubic", antialias=True)
+                frames = (y.clamp_(0, 1).mul_(255).byte().permute(0, 2, 3, 1).contiguous()
+                          .cpu().numpy())
+                for f in frames:
+                    outq.put(f.tobytes())
+                before, done = done, done + len(bufs)
+                if done // 30 != before // 30:
                     print(f"P {done} {total}", flush=True)
     finally:
+        outq.put(None)
+        writer.join()
         enc.stdin.close()
         dec.stdout.close()
+        reader.join(5)
+    if failed:
+        raise SystemExit(f"AI pass failed: {failed[0]}")
     # a source that breaks mid-clip must not leave a short copy that later renders reuse
     if dec.wait() != 0:
         raise SystemExit(f"ffmpeg decode failed after {done} of ~{total} frames")
@@ -165,8 +241,12 @@ def main(src: str, out: str, W: int, H: int, model_path: str, encoder: str) -> N
                          "missing at the end)")
     if enc.wait() != 0:
         raise SystemExit("ffmpeg encode failed")
+    # the audio DECODED to FLAC, not copied: an AAC track with priming packets before 0 (a
+    # source cut with -ss … -c copy) made the mkv muxer shift EVERY stream so they are not
+    # negative — the picture then started 1.021 s late (2026-11-26, found by the check below)
     mux = subprocess.run([ff, "-y", "-v", "error", "-i", pic, "-i", src, "-map", "0:v",
-                          "-map", "1:a?", "-c", "copy", out], capture_output=True, text=True)
+                          "-map", "1:a?", "-c:v", "copy", "-c:a", "flac", out],
+                         capture_output=True, text=True)
     Path(pic).unlink(missing_ok=True)
     if mux.returncode != 0:
         raise SystemExit("ffmpeg mux failed: " + (mux.stderr.strip().splitlines() or ["?"])[-1])

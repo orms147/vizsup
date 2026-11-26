@@ -31,14 +31,16 @@ def _build(j, segs, **kw):
     return cmd, (j.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
 
 
-def test_1440_upscales_a_source_frame_only():
+def test_the_chosen_size_is_the_highest_and_a_smaller_source_grows():
     assert assemble.burn_size((1920, 1080), "source", "1440") == (2560, 1440)
     assert assemble.burn_size((1080, 1920), "source", "1440") == (1440, 2560)
     assert assemble.burn_size((1922, 1080), "source", "1440") == (2560, 1440)   # snapped 16:9
     assert assemble.burn_size((3840, 2160), "source", "1440") == (2560, 1440)   # a downscale
     assert assemble.burn_size((2560, 1440), "source", "1440") == (2560, 1440)
-    # the other sizes still never upscale; 9:16 stays 1080×1920
-    assert assemble.burn_size((1280, 720), "source", "1080") == (1280, 720)
+    # every size is the highest wanted: a 720p / 576p source grows to 1080; 9:16 stays 1080×1920
+    assert assemble.burn_size((1280, 720), "source", "1080") == (1920, 1080)
+    assert assemble.burn_size((1012, 576), "source", "1080") == (1898, 1080)
+    assert assemble.burn_size((720, 1280), "source", "1080") == (1080, 1920)
     assert assemble.output_size((1920, 1080), "tiktok", "1440") == (1080, 1920)
 
 
@@ -83,7 +85,7 @@ def test_upscale_input_decisions(job, monkeypatch):
     assert pick(j, (1920, 1080), (1920, 1080), "source", "source", False, "fast", **args) == \
         (None, "source.mp4")
     assert pick(j, (1920, 1080), (2560, 1440), "source", "1440", True, "fast", **args)[0] is None
-    assert pick(j, (1920, 1080), (1080, 1920), "tiktok", "1440", False, "fast", **args)[0] is None
+    assert pick(j, (1920, 1080), (1080, 608), "tiktok", "1080", False, "fast", **args)[0] is None
     assert pick(j, (3840, 2160), (2560, 1440), "source", "1440", False, "fast", **args)[0] is None
     monkeypatch.setattr(upscale, "fast_kind", lambda: "gpu")
     assert pick(j, (1920, 1080), (2560, 1440), "source", "1440", False, None, **args) == \
@@ -92,6 +94,14 @@ def test_upscale_input_decisions(job, monkeypatch):
     monkeypatch.setattr(upscale, "ensure_ai", lambda *a, **k: made)
     assert pick(j, (1920, 1080), (2560, 1440), "source", "1440", False, "ai", **args) == \
         ("ai", "upscaled/x.mkv")
+    # the AI tick works at the source size and on the 9:16 picture too
+    assert pick(j, (1920, 1080), (1920, 1080), "source", "source", False, "ai", **args)[0] == "ai"
+    assert pick(j, (720, 1280), (1080, 1920), "tiktok", "1080", False, "ai", **args)[0] == "ai"
+    assert pick(j, (1920, 1080), (1920, 1080), "source", "1080", True, "ai", **args)[0] is None
+    sizes = []
+    monkeypatch.setattr(upscale, "ensure_ai", lambda job, w, h, **k: sizes.append((w, h)) or made)
+    pick(j, (853, 480), (853, 480), "source", "source", False, "ai", **args)
+    assert sizes == [(852, 480)]                                   # yuv420p: even sides
 
     def broken(*_a, **_k):
         raise RuntimeError("no CUDA")
@@ -100,6 +110,8 @@ def test_upscale_input_decisions(job, monkeypatch):
     assert pick(j, (1920, 1080), (2560, 1440), "source", "1440", False, "ai", **args) == \
         ("gpu", "source.mp4")
     assert any("AI làm nét không chạy được" in m for m in logs)
+    assert pick(j, (1920, 1080), (1920, 1080), "source", "1080", False, "ai", **args) == \
+        (None, "source.mp4")                                       # same size: a plain render
 
 
 def test_vulkan_device_prefers_the_discrete_card(monkeypatch):
@@ -124,7 +136,24 @@ def test_ai_key_follows_the_source_and_size(tmp_path):
     assert k == upscale.ai_key(src, 2560, 1440) and k != upscale.ai_key(src, 1440, 2560)
     src.write_bytes(b"b" * 2000)
     assert upscale.ai_key(src, 2560, 1440) != k
-    assert upscale.ai_seconds(60) == pytest.approx(60 * 30 / upscale.AI_FPS)
+    # the model reads at 2/3 of a 1080p target: 1280×720 for a 1080p or a 720p source
+    assert upscale.ai_seconds(60, (1920, 1080), 1920, 1080) == \
+        pytest.approx(60 * 30 * 1280 * 720 / upscale.AI_PIXELS_S)
+    assert upscale.ai_seconds(60, (1280, 720), 1920, 1080) == \
+        upscale.ai_seconds(60, (1920, 1080), 1920, 1080)
+
+
+def test_the_model_reads_at_two_thirds_of_the_target():
+    from app.pipeline import upscale_ai as ua
+
+    assert ua.model_input(1920, 1080, 1920, 1080) == (1280, 720)     # same size: clean, 2× faster
+    assert ua.model_input(1280, 720, 1920, 1080) == (1280, 720)
+    assert ua.model_input(1024, 576, 1920, 1080) == (1024, 576)      # smaller: as it is
+    assert ua.model_input(1920, 1080, 2560, 1440) == (1706, 960)
+    assert ua.model_input(3840, 2160, 1920, 1080) == (1280, 720)
+    assert ua.model_input(1080, 1920, 1080, 1920) == (720, 1280)     # vertical
+    w, h = ua.model_input(1920, 1080, 1080, 608)                     # the 9:16 fit
+    assert 4 * h >= 608 and h == 406
 
 
 def test_ai_intermediate_is_reused(tmp_path, monkeypatch):
@@ -163,6 +192,16 @@ def test_branch_quality_wins_over_the_series_resolution(tmp_path, monkeypatch):
     assert o["res"] == "source"
 
 
+def test_ai_graph_at_the_source_size_and_in_9_16(job):
+    j, segs = job
+    cmd, graph = _build(j, segs, upscale="ai", src_file="upscaled/k.mkv", sharpen=True)
+    assert cmd[cmd.index("-i") + 1] == "upscaled/k.mkv" and "[vscl]" not in graph
+    cmd, graph = _build(j, segs, frame="tiktok", res="1080", upscale="ai",
+                        src_file="upscaled/k.mkv", burn_w=1080, burn_h=608)
+    assert cmd[cmd.index("-i") + 1] == "upscaled/k.mkv" and "[vfit]" in graph
+    assert "-init_hw_device" not in cmd
+
+
 def test_export_branch_quality_to_request():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from desktop.widgets import export_branches as eb
@@ -170,6 +209,11 @@ def test_export_branch_quality_to_request():
     assert eb.QUALITIES_BY_KEY["1440ai"] == {"res": "1440", "upscale": "ai"}
     assert eb.QUALITIES_BY_KEY["source"] == {"res": "source"}   # the label's promise
     assert eb.QUALITIES_BY_KEY[""] == {}                         # follow the series
+    assert eb.branch_render({"quality": "1080", "ai": True}) == {"res": "1080", "upscale": "ai"}
+    assert eb.branch_render({"quality": "1440ai"}) == {"res": "1440", "upscale": "ai"}
+    assert eb.branch_render({"frame": "tiktok", "quality": "1440", "ai": True}) == \
+        {"upscale": "ai"}                                          # 9:16 keeps its canvas
+    assert eb.branch_render({"quality": ""}) == {}
 
 
 def _child(monkeypatch, code: str):
