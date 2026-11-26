@@ -274,3 +274,30 @@ def test_short_read_is_measured_against_the_video_stream():
     assert ua.stream_seconds({"duration": "8.000000"}, {"duration": "9.032"}) == 8.0
     assert ua.stream_seconds({"tags": {"DURATION": "00:01:02.500000000"}}, {}) == 62.5
     assert ua.stream_seconds({"duration": "N/A"}, {"duration": "9.5"}) == 9.5
+
+
+def test_ai_copy_size_is_the_whole_picture_at_the_render_size():
+    """The render and the still look the copy up by this size; a 9:16 band cut crops the copy
+    afterwards, so it is the whole source picture's fit (not the cut one's)."""
+    assert assemble.ai_size((1280, 720), "source", "1080") == (1920, 1080)
+    assert assemble.ai_size((853, 480), "source", "source") == (852, 480)
+    assert assemble.ai_size((1920, 1080), "tiktok", "1080") == (1080, 606)
+    assert assemble.ai_size((720, 1280), "tiktok", "1080") == (1080, 1920)
+
+
+def test_the_still_frame_is_cut_from_the_ai_copy(job):
+    j, segs = job
+    cmd, _g = _build_still(j)
+    assert cmd[cmd.index("-i") + 1] == "upscaled/k.mkv"
+    # the quick proof never uses it
+    cmd = assemble._build_render(j, segs, audio_mode="replace", orig_volume=1.0, dub_volume=1.0,
+                                 preview=True, upscale="ai", src_file="upscaled/k.mkv")
+    assert cmd[cmd.index("-i") + 1] == "source.mp4"
+
+
+def _build_still(j):
+    cmd = assemble._build_render(j, [], audio_mode="replace", orig_volume=1.0, dub_volume=1.0,
+                                 preview=True, plan=([], 0, []), dub=None, still_at=8.0,
+                                 upscale="ai", src_file="upscaled/k.mkv", burn_w=1920,
+                                 burn_h=1080, loudness=False)
+    return cmd, (j.work_dir / "filter_complex_still.txt").read_text(encoding="utf-8")

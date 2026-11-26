@@ -741,6 +741,7 @@ TIKTOK_W, TIKTOK_H = 1080, 1920
 
 
 STILL_PNG = "still.png"
+STILL_INFO = "still.json"        # {"ai": None | "ready" | "missing"} — what the still showed
 
 
 PROOF_H = 640          # the quick proof's picture height
@@ -812,7 +813,7 @@ def _build_render(
     # an upscale (res "1440", a source frame, the real render only) happens before everything
     # else, so the sharpening, the cover and the subtitles are drawn at the final size
     # "ai": the cached AI copy IS the picture input, at the burn size (also same size, 9:16 fit)
-    upscaled = bool(upscale) and not preview and (
+    upscaled = bool(upscale) and (not preview or (still and upscale == "ai")) and (
         upscale == "ai" or (bool(burn_w) and frame != "tiktok"))
     from app.pipeline import upscale as upmod
 
@@ -1057,6 +1058,14 @@ def _build_render(
 
 
 
+def ai_size(src_size: tuple[int, int], frame: str, res: str | None) -> tuple[int, int]:
+    """Size of the AI copy a render with these settings uses: the WHOLE source picture at its
+    burn size (a 9:16 band cut crops the copy afterwards), even sides for yuv420p. The render
+    and the "Xem thật" still look the copy up by the same size. Pure."""
+    w, h = burn_size(src_size, frame, res) or src_size
+    return w // 2 * 2, h // 2 * 2
+
+
 def _upscale_input(job: Job, src_size: tuple[int, int] | None, burn: tuple[int, int], frame: str,
                    res: str, preview: bool, upscale: str | None, *, log, say, cancel
                    ) -> tuple[str | None, str]:
@@ -1075,8 +1084,9 @@ def _upscale_input(job: Job, src_size: tuple[int, int] | None, burn: tuple[int, 
             mins = upmod.ai_seconds(dur, src_size, burn[0], burn[1]) / 60
             log(f"… AI làm nét {burn[0]}×{burn[1]} (Real-ESRGAN, ~{max(1, round(mins))} phút lần "
                 "đầu; dựng lại dùng bản đã làm)")
-        try:                       # yuv420p: even sides (a VP9 source can be odd)
-            path = upmod.ensure_ai(job, burn[0] // 2 * 2, burn[1] // 2 * 2, log=log, cancel=cancel,
+        aw, ah = ai_size(src_size, frame, res)
+        try:
+            path = upmod.ensure_ai(job, aw, ah, log=log, cancel=cancel,
                                    progress=lambda f: say(f, f"AI làm nét · {int(f * 100)}%"))
             return "ai", path.relative_to(job.work_dir).as_posix()
         except InterruptedError:
@@ -1268,15 +1278,31 @@ def assemble(
 
     if still_at is not None:
         # the exact picture of the render (same .ass, same graph: bars, cover, watermark,
-        # notes, canvas text) for ONE second — no voice, no encode: about a second of work
+        # notes, canvas text) for ONE second — no voice, no encode: about a second of work.
+        # With «AI làm nét» the frame is cut from the AI copy once a render has made it (the
+        # pass takes minutes: never for a still); still.json tells the page which it showed.
+        from app.pipeline import upscale as upmod
+
+        ai_file, ai_state, ai_wh = None, None, (0, 0)
+        if upmod.engine(upscale) == "ai" and src_size:
+            ai_wh = ai_size(src_size, frame, res)
+            made = upmod.ai_path(job, *ai_wh)
+            ai_state = "ready" if made.exists() else "missing"
+            if made.exists():
+                ai_file = made.relative_to(job.work_dir).as_posix()
+        fsutil.atomic_write_text(job.work_dir / STILL_INFO, json.dumps({"ai": ai_state}))
         cmd = _build_render(job, [], audio_mode="replace", orig_volume=1.0, dub_volume=1.0,
                             cover_mode=mode, preview=True, frame=frame, plan=([], 0, []),
                             dub=None, encoder="libx264", duration=0.0, inserts=None, res=res,
-                            glass_band=glass_band, glass_mask=mask_name, burn_h=burn[1],
-                            burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
+                            glass_band=glass_band, glass_mask=mask_name,
+                            # the AI copy is at the render's size: draw on it as the render does
+                            burn_h=ai_wh[1] if ai_file else burn[1],
+                            burn_w=(ai_wh[0] if ai_file else
+                                    burn[0] if src_size and burn != tuple(src_size) else None),
                             glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name,
                             cut=cut if clay is not None else None, sharpen=sharpen,
-                            loudness=False, still_at=still_at, still_h=still_h)
+                            loudness=False, still_at=still_at, still_h=still_h,
+                            upscale="ai" if ai_file else None, src_file=ai_file or "source.mp4")
         out = job.work_dir / STILL_PNG
         out.unlink(missing_ok=True)
         done = subprocess.run(cmd, cwd=str(job.work_dir), capture_output=True)

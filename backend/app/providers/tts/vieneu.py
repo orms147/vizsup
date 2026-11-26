@@ -116,9 +116,12 @@ def _acquire():
         if use_gpu() and _made < 1:
             from vieneu import Vieneu
 
+            from app.heavy import heavy_task
+
             try:
                 _made += 1
-                return Vieneu(mode="v3turbo", device="cuda")
+                with heavy_task("VieNeu (nạp giọng lên card)"):
+                    return Vieneu(mode="v3turbo", device="cuda")
             except Exception:  # noqa: BLE001 - out of memory, missing weights: speak on the CPU
                 _made -= 1
                 _gpu_failed = True
@@ -279,9 +282,17 @@ class VieNeuTTS(TTSProvider):
                                 done(key, exc)
                     break
                 group, pending = pending[:GROUP], pending[GROUP:]
+                from app.heavy import heavy_task
+
                 try:
-                    wavs = _speak_group(tts, [t for _k, t, _p in group], v)
+                    # one heavy job on the card at a time (the AI upscale of another render…)
+                    with heavy_task("VieNeu (đọc lồng tiếng)", cancel=cancel):
+                        wavs = _speak_group(tts, [t for _k, t, _p in group], v)
                     rate_hz = tts.sample_rate
+                except InterruptedError:         # cancelled while waiting for the card
+                    for key, _t, _p in group + pending:
+                        done(key, InterruptedError())
+                    break
                 finally:
                     _release(tts)
                 jobs = [None if isinstance(w, Exception) else pool.submit(_save, w, rate_hz, p, rate)

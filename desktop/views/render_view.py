@@ -827,6 +827,10 @@ class RenderView(QWidget):
         self.frame.currentIndexChanged.connect(self._sync_frame_aspect)
         self._sync_frame_aspect()
         pv.addWidget(self.preview, 1)
+        # «AI làm nét» ticked but no AI copy yet: "Xem thật" shows the frame without it
+        self.real_note = label("", "small", wrap=True)
+        self.real_note.setVisible(False)
+        pv.addWidget(self.real_note)
         self._right_stack.addWidget(prev)
 
         # 1 — progress card
@@ -1654,6 +1658,8 @@ class RenderView(QWidget):
         else:
             self._real_timer.stop()
             self.preview.set_final_still(None)
+            if hasattr(self, "real_note"):
+                self.real_note.setVisible(False)
 
     def _real_opts(self) -> dict:
         style, size_px, font = getattr(self, "_style_args", ({}, 20, "Be Vietnam Pro"))
@@ -1679,15 +1685,25 @@ class RenderView(QWidget):
         self.preview.set_still_busy(True)
 
         def work():
-            from app.pipeline import render
+            from app.pipeline import assemble, render
 
-            return str(render.still_job(job, o, t))
+            path = render.still_job(job, o, t)
+            try:
+                ai = json.loads((job.work_dir / assemble.STILL_INFO).read_text("utf-8")).get("ai")
+            except (OSError, ValueError):
+                ai = None
+            return str(path), ai
 
-        def done(path):
+        def done(res):
+            path, ai = res
             self._real_busy = False
             self._real_key = key
             self.preview.set_final_still(path)
             self.preview.set_still_busy(False)
+            self.real_note.setText(
+                "Xem thật: khung này chưa qua AI làm nét — bản AI được làm ở lần dựng đầu tiên "
+                "(vài phút), sau đó Xem thật hiện đúng hình AI." if ai == "missing" else "")
+            self.real_note.setVisible(ai == "missing")
 
         def failed(msg):
             self._real_busy = False

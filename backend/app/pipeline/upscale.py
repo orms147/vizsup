@@ -179,6 +179,16 @@ def ensure_ai(job, w: int, h: int, *, log: Callable[[str], None] | None = None,
     if not ai_available():
         raise RuntimeError("AI làm nét cần card NVIDIA với PyTorch CUDA.")
     model = ensure_model(log)
+    from app.heavy import heavy_task
+
+    # one heavy job on the card at a time, across processes too (VieNeu, Demucs, OCR …)
+    with heavy_task("AI làm nét", log=log, cancel=cancel):
+        if out.exists():                 # made meanwhile by the render that held the card
+            return out
+        return _make_ai(job, out, w, h, model, log=log, progress=progress, cancel=cancel)
+
+
+def _make_ai(job, out: Path, w: int, h: int, model: Path, *, log, progress, cancel) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     for old in out.parent.glob("*.mkv"):          # an intermediate of an older source / size
         old.unlink(missing_ok=True)
