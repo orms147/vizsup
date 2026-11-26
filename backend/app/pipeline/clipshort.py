@@ -370,6 +370,14 @@ def make(parent: Job, start: float, end: float, hook: str, storage: Path, *,
 
 # --- 3. burned notes ----------------------------------------------------------------------------------
 
+def hook_shown(job: Job, hook) -> str:
+    """The hook as it is burned and posted: the project's «Lọc từ trong bản xuất» rules applied
+    (word_filter.json is copied from the episode with the cut)."""
+    from app.pipeline import word_filter
+
+    return word_filter.transform(job)(str(hook or ""))
+
+
 def _safe(text: str) -> str:
     """No ASS override can come out of user text."""
     return re.sub(r"[{}\\]", "", " ".join(str(text or "").split()))
@@ -388,7 +396,7 @@ def events(job: Job, duration: float) -> list[dict]:
         return []
     dur = float(duration or 0)
     out = []
-    hook = _safe(s.get("hook"))
+    hook = _safe(hook_shown(job, s.get("hook")))
     if hook:
         out.append({"start": 0.0, "end": min(HOOK_SECONDS, dur) if dur > 1 else HOOK_SECONDS,
                     "text": "{\\fscx130\\fscy130\\b1}" + hook, "align": 8,

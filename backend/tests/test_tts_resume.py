@@ -211,3 +211,27 @@ def test_has_speakable():
 
     assert has_speakable("Xin chào") and has_speakable("Đ") and has_speakable("2025")
     assert not has_speakable("第二句") and not has_speakable("…!?") and not has_speakable("")
+
+
+def test_word_filter_matches_across_the_cue_line_break(tmp_path):
+    from app.pipeline import word_filter
+
+    job = Job(id="wf", work_dir=tmp_path)
+    word_filter.save(job, True, list(word_filter.DEFAULT_RULES))
+    apply = word_filter.transform(job)
+    assert apply("Cút\nđi!") == "Đi chỗ\nkhác!"        # the two lines are kept
+    assert apply("Đồ khốn\nkiếp") == "Đồ đáng\nghét"
+    assert apply("Tao giết\nnó") == "Tao dít\nnó"
+
+
+def test_the_short_hook_is_filtered_where_it_is_burned_and_posted(tmp_path):
+    from app.pipeline import autopilot, clipshort, word_filter
+
+    md = {"title": "t", clipshort.KEY: {"parent": "p", "start": 0, "end": 30,
+                                       "hook": "Tao sẽ giết mày!", "episode": 2}}
+    job = Job(id="s", work_dir=tmp_path, metadata=md)
+    assert "giết" in clipshort.events(job, 40)[0]["text"]       # filter off: as written
+    word_filter.save(job, True, list(word_filter.DEFAULT_RULES))
+    assert clipshort.events(job, 40)[0]["text"].endswith("Tao sẽ dít mày!")
+    meta = autopilot.post_meta(job, "short", {"short_title": "{hook}"})
+    assert meta.title == "Tao sẽ dít mày!"

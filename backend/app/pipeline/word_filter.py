@@ -45,16 +45,21 @@ def transform(job):
     if not enabled or not mapping:
         return str
     terms = sorted(mapping, key=len, reverse=True)
-    alternatives = [r"[^\S\r\n]+".join(map(re.escape, term.split())) for term in terms]
+    # a phrase may be split by the line break of a two-line cue ("Cút\nđi")
+    alternatives = [r"\s+".join(map(re.escape, term.split())) for term in terms]
     pattern = re.compile(r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)", re.IGNORECASE)
 
     def substitute(match: re.Match) -> str:
         source = match.group()
         target = mapping.get(" ".join(source.lower().split()), source)
         if source.isupper():
-            return target.upper()
-        if source[0].isupper():
-            return target[:1].upper() + target[1:]
+            target = target.upper()
+        elif source[0].isupper():
+            target = target[:1].upper() + target[1:]
+        if "\n" in source and " " in target:     # keep the cue's two lines
+            spaces = [i for i, ch in enumerate(target) if ch == " "]
+            mid = min(spaces, key=lambda i: abs(i - len(target) / 2))
+            target = target[:mid] + "\n" + target[mid + 1:]
         return target
 
     def apply(text: str) -> str:

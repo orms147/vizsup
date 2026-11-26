@@ -1219,7 +1219,7 @@ def assemble(
         if sinfo and watermark and watermark.get("on") and str(watermark.get("text") or "").strip():
             end_txt += " · " + str(watermark["text"]).strip()
         use_bar = bool(bar_subs and clay.bottom)
-        canvas_layer = dict(chip=chip, hook=(sinfo or {}).get("hook", ""), end=end_txt,
+        canvas_layer = dict(chip=chip, hook=apply_words((sinfo or {}).get("hook", "")), end=end_txt,
                             duration=out_dur, cues=cues_for_subs if use_bar else None,
                             style=style, end_seconds=(ct.END_SECONDS if sinfo else 4.0))
         tags = list(overlays or [])

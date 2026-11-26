@@ -258,8 +258,8 @@ def post_meta(job: Job, kind: str, plan: dict, *, publish_at: float | None = Non
     name = (plan.get("series_name") or "").strip() or (ser[1] if ser else "")
     n = episode_label(job)
     hook = ""
-    if kind == "short":
-        hook = (clipshort.info(job) or {}).get("hook") or native_hook(job)
+    if kind == "short":           # the burned hook: the project's word filter applied
+        hook = clipshort.hook_shown(job, (clipshort.info(job) or {}).get("hook") or native_hook(job))
     tmpl = plan.get("short_title" if kind == "short" else "title") or DEFAULT_PLAN["title"]
     if not n and kind == "short":       # a short without an episode number: no "tập " left over
         tmpl = re.sub(r"\s*[Tt]ập\s*\{n\}", "", tmpl)

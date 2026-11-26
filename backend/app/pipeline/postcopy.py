@@ -44,8 +44,11 @@ def request_text(job: Job) -> str:
     b = (brief.load_brief(job) or "").strip()
     if b:
         parts.append(f"Ngữ cảnh video:\n{b[:1500]}")
-    if job.vi_srt.exists():
-        lines = [c.text.replace("\n", " ") for c in parse_srt(job.vi_srt)[:LINES]]
+    if job.vi_srt.exists():           # as burned and spoken: the word filter applied
+        from app.pipeline import word_filter
+
+        shown = word_filter.transform(job)
+        lines = [shown(c.text).replace("\n", " ") for c in parse_srt(job.vi_srt)[:LINES]]
         parts.append("Lời thoại tiếng Việt (đầu video):\n" + "\n".join(lines))
     return "\n\n".join(parts)
 
