@@ -66,13 +66,14 @@ class Profile:
     autopilot: dict = field(default_factory=dict)   # "theo dõi tập mới" (autopilot_of)
     ocr_area: dict = field(default_factory=dict)    # "Khoanh vùng chữ Trung" (pipeline/ocr_area.py)
     ocr_logos: list = field(default_factory=list)   # logo regions OCR skips (ocr_area.blank_logos)
+    word_filter: dict = field(default_factory=dict)  # «Lọc từ» kept for new episodes (word_filter.py)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "match": self.match, "glossary": self.glossary,
                 "characters": self.characters, "brief": self.brief, "style": self.style,
                 "render": self.render, "pronounce": self.pronounce, "short": self.short,
                 "autopilot": self.autopilot, "ocr_area": self.ocr_area,
-                "ocr_logos": self.ocr_logos}
+                "ocr_logos": self.ocr_logos, "word_filter": self.word_filter}
 
     @property
     def terms(self) -> int:
@@ -116,7 +117,8 @@ def _from_dict(slug: str, d: dict) -> Profile:
                    autopilot=d["autopilot"] if isinstance(d.get("autopilot"), dict) else {},
                    ocr_area=d["ocr_area"] if isinstance(d.get("ocr_area"), dict) else {},
                    ocr_logos=[x for x in d["ocr_logos"] if isinstance(x, dict)]
-                   if isinstance(d.get("ocr_logos"), list) else [])
+                   if isinstance(d.get("ocr_logos"), list) else [],
+                   word_filter=d["word_filter"] if isinstance(d.get("word_filter"), dict) else {})
 
 
 def load(slug: str) -> Profile | None:

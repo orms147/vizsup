@@ -6,7 +6,10 @@ from desktop.widgets.chrome import button, label
 
 
 class WordFilterDialog(QDialog):
-    def __init__(self, enabled: bool, rules: list[tuple[str, str]], parent=None) -> None:
+    def __init__(self, enabled: bool, rules: list[tuple[str, str]], parent=None, *,
+                 keep_where: str | None = None, kept: bool = False) -> None:
+        """``keep_where``: the series name new episodes take the list from, "" = app-wide, None =
+        no "keep for new" choice; ``kept``: a list is kept there already."""
         super().__init__(parent)
         self.setWindowTitle("Lọc từ trong bản xuất")
         self.resize(560, 400)
@@ -22,6 +25,14 @@ class WordFilterDialog(QDialog):
         defaults = button("Dùng danh sách gợi ý", "RefreshCw")
         defaults.clicked.connect(lambda: self._set_rules(word_filter.DEFAULT_RULES))
         layout.addWidget(defaults)
+        self.keep = None
+        if keep_where is not None:
+            self.keep = QCheckBox(f"Dùng danh sách này cho các tập mới của bộ phim 《{keep_where}》"
+                                  if keep_where else "Dùng danh sách này cho mọi video mới")
+            self.keep.setToolTip("Video mới (dán link, Telegram, theo dõi) tự nhận danh sách này "
+                                 "khi bắt đầu chạy. Video đã duyệt không bị đổi.")
+            self.keep.setChecked(kept)
+            layout.addWidget(self.keep)
         self.status = label("", wrap=True)
         layout.addWidget(self.status)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)

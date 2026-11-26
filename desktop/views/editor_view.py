@@ -311,10 +311,24 @@ class EditorView(SelectionActions, QWidget):
 
         job = self.job
         old = word_filter.load(job)
-        dialog = WordFilterDialog(*old, parent=self)
-        if dialog.exec() and (dialog.enabled.isChecked(), dialog.rules) != old and self.job is job:
-            self._save_caption_output(
-                lambda: word_filter.save(job, dialog.enabled.isChecked(), dialog.rules))
+        where, kept = word_filter.kept_for_new(job)
+        shown = old
+        if kept and not (job.work_dir / word_filter.FILE).exists():
+            shown = (old[0], kept[1])            # no list of its own yet: start from the kept one
+        dialog = WordFilterDialog(*shown, parent=self, keep_where=where, kept=bool(kept))
+        if not dialog.exec() or self.job is not job:
+            return
+        new = (dialog.enabled.isChecked(), dialog.rules)
+        if dialog.keep is not None:
+            try:
+                if dialog.keep.isChecked():
+                    word_filter.keep_for_new(job, *new)
+                elif kept:
+                    word_filter.keep_for_new(job, False, None)
+            except OSError as exc:
+                self.message.emit(f"Không lưu được danh sách cho video mới: {exc}", "err")
+        if new != old:
+            self._save_caption_output(lambda: word_filter.save(job, *new))
 
     def _save_caption_output(self, save) -> None:
         try:

@@ -172,6 +172,12 @@ def _run_one(args: argparse.Namespace, url: str) -> int:
             _series.inherit(job, prof, log_fn=lambda m: print(f"[run] {m}"))
     except Exception as exc:  # noqa: BLE001 - an aid, never fatal
         print(f"[run] series skipped ({exc})")
+    try:                          # «Lọc từ» kept for new projects (the series' or app-wide)
+        from app.pipeline import word_filter
+
+        word_filter.inherit(job, log=lambda m: print(f"[run] {m}"))
+    except Exception as exc:  # noqa: BLE001 - an aid, never fatal
+        print(f"[run] word filter skipped ({exc})")
     # 2.39) Bộ phim: names + xưng hô from the newest approved episode (one call, once)
     if force or not job.vi_srt.exists():
         from app.pipeline import cast

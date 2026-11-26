@@ -1,4 +1,9 @@
-"""Optional project rules for softening Vietnamese wording in the output."""
+"""Optional project rules for softening Vietnamese wording in the output.
+
+The rules live in the project (word_filter.json, part of the approved revision). The owner may
+also keep them for NEW projects: in the series profile (`Profile.word_filter`) when the project
+is in one, else app-wide (storage/_word_filter.json). `inherit` copies that into a project that
+has no rules of its own at the start of a run — never into an approved project."""
 from __future__ import annotations
 
 import json
@@ -9,6 +14,7 @@ from dataclasses import replace
 from app.fsutil import atomic_write_text
 
 FILE = "word_filter.json"
+GLOBAL_FILE = "_word_filter.json"
 DEFAULT_RULES = (
     ("đồ súc sinh", "đồ khả ái"),
     ("giết", "dít"),
@@ -32,6 +38,69 @@ def load(job) -> tuple[bool, list[tuple[str, str]]]:
 def save(job, enabled: bool, rules: list[tuple[str, str]]) -> None:
     atomic_write_text(job.work_dir / FILE, json.dumps(
         {"enabled": enabled, "rules": rules}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clean(data) -> tuple[bool, list[tuple[str, str]]] | None:
+    if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
+        return None
+    rules = [(a, b) for r in data["rules"] if isinstance(r, (list, tuple)) and len(r) == 2
+             for a, b in [r] if isinstance(a, str) and a.strip() and isinstance(b, str)]
+    return bool(data.get("enabled")), rules
+
+
+def _global_path():
+    from pathlib import Path
+
+    from app.config import settings
+
+    return Path(settings.vizsup_storage_dir) / GLOBAL_FILE
+
+
+def kept_for_new(job) -> tuple[str, tuple[bool, list[tuple[str, str]]] | None]:
+    """Where rules for new projects are kept for this project — its series' name, or "" for
+    app-wide — and what is kept there (None = nothing)."""
+    from app.pipeline import series
+
+    p = series.profile_of(job)
+    if p is not None:
+        return p.name, _clean(p.word_filter)
+    try:
+        return "", _clean(json.loads(_global_path().read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return "", None
+
+
+def keep_for_new(job, enabled: bool, rules: list[tuple[str, str]] | None) -> None:
+    """Keep (or with rules None, forget) the rules for new projects — see :func:`kept_for_new`."""
+    from app.pipeline import series
+
+    data = {} if rules is None else {"enabled": bool(enabled), "rules": [list(r) for r in rules]}
+    p = series.profile_of(job)
+    if p is not None:
+        p.word_filter = data
+        series.save(p)
+    elif data:
+        atomic_write_text(_global_path(), json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        _global_path().unlink(missing_ok=True)
+
+
+def inherit(job, *, log=None) -> bool:
+    """Start of a run: copy the rules kept for new projects into a project with none of its
+    own. Never touches an approved project (its revision must not change)."""
+    from app.pipeline import approval
+
+    if (job.work_dir / FILE).exists() or approval.is_approved(job):
+        return False
+    where, kept = kept_for_new(job)
+    if not kept or not kept[1]:
+        return False
+    save(job, *kept)
+    if log:
+        log(f"↷ Lọc từ trong bản xuất: dùng danh sách {len(kept[1])} từ"
+            + (f" của bộ phim 《{where}》" if where else " đã lưu cho video mới")
+            + ("" if kept[0] else " (đang tắt)"))
+    return True
 
 
 def normal(text: str) -> str:

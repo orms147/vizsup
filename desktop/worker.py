@@ -156,6 +156,15 @@ class PipelineWorker(QObject):
             store.debug(f"series failed: {type(exc).__name__}: {exc}")
             self.log.emit(f"⚠ Bỏ qua bước bộ phim ({type(exc).__name__}: {exc})")
 
+    def _word_filter(self, job: Job) -> None:
+        """«Lọc từ» kept for new projects (the series' or app-wide) → a project with none."""
+        try:
+            from app.pipeline import word_filter
+
+            word_filter.inherit(job, log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001
+            store.debug(f"word filter inherit failed: {type(exc).__name__}: {exc}")
+
     def _preflight_translators(self, o: dict) -> None:
         """Validate the translator choice up front so the user isn't told 'missing
         key' only after a long download/OCR/ASR run — and isn't silently handed
@@ -533,6 +542,7 @@ class PipelineWorker(QObject):
             self._timing_pass(job, o)
         # 2.38) Bộ phim: link the episode to its series and take over its style / render
         self._series(job, o)
+        self._word_filter(job)
         # 2.39) Bộ phim: names + xưng hô from the newest approved episode (one call, once)
         if not job.vi_srt.exists():
             from app.pipeline import cast
