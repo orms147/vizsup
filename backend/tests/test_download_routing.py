@@ -445,3 +445,73 @@ def test_download_warns_when_the_video_may_be_an_ad(tmp_path, monkeypatch):
     download.download(Job(id="j", work_dir=tmp_path, url="https://www.douyin.com/video/1"),
                       log=logs.append)
     assert any(m.startswith("⚠ Kiểm tra lại video vừa tải") for m in logs)
+
+
+def test_bilibili_language_prefix_and_tracking_dropped():
+    from app.pipeline.download import normalize_url
+
+    url = ("https://www.bilibili.com/en/video/BV16Vap6yEMQ/?trackid=web_pegasus_0.x"
+           "&spm_id_from=333.1007.tianma.1-1-1.click")
+    assert normalize_url(url) == "https://www.bilibili.com/video/BV16Vap6yEMQ"
+    assert (normalize_url("https://www.bilibili.com/video/BV16Vap6yEMQ?p=3&vd_source=ab")
+            == "https://www.bilibili.com/video/BV16Vap6yEMQ?p=3")
+    assert normalize_url("https://space.bilibili.com/123/video") == "https://space.bilibili.com/123/video"
+
+
+def test_bilibili_asks_ytdlp_for_the_highest_bitrate(tmp_path, monkeypatch):
+    """Bilibili's 1080p AVC (3.3 Mb/s) is sharper than the AV1 (1.6 Mb/s) yt-dlp picks by
+    default; Douyin keeps yt-dlp's own order."""
+    import sys
+    import types
+
+    seen = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            (tmp_path / "source.mp4").write_bytes(b"x")
+            return {"title": "t"}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL))
+    job = Job(id="b", work_dir=tmp_path)
+    download._ytdlp(job, "https://www.bilibili.com/video/BV16Vap6yEMQ")
+    assert seen[-1]["format_sort"] == download.BILIBILI_SORT
+    download._ytdlp(job, "https://www.douyin.com/video/1")
+    assert "format_sort" not in seen[-1]
+
+
+def test_best_listed_takes_the_largest_douyin_encode():
+    streams = [
+        {"url": "https://v/576", "width": 1012, "height": 576, "bit_rate": 685712, "format": "mp4"},
+        {"url": "https://v/720h265", "width": 1264, "height": 720, "bit_rate": 551009,
+         "h265": True, "format": "mp4"},
+        {"url": "https://v/720dash", "width": 1264, "height": 720, "bit_rate": 760000,
+         "format": "dash"},
+        {"url": "https://v/720", "width": 1264, "height": 720, "bit_rate": 750786, "format": "mp4"},
+        {"url": "", "width": 1920, "height": 1080},
+    ]
+    assert download.best_listed(streams) == "https://v/720"
+    assert download.best_listed([]) is None
+
+
+def test_douyin_web_probes_the_listed_encode_too(tmp_path, monkeypatch):
+    """The player streamed 576p; the detail answer listed 720p — that one is downloaded."""
+    monkeypatch.setattr(download, "_capture_checked", lambda vid: {
+        "urls": ["https://v/played576"], "user_agent": "UA", "title": "t",
+        "streams": [{"url": "https://v/720", "width": 1264, "height": 720, "format": "mp4"}]})
+    probed = {"https://v/played576": {"video": 576, "audio": True, "duration": 9},
+              "https://v/720": {"video": 720, "audio": True, "duration": 9}}
+    monkeypatch.setattr(download, "_streams_of", lambda u, ua: probed[u])
+    saved = []
+    monkeypatch.setattr(download, "_save_douyin_streams", lambda job, ua, v, a: saved.append(v))
+    job = download._douyin_web(Job(id="d", work_dir=tmp_path), "https://www.douyin.com/video/7532341222271241487")
+    assert saved == ["https://v/720"]
+    assert job.metadata["source_quality"]["selected"]["video"] == 720

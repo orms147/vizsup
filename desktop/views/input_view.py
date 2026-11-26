@@ -135,6 +135,8 @@ class InputView(QWidget):
     glossaryRequested = Signal()   # open the glossary dialog (global scope)
     settingsRequested = Signal()   # "Thêm khóa" on the missing-key card
     queueRequested = Signal(list)  # E-9: several links / files → run them one by one
+    directRequested = Signal(list, dict)
+    retryDirectRequested = Signal()
     groupResumeRequested = Signal(str)   # a split video: queue its unfinished parts
     groupJoinRequested = Signal(str)     # a split video: join the rendered parts
     groupDeleteRequested = Signal(str)   # a split video: delete it and all its parts
@@ -146,6 +148,8 @@ class InputView(QWidget):
         self._srt: str | None = None
         self._last_opts: dict | None = None
         self._busy = False
+        self._direct_active = False
+        self._direct_error = False
         self._t0 = 0.0
         self._stage = ""
         self._stage_t0: dict[str, float] = {}
@@ -354,14 +358,28 @@ class InputView(QWidget):
         self.url.setObjectName("hero")
         self.url.setPlaceholderText("https://www.douyin.com/video/…")
         self.url.textChanged.connect(self._refresh_start)
-        self.url.returnPressed.connect(lambda: self.start.isEnabled() and self._emit_start())
-        self.start = button("Bắt đầu", "ArrowRight", variant="primary")
+        self.url.returnPressed.connect(self._enter)
+        self.start = button("Sửa trước khi dựng", "ArrowRight")
+        self.start.setToolTip("Mở trình sửa phụ đề trước khi dựng")
         self.start.setMinimumWidth(122)
         self.start.setStyleSheet("QPushButton{min-height:47px;font-size:14px;padding:0 18px;}")
         self.start.clicked.connect(self._emit_start)
         row.addWidget(self.url, 1)
         row.addWidget(self.start)
         v.addLayout(row)
+        from desktop.widgets.export_branches import ExportBranches
+
+        self.export_branches = ExportBranches(self)
+        v.addWidget(self.export_branches)
+        exports = QHBoxLayout()
+        self.retry_direct = button("Thử lại lượt lỗi", "RefreshCw", small=True)
+        self.retry_direct.clicked.connect(self.retryDirectRequested)
+        self.direct = button("Dịch và xuất", "ArrowRight", variant="primary")
+        self.direct.clicked.connect(self._emit_direct)
+        exports.addWidget(self.retry_direct)
+        exports.addStretch()
+        exports.addWidget(self.direct)
+        v.addLayout(exports)
         foot = QHBoxLayout()
         foot.setSpacing(10)
         pick = button("Chọn video trên máy", "Upload", variant="ghost", small=True)
@@ -802,9 +820,12 @@ class InputView(QWidget):
         need_srt = self._subtitle_source() == "srt" and not self._srt and not page
         self.start.setEnabled(has_src and not need_srt and not self._busy)
         many = len(_ALL_URLS.findall(self.url.text()))
+        if hasattr(self, "direct"):
+            self.direct.setEnabled(bool(many) and not page and not need_srt and
+                                   (not self._busy or self._direct_active))
         self._est_timer.start()
         if page:
-            self.hint.setText("Link này là một trang / 合集 nhiều video — bấm Bắt đầu để chọn các "
+            self.hint.setText("Link này là một trang / 合集 nhiều video — bấm Sửa trước khi dựng để chọn các "
                               "video cần dịch.")
         elif need_srt and has_src:
             self.hint.setText("Chọn tệp phụ đề .srt trong Tùy chọn trước khi bắt đầu.")
@@ -849,6 +870,25 @@ class InputView(QWidget):
         self._remember(opts)
         self._last_opts = dict(opts)
         self.startRequested.emit(opts)
+
+    def _enter(self) -> None:
+        if self.direct.isEnabled():
+            self._emit_direct()
+        elif self.start.isEnabled():
+            self._emit_start()
+
+    def _emit_direct(self) -> None:
+        from app.pipeline import batch_import
+
+        urls = list(dict.fromkeys(_ALL_URLS.findall(self.url.text())))
+        if not urls or any(batch_import.is_page(url) for url in urls):
+            self.hint.setText("Dùng link của từng video để dịch và xuất.")
+            self.hint.show()
+            return
+        opts = self._collect_opts()
+        self._remember(opts)
+        self.directRequested.emit([{**opts, "url": url} for url in urls],
+                                  self.export_branches.request())
 
     def _remember(self, opts: dict) -> None:
         st = store.load_ui_state()
@@ -935,6 +975,15 @@ class InputView(QWidget):
             row = _StageRow(i, name)
             self.stage_rows[key] = row
             v.addWidget(row)
+        self._export_rows = {}
+        for i, (key, name) in enumerate(
+                (("tts", "Lồng tiếng Việt"), ("assemble", "Dựng video"),
+                 ("deliver", "Giao thành phẩm")), len(STAGES) + 1):
+            row = _StageRow(i, name)
+            self._export_rows[key] = row
+            v.addWidget(row)
+            row.hide()
+        self._displayed_stages = self.stage_rows
         self.log = QPlainTextEdit()
         self.log.setObjectName("mono")
         self.log.setReadOnly(True)
@@ -1025,15 +1074,20 @@ class InputView(QWidget):
                                      + (f" ({len(self._series_profiles)} bộ phim đã lưu)."
                                         if self._series_profiles else "."))
 
-    def set_busy(self, busy: bool) -> None:
+    def set_busy(self, busy: bool, *, direct: bool = False) -> None:
         self._busy = busy
+        self._direct_active = busy and direct
         if busy:
+            self._direct_error = False
+            self._displayed_stages = {**self.stage_rows, **(self._export_rows if direct else {})}
+            for row in self._export_rows.values():
+                row.setVisible(direct)
             self.log.clear()
             self._clear_alert()
             self._t0 = time.monotonic()
             self._stage = ""
             self._stage_t0.clear()
-            for row in self.stage_rows.values():
+            for row in self._displayed_stages.values():
                 row.set_state("wait", "Chờ đến lượt")
             self.bar.setValue(0)
             self.p_badge.setText("0%")
@@ -1049,10 +1103,11 @@ class InputView(QWidget):
             self._tick.start()
             self._set_running_copy(True)
         self.start.setEnabled(not busy)
-        self._hero_frame.setVisible(not busy)
+        self._hero_frame.setVisible(not busy or self._direct_active)
         self._toggles.setVisible(not busy)
         self.note_box.setVisible(not busy and self.note_btn.isChecked())
         self._sync_options()
+        self._refresh_start()
 
     def _set_running_copy(self, running: bool) -> None:
         self._running = running
@@ -1068,19 +1123,19 @@ class InputView(QWidget):
     def set_stage(self, key: str) -> None:
         """worker.stage_started: download → subtitle → translate (context is
         detected from progress text, it has no stage of its own)."""
-        order = [k for k, _n in STAGES]
+        order = list(self._displayed_stages)
         if key not in order:
             return
         now = time.monotonic()
         for k in order[:order.index(key)]:
-            row = self.stage_rows[k]
+            row = self._displayed_stages[k]
             if row.state == "active":
                 row.set_state("done", "Hoàn tất", self._dur(k, now))
             elif row.state == "wait":
                 row.set_state("done", "Bỏ qua" if k == "context" else "Hoàn tất")
         self._stage = key
         self._stage_t0.setdefault(key, now)
-        self.stage_rows[key].set_state("active", "Đang xử lý…", "")
+        self._displayed_stages[key].set_state("active", "Đang xử lý…", "")
 
     def _dur(self, key: str, now: float) -> str:
         t0 = self._stage_t0.get(key)
@@ -1094,8 +1149,8 @@ class InputView(QWidget):
         low = msg.lower()
         if self._stage == "subtitle" and ("ngữ cảnh" in low or "thuật ngữ" in low):
             self.set_stage("context")
-        if self._stage in self.stage_rows:
-            self.stage_rows[self._stage].set_state("active", msg, "Đang xử lý")
+        if self._stage in self._displayed_stages:
+            self._displayed_stages[self._stage].set_state("active", msg, "Đang xử lý")
 
     def append_log(self, line: str) -> None:
         self.log.appendPlainText(line)
@@ -1105,10 +1160,10 @@ class InputView(QWidget):
         self.cancel.setEnabled(False)
         self.append_log("⏳ Đang hủy…")
 
-    def set_done(self) -> None:
+    def set_done(self, *, export_path: str | None = None) -> None:
         self._finish()
         now = time.monotonic()
-        for k, row in self.stage_rows.items():
+        for k, row in self._displayed_stages.items():
             if row.state in ("active", "wait"):
                 row.set_state("done", "Hoàn tất" if row.state == "active" or k != "context"
                               else "Bỏ qua", self._dur(k, now))
@@ -1116,16 +1171,19 @@ class InputView(QWidget):
         self.p_badge.setText("Xong")
         self.p_badge.setObjectName("badgeOk")
         self._repolish(self.p_badge)
-        self.status.setText("Phụ đề tiếng Việt đã sẵn sàng")
+        self.status.setText(f"Đã xuất · {Path(export_path).name}" if export_path else
+                            "Phụ đề tiếng Việt đã sẵn sàng")
+        self.status.setToolTip(export_path or "")
         self.cancel.setVisible(False)
         self.refresh_recent()
 
     def show_error(self, msg: str) -> None:
         cancelled = msg.strip().startswith("Đã hủy")
+        self._direct_error = self._direct_active
         self._finish()
-        if self._stage in self.stage_rows:
-            self.stage_rows[self._stage].set_state("paused" if cancelled else "error",
-                                                   "Đã dừng" if cancelled else "Lỗi ở bước này")
+        if self._stage in self._displayed_stages:
+            self._displayed_stages[self._stage].set_state(
+                "paused" if cancelled else "error", "Đã dừng" if cancelled else "Lỗi ở bước này")
         self.p_badge.setText("Đã dừng" if cancelled else "Lỗi")
         self.p_badge.setObjectName("badge" if cancelled else "badgeErr")
         self._repolish(self.p_badge)
@@ -1269,7 +1327,9 @@ class InputView(QWidget):
         self.retry_btn.setEnabled(True)
 
     def _retry(self) -> None:
-        if self._last_opts and not self._busy:
+        if self._direct_error and not self._busy:
+            self.retryDirectRequested.emit()
+        elif self._last_opts and not self._busy:
             self.startRequested.emit(dict(self._last_opts))
 
     # --- F-5: cost and time before Start -----------------------------------------

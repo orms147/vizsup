@@ -12,10 +12,22 @@ up (the temp file is removed either way)."""
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
 _RETRIES = (0.05, 0.1, 0.25, 0.5, 1.0)
+
+
+def link_or_copy(src: Path, dst: Path) -> None:
+    """Place a source at a fresh destination, using a hard link when possible."""
+    try:
+        os.link(src, dst)
+    except FileExistsError:
+        raise
+    except OSError:
+        with dst.open("xb") as output, src.open("rb") as source:
+            shutil.copyfileobj(source, output)
 
 
 def replace(src: Path, dst: Path) -> None:

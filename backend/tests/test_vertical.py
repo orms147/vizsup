@@ -14,7 +14,7 @@ from app.pipeline import assemble, vertical
 def test_filter_graph_fits_the_width_on_blurred_bars():
     g = vertical.filter_graph()
     assert "[0:v]split[fg][bg]" in g and "boxblur=16:3" in g
-    assert "scale=1080:1920,setsar=1[bars]" in g and "[fg]scale=1080:-2" in g
+    assert "scale=1080:1920,setsar=1[bars]" in g and "[fg]scale=1080:-2:force_divisible_by=2:flags=lanczos" in g
     assert g.endswith("overlay=(W-w)/2:(H-h)/2[v]")
 
 

@@ -254,10 +254,12 @@ def parent_pairs(parent: Job) -> list[tuple[Cue, str]]:
 
 def _cut(src: Path, dst: Path, start: float, length: float, *, cancel: Callable[[], bool] | None):
     """Re-encode [start, start+length) so the clip starts on the exact frame (a stream-copy cut
-    snaps to a keyframe and the shifted subtitles would drift). x264 veryfast, CRF 18."""
+    snaps to a keyframe and the shifted subtitles would drift). This cut is the Short's SOURCE —
+    rendered again later — so it is near-lossless (x264 medium CRF 12, ~1 generation lost
+    instead of a visible one at veryfast CRF 18)."""
     tmp = dst.with_name(f"{dst.stem}.cutting.mp4")
     cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", str(src), "-t",
-           f"{length:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt",
+           f"{length:.3f}", "-c:v", "libx264", "-preset", "medium", "-crf", "12", "-pix_fmt",
            "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(tmp)]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0 or not tmp.exists():

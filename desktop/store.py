@@ -666,15 +666,22 @@ def library_details(items: list[dict]) -> dict[str, dict]:
     for it in items:
         size = sum(dir_size(Path(d)) for d in it.get("dirs") or [])
         heavy = sum(dir_size(p) for p in heavy_paths(it))
-        approved = stale = False
+        approved = stale = auto_approved = False
         if it.get("kind") == "job" and it.get("has_vi"):
             try:
                 d = Path(it["dirs"][0])
-                approved = approval.is_approved(Job(id=d.name, work_dir=d))
+                job = Job(id=d.name, work_dir=d)
+                approved = approval.is_approved(job)
+                auto_approved = approved and approval.is_auto_approved(job)
                 stale = batch.render_state(d) == "stale"
             except Exception:  # noqa: BLE001 - a status must never break the list
                 approved = stale = False
+        if it.get("kind") == "group":
+            parts = [Job(id=p["id"], work_dir=_storage() / p["id"]) for p in it.get("parts") or []]
+            auto_approved = bool(parts) and all(approval.is_approved(p) for p in parts) and any(
+                approval.is_auto_approved(p) for p in parts)
         out[it["id"]] = {"size": size, "heavy": heavy, "approved": approved, "stale": stale,
+                         "auto_approved": auto_approved,
                          "duration": None if it.get("duration") else _probe_length(it)}
     return out
 

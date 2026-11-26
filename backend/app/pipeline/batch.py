@@ -77,7 +77,8 @@ def template_from(work_dir: Path) -> dict | None:
            "audio_mode": voice.get("audio_mode") or info.get("audio_mode") or "replace",
            "orig_volume": 1.0, "dub_volume": 1.0, "cover_mode": info.get("cover_mode"),
            "frame": info.get("frame") or "source", "res": info.get("res") or "source",
-           "preset": info.get("preset"), "credit_overlay": False, "ai_label": False}
+           "preset": info.get("preset"), "credit_overlay": False, "ai_label": False,
+           "upscale": "ai" if info.get("upscale") == "ai" else "fast"}
     if job_opts.get("tts"):
         out["tts"] = job_opts["tts"]
     for key in ("font", "size", "style"):
@@ -143,7 +144,8 @@ def describe(opts: dict | None) -> str:
             bits.append(str(opts["rate"]))
     bits.append(_MODES.get(mode, mode))
     res = opts.get("res") or "source"
-    bits.append("Cỡ gốc" if res == "source" else f"{res}p")
+    bits.append("Cỡ gốc" if res == "source" else f"{res}p"
+                + (" · AI làm nét" if res == "1440" and opts.get("upscale") == "ai" else ""))
     bits.append(_PRESETS.get(opts.get("preset") or "sharp", "Nét"))
     if (opts.get("frame") or "source") == "tiktok":
         bits.append("khung 9:16")

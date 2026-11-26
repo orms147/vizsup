@@ -142,9 +142,12 @@ class MainWindow(QMainWindow):
         self.input.glossaryRequested.connect(lambda: self._open_glossary(job=False))
         self.input.settingsRequested.connect(self._open_settings)
         self.input.queueRequested.connect(self._start_queue)
+        self.input.directRequested.connect(self._start_direct)
+        self.input.retryDirectRequested.connect(self._retry_direct)
         self._queue: list[dict] = []     # E-9: opts waiting to run to the gate
         self._queue_total = 0
         self._queue_ok = self._queue_failed = 0   # outcomes of this queue (for its summary)
+        self._queue_exported = 0
         self._queue_cancelled = False
         self._queue_job: Job | None = None   # the queued job running now (not self.job)
         self.settings_view.saved.connect(self._on_settings_saved)
@@ -450,7 +453,7 @@ class MainWindow(QMainWindow):
 
     def _resume(self, job_id: str) -> None:
         queued = self._queue_job is not None
-        if queued and job_id == self._queue_job.id:
+        if job_id in self._direct_ids() or (queued and job_id == self._queue_job.id):
             self.status.set_status("Video này đang xử lý trong hàng đợi.", "warn")
             return
         if self._batch_job is not None and job_id == self._batch_job.id:
@@ -469,6 +472,9 @@ class MainWindow(QMainWindow):
             self.input.refresh_recent()
             return
         job, opts = loaded
+        from app.pipeline.direct_export import REQUEST
+
+        opts = {k: v for k, v in opts.items() if k != REQUEST}
         if job.vi_srt.exists() and not job.source_video.exists() and opts \
                 and _source_refetchable(job, opts):
             # "Chỉ xóa file nặng" took the source: fetch it again, every other step is kept
@@ -570,7 +576,7 @@ class MainWindow(QMainWindow):
         ids = {item["id"], *(p["id"] for p in item.get("parts") or [])}
         if self.job is not None and self.job.id in ids:
             return "đang mở"
-        if self._queue_job is not None and self._queue_job.id in ids:
+        if ids & self._direct_ids() or (self._queue_job is not None and self._queue_job.id in ids):
             return "đang xử lý"
         if ids & {o.get("_job_id") for o in self._queue if o.get("_job_id")}:
             return "đang chờ trong hàng đợi"
@@ -690,6 +696,8 @@ class MainWindow(QMainWindow):
 
         if same(self._gate_job):
             return "đang xử lý"
+        if job_id in self._direct_ids():
+            return "đang dịch và xuất"
         if same(self._queue_job) and self._queue_opts is not None:   # not yet at the gate
             return "đang xử lý trong hàng đợi"
         if any(o.get("_job_id") == job_id for o in self._queue):
@@ -1018,7 +1026,7 @@ class MainWindow(QMainWindow):
     def _render_slot(self) -> str | None:
         """Where a render/join can run now: "main", "render" (the queue holds main), or
         None (busy with something that owns self.job)."""
-        if self._render_busy():
+        if self._render_busy() or (self._busy() and self._main_method == "run_direct"):
             return None
         if not self._busy():
             return "main"
@@ -1074,6 +1082,49 @@ class MainWindow(QMainWindow):
 
     # --- worker plumbing -----------------------------------------------------
     # --- E-9: several videos, one after another ------------------------------------
+    def _direct_ids(self) -> set[str]:
+        from app.pipeline import direct_export, split
+
+        job = self._queue_job
+        if job is None or not (self._queue_opts or {}).get(direct_export.REQUEST):
+            return set()
+        group = split.load_group(job.work_dir) or {}
+        return {job.id, *(part["id"] for part in group.get("parts", []))}
+
+    def _start_direct(self, items: list[dict], destination: dict) -> None:
+        from app.pipeline import direct_export
+        from desktop.widgets.style_panel import default_preset
+
+        state = store.load_ui_state()
+        voice_defaults = {k: state[f"render_{k}"] for k in ("voice", "rate", "pitch")
+                          if state.get(f"render_{k}") is not None}
+        request = {**destination, "style_defaults": default_preset() or {},
+                   "voice_defaults": voice_defaults}
+        self._start_queue([
+            {**{k: v for k, v in opts.items() if not k.startswith("_")},
+             "pick_area": False, "ai_review": False, direct_export.REQUEST: request}
+            for opts in items])
+
+    def _retry_direct(self) -> None:
+        from app.pipeline import direct_export
+        import json
+
+        active = self._direct_ids() | {o.get("_job_id") for o in self._queue}
+        items = []
+        for file in sorted(settings.vizsup_storage_dir.glob("*/job.json")):
+            try:
+                row = json.loads(file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            opts = row.get("opts") or {}
+            if (row.get("stage") == "direct_failed" and opts.get(direct_export.REQUEST)
+                    and file.parent.name not in active):
+                items.append({**opts, "_job_id": file.parent.name})
+        if items:
+            self._start_queue(items)
+        else:
+            self.status.set_status("Không có lượt dịch và xuất cần thử lại.", "ok")
+
     def _start_queue(self, items: list[dict], *, front: bool = False) -> None:
         if front:                                 # a split video's parts run next
             self._queue[:0] = items
@@ -1091,17 +1142,25 @@ class MainWindow(QMainWindow):
             return
         if not self._queue:
             ok, failed = self._queue_ok, self._queue_failed
+            exported = self._queue_exported
+            summary = " · ".join(x for x in (
+                f"{exported} video đã xuất" if exported else "",
+                f"{ok} mục tới bước duyệt" if ok else "",
+                f"{failed} mục lỗi" if failed else "") if x)
             if self._queue_cancelled:
-                self.status.set_status(f"Đã dừng hàng đợi — {ok} mục đã tới bước duyệt", "warn")
-            elif self._queue_total and (ok or failed):
-                tail = f" · {failed} mục lỗi" if failed else ""
-                self.status.set_status(f"Xong hàng đợi: {ok} mục tới bước duyệt{tail} — mở ở "
-                                       f"“Tiếp tục dự án”", "warn" if failed else "ok")
-                self._notify("Xong hàng đợi", f"{ok} mục đã tới bước duyệt{tail}",
-                             "err" if failed and not ok else "ok")
+                self.status.set_status(f"Đã dừng hàng đợi · {summary or 'Đã hủy'}", "warn")
+            elif self._queue_total and summary:
+                self.status.set_status(f"Xong hàng đợi · {summary}", "warn" if failed else "ok")
+                self._notify("Xong hàng đợi", summary, "err" if failed and not (ok or exported) else "ok")
             self._queue_total, self._queue_job = 0, None
             self._queue_ok = self._queue_failed = 0
+            self._queue_exported = 0
             self._queue_cancelled = False
+            return
+        from app.pipeline import direct_export
+
+        if self._queue[0].get(direct_export.REQUEST) and self._render_busy():
+            QTimer.singleShot(500, self._run_next_queued)
             return
         opts = self._queue.pop(0)
         loaded = store.load_job(opts["_job_id"]) if opts.get("_job_id") else None
@@ -1119,6 +1178,20 @@ class MainWindow(QMainWindow):
         self._queue_opts = {**opts, "_job_id": job.id}
         store.save_job(job, opts, "running")
         k = self._queue_total - len(self._queue)
+        if opts.get(direct_export.REQUEST):
+            self.input.set_busy(True, direct=True)
+            if self.job is not None and self.job.id in self._direct_ids():
+                self.editor.flush()
+                self.editor.setEnabled(False)
+            self.input.append_log(f"▶ Dịch và xuất {k}/{self._queue_total} · {job.url or job.id}")
+            self._run("run_direct", opts, {
+                "stage_started": self.input.set_stage,
+                "progress": self.input.set_progress,
+                "log": self.input.append_log,
+                "failed": lambda msg: self._on_direct_failed(job, opts, msg),
+                "render_done": lambda path: self._on_direct_done(job, opts, path),
+            }, job=job)
+            return
         self.input.set_busy(True)
         what = job.metadata.get("title") if opts.get("_job_id") else None
         self.input.append_log(f"▶ Hàng đợi {k}/{self._queue_total}: "
@@ -1161,6 +1234,9 @@ class MainWindow(QMainWindow):
         """Queue every part of a split video that has not reached the gate yet."""
         from app.pipeline import split
 
+        if gid in self._direct_ids():
+            self.status.set_status("Video này đang dịch và xuất.", "warn")
+            return
         group = split.load_group(settings.vizsup_storage_dir / gid)
         if not group:
             return
@@ -1172,6 +1248,9 @@ class MainWindow(QMainWindow):
             if loaded is None or loaded[0].vi_srt.exists() or p["id"] in queued or p["id"] == running:
                 continue
             opts = dict(loaded[1] or group.get("opts") or {})   # a part saved without options
+            from app.pipeline.direct_export import REQUEST
+
+            opts.pop(REQUEST, None)
             opts["_job_id"] = p["id"]
             items.append(opts)
         if not items:
@@ -1320,7 +1399,7 @@ class MainWindow(QMainWindow):
         self.status.set_status(f"Đã thêm {added} video vào hàng dựng", "busy")
 
     def _batch_add(self, items: list[dict]) -> int:
-        have = self._batch_ids()
+        have = self._batch_ids() | self._direct_ids()
         fresh = [it for it in items if it["id"] not in have]
         if not fresh:
             return 0
@@ -1342,7 +1421,8 @@ class MainWindow(QMainWindow):
 
     def _heavy_busy(self) -> bool:
         """A render / join / compile holds a slot (a batch item waits for it)."""
-        main_heavy = self._busy() and self._main_method in ("run_render", "run_join", "run_compile")
+        main_heavy = self._busy() and self._main_method in (
+            "run_render", "run_join", "run_compile", "run_direct")
         return self._render_busy() or main_heavy
 
     def _batch_next(self) -> None:
@@ -1515,7 +1595,7 @@ class MainWindow(QMainWindow):
     def resume_session(self, state: dict) -> None:
         """Re-start what the previous run left: the gate run, the gate queue, the render
         and the batch (renders only for projects still approved)."""
-        from app.pipeline import batch
+        from app.pipeline import batch, direct_export
 
         base = settings.vizsup_storage_dir
         gate = state.get("gate") or {}
@@ -1528,7 +1608,7 @@ class MainWindow(QMainWindow):
         for o in state.get("queue") or []:
             jid = o.get("_job_id")
             loaded = store.load_job(str(jid)) if jid else None
-            if jid and (loaded is None or loaded[0].vi_srt.exists()):
+            if jid and (loaded is None or (loaded[0].vi_srt.exists() and not o.get(direct_export.REQUEST))):
                 continue                      # gone, or reached the gate after all
             queue.append(dict(o))
         if queue:
@@ -1556,6 +1636,28 @@ class MainWindow(QMainWindow):
         title = (job.metadata.get("title") or job.id).split("#")[0].strip()
         self._notify("Phụ đề đã sẵn sàng", f"{title} — mở ở “Tiếp tục dự án”")
         self.remote.gate(job)               # the bot: the flagged lines + [✅ Duyệt]
+
+    def _on_direct_done(self, job: Job, opts: dict, path: str) -> None:
+        self._queue_opts = None
+        self._queue_exported += 1
+        store.save_job(job, opts, "exported")
+        self.input.append_log(f"✓ Thành phẩm · {path}")
+        self.input.set_done(export_path=path)
+        self.input.refresh_recent()
+        self._notify("Đã dịch và xuất", path)
+        self._persist()
+
+    def _on_direct_failed(self, job: Job, opts: dict, message: str) -> None:
+        store.save_job(job, opts, "direct_failed")
+        self._queue_opts = None
+        if message.startswith("Đã hủy"):
+            self._queue_cancelled = True
+        else:
+            self._queue_failed += 1
+            self._notify("Chưa xuất được video", message, "err")
+        self.input.show_error(message)
+        self.input.refresh_recent()
+        self._persist()
 
     def _on_queued_failed(self, job: Job, opts: dict, msg: str) -> None:
         self._queue_opts = None

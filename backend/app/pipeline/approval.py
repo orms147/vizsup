@@ -63,10 +63,13 @@ def revision(job: Job) -> str:
     return h.hexdigest()[:16]
 
 
-def approve(job: Job, *, cues: int | None = None) -> str:
+def approve(job: Job, *, cues: int | None = None, auto: bool = False) -> str:
     rev = revision(job)
+    stamp = {"revision": rev, "approved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "cues": cues}
+    if auto:
+        stamp["auto"] = True
     atomic_write_text((job.work_dir / _FILE), json.dumps(
-        {"revision": rev, "approved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "cues": cues},
+        stamp,
         ensure_ascii=False, indent=1), encoding="utf-8")
     try:                                   # Bộ phim: what the user kept becomes the series'
         from app.pipeline import series
@@ -82,6 +85,14 @@ def approved_revision(job: Job) -> str | None:
         return json.loads((job.work_dir / _FILE).read_text(encoding="utf-8")).get("revision")
     except (OSError, ValueError, AttributeError):
         return None
+
+
+def is_auto_approved(job: Job) -> bool:
+    try:
+        data = json.loads((job.work_dir / _FILE).read_text(encoding="utf-8"))
+        return data.get("auto") is True and data.get("revision") == revision(job)
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def is_approved(job: Job) -> bool:

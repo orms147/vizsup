@@ -20,6 +20,10 @@ from app.config import settings
 from app.models import Job
 
 SUPPORTED = ("douyin.com", "iesdouyin.com", "bilibili.com", "b23.tv")
+# Bilibili offers the same 1080p as AVC / HEVC / AV1; yt-dlp's default order takes AV1 (1.57 Mb/s
+# on BV16Vap6yEMQ) although the AVC one (3.28 Mb/s) is visibly sharper — fabric weave, food
+# texture; Laplacian 54.6 vs 40.4 (2026-11-26). Highest resolution first, then the real bitrate.
+BILIBILI_SORT = ["res", "fps", "vbr"]
 
 
 def platform_of(url: str) -> str:
@@ -41,6 +45,15 @@ def normalize_url(url: str) -> str:
         modal_id = parse_qs(u.query).get("modal_id", [None])[0]
         if modal_id and modal_id.isdigit():
             return f"https://www.douyin.com/video/{modal_id}"
+    if "bilibili.com" in host:
+        # bilibili.com/en/video/BV… (the English site) is not matched by yt-dlp's Bilibili
+        # extractor: it fell to the generic one and failed ("extension 'html'"). Drop the
+        # language prefix and the tracking query; keep ?p= (a part of a multi-part video).
+        m = re.match(r"^/(?:[a-z]{2}(?:-[a-z]{2})?/)?video/((?:BV|av)[0-9A-Za-z]+)", u.path, re.I)
+        if m:
+            part = parse_qs(u.query).get("p", [None])[0]
+            tail = f"?p={part}" if part and part.isdigit() else ""
+            return f"https://www.bilibili.com/video/{m[1]}{tail}"
     return url
 
 
@@ -164,6 +177,8 @@ def _ytdlp(job: Job, url: str) -> Job:
         "noplaylist": True,
         **_cookie_opts(),
     }
+    if platform_of(url) == "bilibili":
+        opts["format_sort"] = BILIBILI_SORT
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -350,26 +365,41 @@ def _stream_input_args(ua: str) -> list[str]:
 
 
 def _streams_of(url: str, ua: str) -> dict:
-    """{'video': height or 0, 'audio': bool, 'duration': s} of one media URL (ffprobe, HTTP)."""
+    """What one media URL holds (ffprobe over HTTP): the tallest video stream's size, codec,
+    frame rate and declared bit_rate (kept in metadata["source_quality"] for the record —
+    never used to choose), whether it has audio, and its duration."""
     from app.ffmpegutil import ffprobe_bin
 
     r = subprocess.run([ffprobe_bin(), "-v", "error", *_http_args(ua), "-show_entries",
-                        "stream=codec_type,height:format=duration", "-of", "json", url],
+                        "stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate:format=duration",
+                        "-of", "json", url],
                        capture_output=True, text=True, timeout=60)
     try:
         doc = json.loads(r.stdout or "{}")
     except ValueError:
         doc = {}
     streams = doc.get("streams") or []
-    return {"video": max((int(s.get("height") or 0) for s in streams
-                          if s.get("codec_type") == "video"), default=0),
+    video = max((s for s in streams if s.get("codec_type") == "video"),
+                key=lambda s: int(s.get("height") or 0), default={})
+    try:
+        duration = float((doc.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    bitrate = str(video.get("bit_rate") or "")
+    return {"video": int(video.get("height") or 0), "width": int(video.get("width") or 0),
+            "codec": video.get("codec_name"), "fps": video.get("avg_frame_rate"),
+            "bitrate": int(bitrate) if bitrate.isdecimal() else None,
             "audio": any(s.get("codec_type") == "audio" for s in streams),
-            "duration": float((doc.get("format") or {}).get("duration") or 0)}
+            "duration": duration}
 
 
 def pick_streams(info: dict[str, dict]) -> tuple[str, str | None] | None:
     """(video url, separate audio url or None): the sharpest file that has both, unless a
-    video-only stream is sharper and an audio-only one exists to go with it. Pure."""
+    video-only stream is sharper and an audio-only one exists to go with it. Pure.
+
+    Never by the probed bit_rate: on 2026-11-26 a 1080p video-only stream that ffprobe read
+    as 1.5 Mb/s was bit-identical (SSIM 1.000) to the muxed "1.2 Mb/s" one — the figure is
+    the stream's declared rate, not a different encode."""
     both = [(v["video"], u) for u, v in info.items() if v["video"] and v["audio"]]
     vonly = [(v["video"], u) for u, v in info.items() if v["video"] and not v["audio"]]
     aonly = [u for u, v in info.items() if v["audio"] and not v["video"]]
@@ -382,17 +412,55 @@ def pick_streams(info: dict[str, dict]) -> tuple[str, str | None] | None:
     return (best_v[1], None) if best_v else None
 
 
-def _douyin_web(job: Job, url: str) -> Job:
-    from app.ffmpegutil import ffmpeg_bin
+def best_listed(streams: list[dict]) -> str | None:
+    """The URL of the largest encode in the detail answer's ``bit_rate[]`` (douyin_capture), or
+    None. The player streams what suits its window — 浪浪山小妖怪 MV (7532341222271241487,
+    2026-11-26) played 1012×576 @ 0.42 Mb/s while ``normal_720_0`` 1264×720 @ 0.75 Mb/s was
+    listed. Highest resolution, then H.264 over H.265 (same picture at a lower rate here), then
+    a muxed mp4 over a DASH video-only part, then the rate. Pure; pick_streams still decides
+    from what ffprobe reads, so a listed URL that does not open costs nothing."""
+    def rank(s: dict) -> tuple:
+        return (min(int(s.get("width") or 0), int(s.get("height") or 0)), not s.get("h265"),
+                s.get("format") == "mp4", int(s.get("bit_rate") or 0))
 
+    good = [s for s in streams if isinstance(s, dict) and str(s.get("url", "")).startswith("http")]
+    return max(good, key=rank)["url"] if good else None
+
+
+def _douyin_web(job: Job, url: str) -> Job:
     vid = douyin_id(url)
     data = _capture_checked(vid or "")
     ua = data.get("user_agent") or "Mozilla/5.0"
-    info = {u: _streams_of(u, ua) for u in data["urls"]}
+    urls = list(data["urls"])
+    extra = best_listed(data.get("streams") or [])
+    if extra and extra not in urls:
+        urls.insert(0, extra)
+    info = {u: _streams_of(u, ua) for u in urls}
     pick = pick_streams(info)
     if pick is None:
         raise RuntimeError("Không tìm thấy luồng video trong các yêu cầu của trang.")
-    video, audio = pick
+    _save_douyin_streams(job, ua, *pick)
+    video, _audio = pick
+    job.metadata = {
+        "title": data.get("title") or f"Douyin {vid}",
+        "duration": data.get("duration") or max(v.get("duration", 0) for v in info.values()) or None,
+        "uploader": data.get("uploader") or None,
+        "platform": "douyin",
+        "downloaded_file": job.source_video.name,
+        "downloader": "browser",
+        "webpage_url": url,
+        "video_id": vid,
+        "source_quality": {"selected": info[video],
+                           "available": [stream for stream in info.values() if stream.get("video")]},
+    }
+    if data.get("suspect"):
+        job.metadata["suspect"] = data["suspect"]
+    return job
+
+
+def _save_douyin_streams(job: Job, ua: str, video: str, audio: str | None) -> None:
+    from app.ffmpegutil import ffmpeg_bin
+
     # into a temp name: a stopped / failed download must never pass for source.mp4
     part = job.work_dir / "source.downloading.mp4"
     cmd = [ffmpeg_bin(), "-y", "-v", "error", *_stream_input_args(ua), "-i", video]
@@ -415,16 +483,3 @@ def _douyin_web(job: Job, url: str) -> Job:
     from app import fsutil
 
     fsutil.replace(part, job.source_video)
-    job.metadata = {
-        "title": data.get("title") or f"Douyin {vid}",
-        "duration": data.get("duration") or max(v.get("duration", 0) for v in info.values()) or None,
-        "uploader": data.get("uploader") or None,
-        "platform": "douyin",
-        "downloaded_file": job.source_video.name,
-        "downloader": "browser",
-        "webpage_url": url,
-        "video_id": vid,
-    }
-    if data.get("suspect"):
-        job.metadata["suspect"] = data["suspect"]
-    return job

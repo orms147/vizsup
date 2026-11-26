@@ -406,6 +406,8 @@ class _Row(QFrame):
         self.size_lbl.setToolTip(f"File nặng xóa được: {fmt_size(heavy)}" if heavy else
                              "Không còn file nặng nào để dọn")
         self.set_status(item_status(self.item, d))
+        if d.get("auto_approved"):
+            self.status.setText(f"{self.status.text()} · Tự duyệt")
         self._set_short_enabled(d)
         self._set_fast_enabled(d)
 

@@ -585,7 +585,7 @@ def join(group_dir: Path, storage: Path, *,
         for o in outs:
             cmd += ["-i", o.resolve().as_posix()]
         graph = "".join(
-            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}];"
             f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}];" for i in range(len(outs)))
         graph += "".join(f"[v{i}][a{i}]" for i in range(len(outs))) + \

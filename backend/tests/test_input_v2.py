@@ -37,6 +37,23 @@ def states(v):
     return {k: r.state for k, r in v.stage_rows.items()}
 
 
+def test_direct_uses_selected_branch_and_can_queue_during_direct_run(view):
+    sent, edited = [], []
+    view.directRequested.connect(lambda links, target: sent.append((links, target)))
+    view.startRequested.connect(edited.append)
+    view.export_branches._fill("short")
+    view.export_branches._changed()
+    view._enter()
+    view.set_busy(True, direct=True)
+    view.export_branches._fill("animation")
+    view.direct.click()
+    view.set_stage("deliver")
+    assert view._export_rows["deliver"].state == "active"
+    assert [target["frame"] for _, target in sent] == ["tiktok", "source"]
+    assert sent[0][1]["folder"].endswith("Short")
+    assert not edited
+
+
 def test_stages_follow_the_worker_and_context_comes_from_progress_text(view):
     view.set_busy(True)
     assert not view.start.isEnabled()

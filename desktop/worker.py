@@ -19,6 +19,7 @@ from desktop import store  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.models import Job  # noqa: E402
 from app.fsutil import atomic_write_text
+from app.pipeline import direct_export
 
 
 class _Cancelled(RuntimeError):
@@ -222,6 +223,7 @@ class PipelineWorker(QObject):
                                                 if part["index"] < len(group["parts"]) else None),
                           pjob.cn_srt)
             popts = {k: v for k, v in o.items() if k not in ("file", "url", "srt")}
+            popts.pop(direct_export.REQUEST, None)    # only the parent carries desktop authorization
             popts["_job_id"] = part["id"]
             store.save_job(pjob, popts, "queued")
             items.append(popts)
@@ -230,6 +232,8 @@ class PipelineWorker(QObject):
         group["opts"] = {k: v for k, v in o.items() if k not in ("file", "url")}
         atomic_write_text((job.work_dir / split.GROUP_FILE),
             _json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8")
+        if o.get(direct_export.REQUEST):
+            return True                              # the same worker will render and join the parts
         (job.work_dir / "job.json").unlink(missing_ok=True)   # the parent is a group now
         self.log.emit(f"✓ Đã chia {len(items)} phần — chạy lần lượt; phần nào xong sẽ báo để bạn "
                       f"duyệt trong lúc phần sau còn chạy")
@@ -353,7 +357,7 @@ class PipelineWorker(QObject):
     def _gate_body(self) -> None:
         """One attempt of _run_to_gate (raises); re-run as a whole after a lost
         connection — every stage skips what is already on disk."""
-        from app.pipeline import asr, download, translate
+        from app.pipeline import approval, asr, download, translate
         from app.pipeline.srt import parse_srt, write_srt
 
         job, o = self.job, self.opts
@@ -413,12 +417,13 @@ class PipelineWorker(QObject):
             except Exception as exc:  # noqa: BLE001 - the 2.38 step reports series problems
                 store.debug(f"area series link: {exc}")
             area = ocr_area.for_job(job)
-            if o.get("_ask_area"):                   # "Đọc lại phụ đề": draw it again
+            if o.get("_ask_area") and not o.get(direct_export.REQUEST):
                 self._check()
                 area = self._ask_area(job, o, suggestion=area)
             elif area is not None:
                 ocr_area.remember(job, area, series_too=False)   # the cover band follows it
-            elif o.get("pick_area") and not (o.get("_remote") or o.get("_watch")):
+            elif o.get("pick_area") and not (o.get("_remote") or o.get("_watch")
+                                              or o.get(direct_export.REQUEST)):
                 self._check()
                 area = self._ask_area(job, o)
 
@@ -590,6 +595,8 @@ class PipelineWorker(QObject):
                                 refine=o.get("refine"), glossary=gl or None,
                                 log=self.log.emit, cancel=lambda: self._cancel,
                                 voice_hints=o.get("voice_hints", False))
+            if o.get(direct_export.REQUEST):
+                atomic_write_text(job.work_dir / direct_export.PREPARED, approval.revision(job))
             self.log.emit("✓ Dịch xong — sẵn sàng để bạn duyệt")
             # 3.3) Soát xưng hô: the whole video read as one conversation (who speaks to
             # whom), pronoun-only fixes applied, other rewrites left for the gate
@@ -598,7 +605,12 @@ class PipelineWorker(QObject):
                 from app.pipeline import pronouns
 
                 self.progress.emit(0.9, "Soát xưng hô cả video…")
-                pronouns.check(job, o.get("refine") or o["translator"], log=self.log.emit)
+                try:
+                    pronouns.check(job, o.get("refine") or o["translator"], log=self.log.emit)
+                except Exception as exc:  # noqa: BLE001 - optional for unattended exports
+                    if not o.get(direct_export.REQUEST):
+                        raise
+                    self.log.emit(f"⚠ Bỏ qua soát xưng hô ({type(exc).__name__}).")
             # 3.4) Vietnamese typography lint (spaces, …, quotes, repeated function words)
             # BEFORE the AI review, whose findings are tied to the unchanged line text
             if o.get("vi_lint", True):
@@ -618,6 +630,9 @@ class PipelineWorker(QObject):
             # dubs with one voice; the guess may start a Demucs separation for nothing).
             if o.get("voice_guess", False):
                 self._guess_voices(job)
+        if o.get(direct_export.REQUEST):
+            atomic_write_text(job.work_dir / direct_export.PREPARED, approval.revision(job))
+            return
         store.debug("translate ok → emit gate_reached")
 
         self.progress.emit(1.0, "Sẵn sàng sửa phụ đề")
@@ -642,6 +657,104 @@ class PipelineWorker(QObject):
         from app.pipeline import render
 
         render.note_hardsubs(job, o, log=self.log.emit, debug=store.debug)
+
+    @Slot()
+    def run_direct(self) -> None:
+        from app.pipeline import translate
+
+        try:
+            self._run_direct()
+        except (_Cancelled, translate.TranslateCancelled, InterruptedError):
+            self.failed.emit("Đã hủy.")
+        except Exception as exc:  # noqa: BLE001 - report the failed link and advance the queue
+            self.failed.emit(_user_message(exc))
+        finally:
+            self.finished.emit()
+
+    def _run_direct(self) -> None:
+        from app import usage
+        from app.pipeline import split
+
+        parent = self.job
+        request = self.opts[direct_export.REQUEST]
+        if existing := direct_export.read_result(parent):
+            self.render_done.emit(str(existing))
+            return
+        group = split.load_group(parent.work_dir)
+        if not group and not parent.vi_srt.exists():
+            with usage.track(parent.work_dir, phase="gate"):
+                self._resilient(self._gate_body)
+                group = split.load_group(parent.work_dir)
+                if not group:
+                    self._seal_direct(parent, request)
+        parts = []
+        if group:
+            storage = parent.work_dir.parent
+            parts = split.part_jobs(group, storage)
+            if not split.joined_is_current(parent.work_dir, storage):
+                for part in parts:
+                    loaded = store.load_job(part.id)
+                    if loaded is None:
+                        raise RuntimeError(f"Không tìm thấy phần {part.id}.")
+                    self.job = loaded[0]
+                    try:
+                        if not part.vi_srt.exists():
+                            if not part.source_video.exists():
+                                raise RuntimeError(f"Không tìm thấy video nguồn của phần {part.id}.")
+                            with usage.track(part.work_dir, phase="gate"):
+                                self._resilient(self._gate_body)
+                                self._seal_direct(self.job, request)
+                        self._direct_render(self.job, request)
+                    finally:
+                        self.job = parent
+                self.stage_started.emit("assemble")
+                split.join(parent.work_dir, storage, log=self.log.emit,
+                           progress=self.progress.emit, cancel=lambda: self._cancel)
+        else:
+            self._direct_render(parent, request)
+        self._check()
+        self.stage_started.emit("deliver")
+        self.progress.emit(0.99, "Đang giao thành phẩm…")
+        dest = direct_export.deliver(parent, parent.output_video, request, brief_jobs=parts,
+                                     log=self.log.emit, cancel=lambda: self._cancel)
+        self.render_done.emit(str(dest))
+
+    def _seal_direct(self, job: Job, request: dict) -> None:
+        import json
+
+        from app.pipeline import approval
+        from app.pipeline.srt import parse_srt
+
+        if not any(c.text.strip() for c in parse_srt(job.vi_srt)):
+            raise RuntimeError("Bản dịch không có câu nào để dựng.")
+        self._check()
+        render_opts = direct_export.render_options(job, self.opts, request)
+        style = {k: render_opts[k] for k in ("font", "size", "style") if k in render_opts}
+        style_path = job.work_dir / "style.json"
+        if style and not style_path.exists():
+            atomic_write_text(style_path, json.dumps(style, ensure_ascii=False))
+        atomic_write_text(job.work_dir / direct_export.PREPARED, approval.revision(job))
+        direct_export.repair(job, self.opts, render_opts, log=self.log.emit,
+                             cancel=lambda: self._cancel)
+        atomic_write_text(job.work_dir / direct_export.READY, approval.revision(job))
+
+    def _direct_render(self, job: Job, request: dict) -> None:
+        from app import usage
+        from app.pipeline import batch, render
+
+        if not (job.work_dir / direct_export.READY).exists():
+            if not direct_export.matches_prepared(job):
+                raise RuntimeError("Bản dịch chưa được ghi nhận. Mở dự án để duyệt trước khi dựng.")
+            self._seal_direct(job, request)
+        self._check()
+        direct_export.authorize(job)
+        if not batch.render_state(job.work_dir) and _playable(job.output_video):
+            return
+        opts = direct_export.render_options(job, self.opts, request)
+        with usage.track(job.work_dir, phase="render"):
+            self._resilient(lambda: render.render_job(
+                job, opts, log=self.log.emit, progress=self.progress.emit,
+                stage=self.stage_started.emit, cancel=lambda: self._cancel, debug=store.debug))
 
     # --- render --------------------------------------------------------------
     @Slot()

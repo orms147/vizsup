@@ -39,6 +39,7 @@ from pathlib import Path
 MEDIA_HINTS = ("douyinvod.com", "zjcdn.com", "/video/tos/", "mime_type=video")
 WAIT_S = 75.0          # give up when the page plays nothing in this time (captcha, removed)
 SETTLE_S = 4.0         # after the first media request, wait for the alternatives / title
+DETAIL_S = 10.0        # … and at most this much longer for the detail answer's encode list
 HARD_S = WAIT_S + 15   # runJavaScript never answers on a page that did not load: quit anyway
 
 # list mode (a creator page)
@@ -69,13 +70,14 @@ def _profile(profile_dir: Path):
 
 def main(video_id: str, out: Path, profile_dir: Path) -> int:
     from PySide6.QtCore import QTimer, QUrl
-    from PySide6.QtWebEngineCore import (QWebEnginePage, QWebEngineSettings,
+    from PySide6.QtWebEngineCore import (QWebEnginePage, QWebEngineScript, QWebEngineSettings,
                                          QWebEngineUrlRequestInterceptor)
     from PySide6.QtWidgets import QApplication
 
     profile_dir = profile_dir.resolve()      # a relative path breaks Chromium's disk caches
     app = QApplication(sys.argv[:1])
     seen: list[str] = []
+    vid = json.dumps(str(video_id))
 
     class Catch(QWebEngineUrlRequestInterceptor):
         def interceptRequest(self, info):  # noqa: N802 - Qt API
@@ -89,34 +91,56 @@ def main(video_id: str, out: Path, profile_dir: Path) -> int:
     page = QWebEnginePage(profile)
     page.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
     page.setAudioMuted(True)
+    # the detail answer lists every encode (the player may stream a 576p one when 720p exists)
+    hook = QWebEngineScript()
+    hook.setName("vz-detail")
+    hook.setSourceCode(_POSTS_HOOK_JS)
+    hook.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    hook.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    hook.setRunsOnSubFrames(False)
+    page.scripts().insert(hook)
     page.loadFinished.connect(lambda ok: print(f"loaded={ok} after {time.time() - t0:.1f}s",
                                                 file=sys.stderr, flush=True))
     t0 = time.time()
     page.load(QUrl(f"https://www.douyin.com/video/{video_id}"))
-    state = {"first": None, "meta": {}}
+    state = {"first": None, "meta": {}, "asking": False}
+    mine = f"(window.__vzDetail && window.__vzDetail.id === {vid} ? window.__vzDetail.streams : [])"
     js = ("JSON.stringify({title: (document.querySelector('h1')||{}).textContent "
           "|| document.title, "
           "author: ((document.querySelector('[data-e2e=\"video-author\"], "
           "[data-e2e=\"user-info\"]')||{}).innerText || '').split('\\n')[0], "
           "duration: (document.querySelector('video')||{}).duration || 0, "
-          "href: location.href})")
+          "href: location.href, streams: " + mine + "})")
 
     def done(result):
-        print(f"meta after {time.time() - t0:.1f}s: {str(result)[:200]}", file=sys.stderr, flush=True)
         try:
             state["meta"] = json.loads(result or "{}")
         except ValueError:
             pass
+        meta = state["meta"]                 # never the signed stream URLs on the console
+        print(f"meta after {time.time() - t0:.1f}s: title={str(meta.get('title'))[:80]!r} "
+              f"streams={len(meta.get('streams') or [])}", file=sys.stderr, flush=True)
         app.quit()
+
+    def finish():
+        timer.stop()
+        page.runJavaScript(js, 0, done)
+
+    def has_detail(ok):
+        state["asking"] = False
+        if ok or time.time() - state["first"] >= SETTLE_S + DETAIL_S:
+            finish()
 
     def poll():
         now = time.time()
         if seen and state["first"] is None:
             state["first"] = now
             print(f"first media after {now - t0:.1f}s", file=sys.stderr, flush=True)
-        if (state["first"] and now - state["first"] >= SETTLE_S) or now - t0 > WAIT_S:
-            timer.stop()
-            page.runJavaScript(js, 0, done)
+        if now - t0 > WAIT_S:
+            finish()
+        elif state["first"] and now - state["first"] >= SETTLE_S and not state["asking"]:
+            state["asking"] = True           # wait a little longer for the encode list
+            page.runJavaScript(mine + ".length > 0", 0, has_detail)
 
     timer = QTimer()
     timer.timeout.connect(poll)
@@ -128,7 +152,9 @@ def main(video_id: str, out: Path, profile_dir: Path) -> int:
     out.write_text(json.dumps({"urls": seen, "user_agent": profile.httpUserAgent(),
                                "title": title, "uploader": str(meta.get("author") or "").strip(),
                                "duration": meta.get("duration") or 0,
-                               "href": str(meta.get("href") or "")},
+                               "href": str(meta.get("href") or ""),
+                               "streams": [s for s in meta.get("streams") or []
+                                           if isinstance(s, dict) and s.get("url")]},
                               ensure_ascii=False), encoding="utf-8")
     return 0 if seen else 2
 
@@ -150,7 +176,14 @@ _POSTS_HOOK_JS = r"""
         var a = (d && d.aweme_detail) || {}, m = a.mix_info || null;
         if (a.aweme_id) window.__vzDetail = {id: String(a.aweme_id), mix: m && m.mix_id ? {
           id: String(m.mix_id), name: m.mix_name || '',
-          total: (m.statis || {}).updated_to_episode || null} : null};
+          total: (m.statis || {}).updated_to_episode || null} : null,
+          // every encode Douyin keeps (the player may stream a smaller one): download.py
+          streams: ((a.video || {}).bit_rate || []).map(function (b) {
+            var p = b.play_addr || {};
+            return {url: (p.url_list || [])[0] || '', width: p.width || 0, height: p.height || 0,
+                    bit_rate: b.bit_rate || 0, h265: !!b.is_h265, format: b.format || '',
+                    gear: b.gear_name || ''};
+          }).filter(function (s) { return s.url; })};
         return;
       }
       (d && d.aweme_list || []).forEach(function (a) {
@@ -177,7 +210,7 @@ _POSTS_HOOK_JS = r"""
     window.fetch = function (i) {
       var u = String((i && i.url) || i);
       return f.apply(this, arguments).then(function (r) {
-        try { if (/aweme\/v1\/web\/aweme\/post/.test(u)) r.clone().text().then(function (t) { take(u, t); }); }
+        try { if (/aweme\/v1\/web\/aweme\/(post|detail)/.test(u)) r.clone().text().then(function (t) { take(u, t); }); }
         catch (e) {}
         return r;
       });

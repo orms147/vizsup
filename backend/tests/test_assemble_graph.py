@@ -200,14 +200,14 @@ def test_preview_is_the_same_graph_scaled_down_and_fast(big_job):
     quick = _build(job, segments[:3], preview=True)
     graph_quick = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
     assert quick[-1] == "preview.mp4" and final[-1] == "output.mp4"
-    assert "ultrafast" in quick and "veryfast" in final
+    assert "ultrafast" in quick and "medium" in final
     # same mix + subs; its own .ass so subs.ass keeps matching output.mp4 (soft-sub export)
     assert "preview.ass" in graph_quick and "subs.ass" not in graph_quick
     # 2026-11-12: the proof is made small FIRST (scaling after the burn made "Xem nhanh" as slow
     # as the render); the rest of the graph is the render's, on the small picture
-    assert "[0:v]scale=-2:640[vsmall]" in graph_quick and "[vp]" not in graph_quick
+    assert "[0:v]scale=-2:640:flags=lanczos[vsmall]" in graph_quick and "[vp]" not in graph_quick
     same = graph_quick.replace("preview.ass", "subs.ass").replace(
-        "[0:v]scale=-2:640[vsmall];\n[vsmall]", "[0:v]")
+        "[0:v]scale=-2:640:flags=lanczos[vsmall];\n[vsmall]", "[0:v]")
     assert same == graph_final
     assert quick[quick.index("-map") + 1] == "[v]"
 
@@ -217,7 +217,7 @@ def test_preview_of_a_9_16_render_keeps_the_old_order(big_job):
     job, segments = big_job
     quick = _build(job, segments[:3], preview=True, frame="tiktok")
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[vsmall]" not in graph and "scale=-2:640[vp]" in graph and "[vp]" in quick
+    assert "[vsmall]" not in graph and "scale=-2:640:flags=lanczos[vp]" in graph and "[vp]" in quick
 
 
 def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
@@ -231,7 +231,7 @@ def test_tiktok_frame_fits_before_the_burn_and_pads_after(big_job):
     assert fit < burn < pad and "[vt]" in cmd and cmd[-1] == "output.mp4"
     _build(job, segments[:3], frame="tiktok", preview=True, fill="black")
     graph = (job.work_dir / "filter_complex.txt").read_text(encoding="utf-8")
-    assert "[0:v]scale=1080:1920" in graph and "[vt]scale=-2:640[vp]" in graph
+    assert "[0:v]scale=1080:1920" in graph and "[vt]scale=-2:640:flags=lanczos[vp]" in graph
 
 
 def test_tiktok_bars_are_the_blurred_picture_by_default(big_job):
@@ -334,8 +334,11 @@ def test_dub_windows_are_cached_and_stale_ones_removed(big_job, monkeypatch):
 
 
 def test_video_args_for_cpu_and_nvenc():
-    assert assemble._video_args("libx264", False)[:6] == ["-c:v", "libx264", "-crf", "20",
-                                                          "-preset", "veryfast"]
+    assert assemble._video_args("libx264", False)[:8] == ["-c:v", "libx264", "-crf", "20",
+                                                          "-preset", "medium",
+                                                          "-x264-params", "aq-mode=3"]
+    assert assemble._video_args("libx264", True)[:6] == ["-c:v", "libx264", "-crf", "30",
+                                                         "-preset", "ultrafast"]
     gpu = assemble._video_args("h264_nvenc", True)
     assert gpu[:2] == ["-c:v", "h264_nvenc"] and "p1" in gpu and "yuv420p" in gpu
 

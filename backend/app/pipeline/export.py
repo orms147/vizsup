@@ -84,7 +84,7 @@ def softsub_cmd(job: Job, dest: Path) -> list[str]:
         v = "[vg]"
     if parts:
         cmd += ["-filter_complex", ";".join(parts), "-map", v,
-                "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+                *assemble._video_args("libx264", False, info.get("preset"))]
     else:
         cmd += ["-map", "0:v:0", "-c:v", "copy"]
     cmd += ["-map", "1:a:0?", "-map", "2:0", "-c:a", "copy", "-c:s", "ass",

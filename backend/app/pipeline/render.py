@@ -111,7 +111,8 @@ def picture_args(o: dict) -> dict:
         size=int(round(ui_size * 3)) if ui_size else 60,   # UI px → .ass units (1080 canvas)
         style=o.get("style"),
         frame=o.get("frame") or "source",   # E-16: "tiktok" = 1080x1920
-        res=o.get("res") or "source",       # "Chất lượng": short side, never upscaled
+        res=o.get("res") or "source",       # "Chất lượng": short side ("1440" may upscale)
+        upscale=o.get("upscale"),           # res "1440": "fast" | "ai" (pipeline/upscale.py)
         preset=o.get("preset"),             # light | balanced | sharp → CRF / CQ
         sharpen=bool(o.get("sharpen", True)),   # "Làm nét hình" (on unless turned off)
         cover=o.get("logo_cover"),              # "Che logo, ghi tên phim": a box + the owner's text

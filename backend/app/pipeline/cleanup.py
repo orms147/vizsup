@@ -35,7 +35,8 @@ KEEP_DAYS = 3                       # an episode rendered in the last days may s
 HEAVY_FILES = ("source.wav", "preview.mp4", "bg.wav", "output.joining.mp4", "_dub_preview.mp3",
                "output.rendering.mp4", "preview.rendering.mp4",   # a render cut off mid-encode
                "vocals.wav", "source.downloading.mp4", "still.png")
-HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm")   # _norm: a stopped join
+HEAVY_DIRS = ("stems", "tts", "dub", "frames", "detect", "_norm",   # _norm: a stopped join
+              "upscaled")      # the AI-upscaled copy of the source (pipeline/upscale.py), ~GBs
 OUTPUT_FILES = ("output.mp4", "output.vertical.mp4", "output.srt")
 OUTPUT_KEEP = ("output.srt",)       # the rendered subtitles are tiny and worth keeping
 ON_PLATFORM = ("done", "scheduled", "private", "draft")

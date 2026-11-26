@@ -501,7 +501,11 @@ def _video_encoder() -> str:
 # libx264 CRF / h264_nvenc CQ (NVENC needs ~1–3 lower numbers for the same look) and
 # the AAC bitrate. "sharp" = the values every render used before the choice existed;
 # its 1080p NVENC output measured ~4.8 Mb/s on a talking-head video (1 GB / 28 min).
-RESOLUTIONS = {"source": None, "1080": 1080, "720": 720, "480": 480}
+RESOLUTIONS = {"source": None, "1440": 1440, "1080": 1080, "720": 720, "480": 480}
+# "1440" is the one size allowed ABOVE the source: YouTube serves a 1440p upload with its better
+# codec at a far higher bitrate, so a soft 1080p source looks sharper there (pipeline/upscale.py).
+# A source frame is upscaled; the 9:16 canvas stays 1080×1920 (Shorts / TikTok / Reels play ≤1080).
+UPSCALE_RES = ("1440",)
 PRESETS = {                      # crf, cq, audio, ~Mb/s at 1080p (size estimate only)
     "light": {"crf": 27, "cq": 30, "audio": "128k", "mbps": 1.5},
     "balanced": {"crf": 23, "cq": 25, "audio": "192k", "mbps": 2.8},
@@ -549,7 +553,7 @@ def burn_size(src: tuple[int, int] | None, frame: str, res: str | None) -> tuple
         s = min(cw / w, ch / h)        # ffmpeg's "decrease" + divisible_by=2 rounds down
         return min(cw, int(w * s) // 2 * 2), min(ch, int(h * s) // 2 * 2)
     t = RESOLUTIONS.get(res or "source")
-    if not t or t >= min(w, h):
+    if not t or t == min(w, h) or (t > min(w, h) and res not in UPSCALE_RES):
         return w, h
     long_side = _even(max(w, h) * t / min(w, h))
     std = _even(t * 16 / 9)
@@ -589,8 +593,14 @@ def _video_args(encoder: str, preview: bool, preset: str | None = None) -> list[
     if encoder == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-preset", "p1" if preview else "p5", "-rc", "vbr",
                 "-cq", "30" if preview else str(p["cq"]), "-b:v", "0", "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-crf", "30" if preview else str(p["crf"]),
-            "-preset", "ultrafast" if preview else "veryfast", "-pix_fmt", "yuv420p"]
+    if preview:
+        return ["-c:v", "libx264", "-crf", "30", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
+    # medium + aq-mode 3 (measured 2026-11-26, backend/scripts/sharp_lab.py, 3 clips): VMAF
+    # 93.3–96.1 → 96.0–98.8 for ~+25 % size at ~135 fps 1080p; "veryfast" lost visible detail
+    # on the soft Douyin sources, "slow" only added +0.1 for 30 % more time. NVENC is left as it
+    # is: spatial/temporal AQ + multipass at the same CQ doubled the size for no VMAF gain.
+    return ["-c:v", "libx264", "-crf", str(p["crf"]), "-preset", "medium",
+            "-x264-params", "aq-mode=3", "-pix_fmt", "yuv420p"]
 
 
 def _audio_bitrate(preview: bool, preset: str | None = None) -> str:
@@ -770,6 +780,8 @@ def _build_render(
     sharpen: bool = False,           # "Làm nét hình": cas on the source picture (SHARPEN_CAS)
     still_at: float | None = None,   # ONE frame at this source second → still.png (no audio at all)
     still_h: int = 720,              # …scaled to this height
+    upscale: str | None = None,      # "gpu" | "cpu" | "ai": the picture is made burn_w×burn_h FIRST
+    src_file: str = "source.mp4",    # the picture's input ("ai": the cached upscaled copy)
 ) -> list[str]:
     """Plan the timeline and build the final ffmpeg command: the source, the dub
     track (concat list of the windows from :func:`_render_dub`) and, for "keep
@@ -796,7 +808,14 @@ def _build_render(
     still = still_at is not None
     # a single frame is cut from the source second (input seek: cheap on a long video) and
     # its timestamps put back by setpts, so the .ass shows the lines of THAT second
-    cmd = [ffmpeg_bin(), "-y", *(["-ss", f"{still_at:.3f}"] if still else []), "-i", "source.mp4"]
+    # an upscale (res "1440", a source frame, the real render only) happens before everything
+    # else, so the sharpening, the cover and the subtitles are drawn at the final size
+    upscaled = bool(upscale) and bool(burn_w) and frame != "tiktok" and not preview
+    from app.pipeline import upscale as upmod
+
+    cmd = [ffmpeg_bin(), "-y", *(upmod.hw_args(upscale) if upscaled else []),
+           *(["-ss", f"{still_at:.3f}"] if still else []),
+           "-i", src_file if upscaled else "source.mp4"]
     dubbed = bool(placements) and dub is not None and not still
     if dubbed:
         cmd += ["-f", "concat", "-safe", "0", "-i", dub]          # input 1 → the dub track
@@ -948,11 +967,15 @@ def _build_render(
     small_first = (preview and not still and frame != "tiktok"
                    and not (cover_mode == "glass" and glass_band))
     if small_first:
-        parts.append(f"{vsrc}scale=-2:{PROOF_H}[vsmall]")
+        parts.append(f"{vsrc}scale=-2:{PROOF_H}:flags=lanczos[vsmall]")
         vsrc = "[vsmall]"
+    if upscaled and upscale in ("gpu", "cpu"):
+        parts.append(f"{vsrc}{upmod.chain(upscale, int(burn_w or 0), burn_h)}[vup]")
+        vsrc = "[vup]"
     if sharpen:
         # a soft (low-bitrate) source looks crisper; first, so a blurred cover stays soft
-        parts.append(f"{vsrc}cas={SHARPEN_CAS:g}[vsharp]")
+        # (after an upscale: lighter, its halos would be magnified otherwise)
+        parts.append(f"{vsrc}cas={upmod.UP_CAS if upscaled else SHARPEN_CAS:g}[vsharp]")
         vsrc = "[vsharp]"
     if cover_mode == "blur":
         # blur the hardsub band (the detected region if we have one, else the
@@ -960,7 +983,8 @@ def _build_render(
         # box, still hides the original
         crop_expr, overlay_pos = _blur_band_filters(_load_region(job))
         parts.append(f"{vsrc}split[vsrc][vband]")
-        parts.append(f"[vband]{crop_expr},boxblur=10:2[vblur]")
+        radius = max(1, round(10 * burn_h / 1080)) if upscaled else 10   # px: same look at 1440
+        parts.append(f"[vband]{crop_expr},boxblur={radius}:2[vblur]")
         parts.append(f"[vsrc][vblur]{overlay_pos}[vbg]")
         vsrc = "[vbg]"
     if preview:
@@ -982,9 +1006,9 @@ def _build_render(
                          f"scale={cw}:{ch},setsar=1[vbgfill]")
             vsrc = "[vfi]"
         parts.append(f"{vsrc}scale={cw}:{ch}:force_original_aspect_ratio=decrease"
-                     f":force_divisible_by=2,setsar=1[vfit]")
+                     f":force_divisible_by=2:flags=lanczos,setsar=1[vfit]")
         vsrc = "[vfit]"
-    elif scale_filter(res):
+    elif scale_filter(res) and not upscaled:
         # downscale BEFORE the burn: libass draws the text at the final size (sharp),
         # and the .ass layout (PlayRes 1920x1080) scales with the frame
         # setsar=1: a snapped 1922→1280 width would otherwise carry SAR 961:960, and the
@@ -1011,7 +1035,7 @@ def _build_render(
             parts.append(f"[vt]ass={canvas_ass}{_ass_fonts(wd)}[vc]")
             vmap = "[vc]"
     if preview and not small_first:  # same graph, scaled down after the subs are burned
-        parts.append(f"{vmap}scale=-2:{int(still_h) if still else PROOF_H}[vp]")
+        parts.append(f"{vmap}scale=-2:{int(still_h) if still else PROOF_H}:flags=lanczos[vp]")
         vmap = "[vp]"
     if still:
         (wd / "filter_complex_still.txt").write_text(";\n".join(parts) + "\n", encoding="utf-8")
@@ -1027,6 +1051,40 @@ def _build_render(
         "preview.mp4" if preview else "output.mp4",
     ]
     return cmd
+
+
+
+def _upscale_input(job: Job, src_size: tuple[int, int] | None, burn: tuple[int, int], frame: str,
+                   res: str, preview: bool, upscale: str | None, *, log, say, cancel
+                   ) -> tuple[str | None, str]:
+    """(engine for _build_render, picture input) of a render: None / source.mp4 unless res
+    "1440" makes a source-frame picture bigger than the source. "ai" runs (or reuses) the
+    Real-ESRGAN pass first; when it can't, the fast upscale is used and the owner told why."""
+    from app.pipeline import upscale as upmod
+
+    if (preview or frame == "tiktok" or res not in UPSCALE_RES or not src_size
+            or burn[0] * burn[1] <= src_size[0] * src_size[1]):
+        return None, "source.mp4"
+    if upmod.engine(upscale) == "ai":
+        dur = probe_duration(job.source_video)
+        if log:
+            mins = upmod.ai_seconds(dur) / 60
+            log(f"… AI làm nét {burn[0]}×{burn[1]} (Real-ESRGAN, ~{mins:.0f} phút lần đầu; "
+                "dựng lại dùng bản đã làm)")
+        try:
+            path = upmod.ensure_ai(job, burn[0], burn[1], log=log, cancel=cancel,
+                                   progress=lambda f: say(f, f"AI làm nét · {int(f * 100)}%"))
+            return "ai", path.relative_to(job.work_dir).as_posix()
+        except InterruptedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the render goes on with the fast upscale
+            if log:
+                log(f"⚠ AI làm nét không chạy được ({exc}) — phóng to bằng cách nhanh.")
+    kind = upmod.fast_kind()
+    if log:
+        log(f"… Phóng to {burn[0]}×{burn[1]} cho YouTube ("
+            + ("card đồ họa" if kind == "gpu" else "CPU") + ")")
+    return kind, "source.mp4"
 
 
 def assemble(
@@ -1062,6 +1120,7 @@ def assemble(
     karaoke: dict | None = None,         # "Chữ chạy theo lời": {"on", "color"} (pipeline/karaoke.py)
     still_at: float | None = None,       # ONLY one frame of the finished picture (render.still_job)
     still_h: int = 720,
+    upscale: str | None = None,          # res "1440": "fast" (graphics card / CPU) | "ai" (upscale.py)
 ) -> Path:
     global _NVENC
     from app.pipeline import commentary as cm
@@ -1220,6 +1279,8 @@ def assemble(
         return out
 
     say = progress or (lambda _f, _m: None)
+    up_kind, src_file = _upscale_input(job, src_size, burn, frame, res, preview, upscale,
+                                       log=log, say=say, cancel=cancel)
     plan = _plan_segments(segments)
     dub = _render_dub(job, segments, _with_gains(job, segments, plan[0]), log=log,
                       cancel=cancel,
@@ -1244,7 +1305,8 @@ def assemble(
                             # own (maybe odd, VP9) size keeps the even-rounding scale=-2
                             burn_w=burn[0] if src_size and burn != tuple(src_size) else None,
                             glass_look=glass.look(style), fill=fill, canvas_ass=canvas_name,
-                            cut=cut if clay is not None else None, sharpen=sharpen)
+                            cut=cut if clay is not None else None, sharpen=sharpen,
+                            upscale=up_kind, src_file=src_file)
         # encode into a temp name and swap it in when complete: an app killed or a
         # power cut mid-encode must not leave a broken output.mp4 that looks rendered
         final = job.work_dir / cmd[-1]
@@ -1258,6 +1320,11 @@ def assemble(
             break
         except RuntimeError:
             part.unlink(missing_ok=True)
+            if up_kind == "gpu":           # libplacebo / Vulkan failed: the CPU scaler, same size
+                up_kind = "cpu"
+                if log:
+                    log("⚠ Phóng to bằng card đồ họa (Vulkan) lỗi — phóng to bằng CPU.")
+                continue
             if encoder == "libx264":
                 raise
             _NVENC = False                 # don't try the GPU again this session
@@ -1283,6 +1350,7 @@ def assemble(
                     "commentary_s": round(note_secs, 2),
                     "commentary_share": round(cm.share(note_secs, total, out_total - total), 4),
                     "res": res, "preset": preset or DEFAULT_PRESET, "sharpen": bool(sharpen),
+                    "upscale": up_kind,
                     "size": list(output_size(src_size, frame, res) or ()),
                     "glass_band": list(glass_band) if glass_band else None,
                     # the glass look in style.json terms (export.py re-reads it via look())

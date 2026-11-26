@@ -114,9 +114,11 @@ COVERS = (("Hộp đen · dễ đọc, che kín chữ gốc", "box"),
           ("Làm mờ dải dưới video · nhẹ nhàng", "blur"),
           ("Không che", "off"),
           ("Kính mờ trắng · theo Kiểu chữ", "glass"))
-# "Chất lượng": output lines (short side, never above the source) × size/sharpness preset
-RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1080p", "1080"), ("720p", "720"),
-               ("480p", "480"))
+# "Chất lượng": output lines (short side; only 1440 goes above the source) × size/sharpness preset
+RESOLUTIONS = (("Gốc (theo video nguồn)", "source"), ("1440p · YouTube (phóng to)", "1440"),
+               ("1080p", "1080"), ("720p", "720"), ("480p", "480"))
+UPSCALES = (("Phóng to nhanh (card đồ họa)", "fast"),
+            ("AI làm nét · chậm (~5× thời lượng lần đầu)", "ai"))
 PRESETS = (("Nhẹ · file nhỏ", "light"), ("Cân bằng", "balanced"), ("Nét · file lớn", "sharp"))
 DEFAULT_PRESET = "sharp"          # text sharpness: the subtitles are the point of the video
 SAMPLE = "Xin chào, đây là giọng đọc tiếng Việt cho video của bạn."
@@ -582,8 +584,9 @@ class RenderView(QWidget):
         self.res = QComboBox()
         for text, key in RESOLUTIONS:
             self.res.addItem(text, key)
-        self.res.setToolTip("Độ phân giải video xuất (cạnh ngắn). Không bao giờ lớn hơn video "
-                            "nguồn. Khung dọc 9:16: 1080p = 1080×1920, 720p = 720×1280.")
+        self.res.setToolTip("Độ phân giải video xuất (cạnh ngắn). Chỉ 1440p được lớn hơn video "
+                            "nguồn: YouTube phát bản 1440p bằng bộ nén tốt hơn nên nét hơn rõ. "
+                            "Khung dọc 9:16 giữ 1080×1920 (Shorts / TikTok / Reels).")
         self.res.setCurrentIndex(max(self.res.findData(st.get("render_res")), 0))
         self.preset = QComboBox()
         for text, key in PRESETS:
@@ -598,6 +601,19 @@ class RenderView(QWidget):
         qrow.addWidget(self.res, 1)
         qrow.addWidget(self.preset, 1)
         ll.addLayout(qrow)
+        # res 1440: how the picture is made bigger (pipeline/upscale.py)
+        self.upscale = QComboBox()
+        for text, key in UPSCALES:
+            self.upscale.addItem(text, key)
+        self.upscale.setToolTip(
+            "Nhanh: khử nhiễu nhẹ + phóng to bằng card đồ họa, gần như không thêm thời gian.\n"
+            "AI làm nét (Real-ESRGAN): viền tóc, mắt, nét vẽ sắc và sạch hơn hẳn — hợp hoạt hình "
+            "và phim AI; da mịn hơn. Lần đầu chạy ~5× thời lượng video (cần card NVIDIA), "
+            "dựng lại dùng bản đã làm.")
+        self.upscale.setCurrentIndex(max(self.upscale.findData(st.get("render_upscale")), 0))
+        self.upscale.currentIndexChanged.connect(
+            lambda _i: store.update_ui_state(render_upscale=self.upscale.currentData()))
+        ll.addWidget(self.upscale)
         # assemble.SHARPEN_CAS before the subtitles are burned (Douyin's best is ~1 Mb/s)
         self.sharpen_cb = QCheckBox("Làm nét hình (video nguồn mờ, nén mạnh)")
         self.sharpen_cb.setToolTip(
@@ -674,6 +690,7 @@ class RenderView(QWidget):
             compact_combo(combo, 10)
         for combo in (self.res, self.preset):     # two per row
             compact_combo(combo, 6)
+        compact_combo(self.upscale, 10)
         compact_combo(self.rights, 6)            # shares its row with a caption + button
         rrow.addWidget(self.rights, 1)
         self.proof_btn = button("Bằng chứng…", "Upload", variant="ghost", small=True,
@@ -1939,7 +1956,8 @@ class RenderView(QWidget):
         self._sync_quality()
 
     def _sync_quality(self) -> None:
-        """Grey out resolutions above the source (never upscale) and show a rough size."""
+        """Grey out resolutions above the source (only 1440 upscales, a source frame only) and
+        show a rough size."""
         from app.pipeline import assemble
 
         frame = self.frame.currentData()
@@ -1949,14 +1967,21 @@ class RenderView(QWidget):
             item = self.res.model().item(i)
             if item is None:
                 continue
-            # 9:16 keeps today's 1080×1920 canvas at most; a source frame never grows
-            ok = (not t or src is None or t <= min(src)) if frame != "tiktok" else True
+            # 9:16 keeps today's 1080×1920 canvas at most; a source frame grows only to 1440
+            key = self.res.itemData(i)
+            if frame == "tiktok":
+                ok = key not in assemble.UPSCALE_RES
+            else:
+                ok = not t or src is None or t <= min(src) or key in assemble.UPSCALE_RES
             item.setEnabled(ok)
         cur = self.res.model().item(self.res.currentIndex())
         if cur is not None and not cur.isEnabled():
             self.res.blockSignals(True)          # not the user's choice: don't remember it
             self.res.setCurrentIndex(0)
             self.res.blockSignals(False)
+        up = (frame != "tiktok" and self.res.currentData() in assemble.UPSCALE_RES
+              and (src is None or min(src) < 1440))
+        self.upscale.setVisible(up)
         size = assemble.output_size(src, frame, self.res.currentData())
         mb = assemble.estimate_size_mb(src, frame, self.res.currentData(),
                                        self.preset.currentData(), self._src_dur)
@@ -2048,7 +2073,8 @@ class RenderView(QWidget):
         opts["also_vertical"] = opts["frame"] == "source" and self.vertical_cb.isChecked()
         opts["thumbnail"] = self.thumb_cb.isChecked()   # never for the quick proof (wanted())
         opts["tiktok_fill"] = self.fill.currentData() or "blur"
-        opts["res"] = self.res.currentData()       # "Chất lượng" (the backend never upscales)
+        opts["res"] = self.res.currentData()       # "Chất lượng" ("1440" may upscale)
+        opts["upscale"] = self.upscale.currentData()
         opts["preset"] = self.preset.currentData()
         opts["sharpen"] = self.sharpen_cb.isChecked()
         opts["karaoke"] = self.karaoke()
@@ -2421,13 +2447,10 @@ def _read_project_file(job) -> dict:
 def _link_or_copy(src: Path, dest: Path) -> None:
     """``dest`` as a hard link to ``src`` (same drive: instant, no extra space — a later render
     replaces output.mp4 with a new file, so the saved one never changes), else a copy."""
-    import os
+    from app.fsutil import link_or_copy
 
     dest.unlink(missing_ok=True)                    # the save dialog already asked to replace
-    try:
-        os.link(src, dest)
-    except OSError:
-        shutil.copyfile(src, dest)
+    link_or_copy(src, dest)
 
 
 def _update_project_file(job, **fields) -> None:

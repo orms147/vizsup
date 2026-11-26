@@ -371,3 +371,60 @@ line; real lines: 3 gained (这位同学, 什么钥匙, 一个), 1 lost (原来�
 short lines because the upscaled glyphs are too large for the detector — likely a large part of
 the "sentences with no cue" seen on earlier series. Scrap filter (`ocr.is_scrap`): 87 / 88 cues
 dropped on the two videos, all picture fragments (digits, single characters, Latin bits).
+
+## Sharpness pass — 2026-11-26: where the picture is lost, 1440p for YouTube, AI upscale
+
+Tool: `backend/scripts/sharp_lab.py SOURCE OUT` (a 12–20 s cut through every variant: fps, size,
+VMAF of the ENCODE only — the same chain lossless vs encoded — and crops at one display size).
+Clips: two Douyin AI films (`1190e1efbac0`, `fab77333de2b`, 1080p ~1.1 Mb/s) and a Bilibili vlog
+(BV16Vap6yEMQ).
+
+**The encode is not where the picture is lost.**
+
+| encoder (1080p, cas 0.6) | Mb/s (AI film / vlog) | VMAF enc | fps |
+|---|---|---|---|
+| NVENC p5 CQ 21 (app default) | 5.8 / 13.7 | 97.7 / 99.8 | 260 |
+| NVENC p5 + spatial/temporal AQ + multipass, CQ 21 | 10.9 / 14.5 | 97.6 / 99.7 | 200 |
+| NVENC p7 tuned, CQ 19 | 14.8 / 16.6 | 97.8 / 99.8 | 160 |
+| x264 veryfast CRF 20 (old CPU fallback) | 2.9 / 7.4 | 94.6 / 96.1 | 245 |
+| **x264 medium CRF 20 aq-mode 3 (new fallback)** | 3.7 / 8.5 | 96.9 / 98.8 | 135 |
+| x264 slow CRF 20 aq-mode 3 | 3.5 / 8.3 | 97.0 / 98.8 | 96 |
+
+→ NVENC unchanged (AQ doubled the size for nothing measurable); the CPU fallback → medium.
+
+**Sources.** Douyin's whole `aweme_detail.video.bit_rate[]` (7687593002890318309): the best entry is
+`normal_1080_0` H.264 1.26 Mb/s — the one the player streams and we already save; the 1080p H.265
+is 0.67 Mb/s, the rest 720p/540p. The "1.5 Mb/s video-only" stream the uncommitted picker preferred
+was bit-identical to the muxed one (SSIM 1.000) → picker removed. Bilibili: yt-dlp's default took
+AV1 1.57 Mb/s; the AVC 1080p 3.28 Mb/s is visibly sharper (Laplacian 54.6 vs 40.4) → `format_sort
+res,fps,vbr` (`download.BILIBILI_SORT`). 1080P+ / 4K need a premium account's cookies.
+
+**Upscale (res "1440", `pipeline/upscale.py`).** libplacebo `ewa_lanczossharp` on Vulkan after a light
+`hqdn3d`, then cas 0.4: 60–100 fps, ~20–28 Mb/s at 1440p, edges a little crisper (the source is
+the limit). nlmeans_vulkan: 33 fps and no visible gain — not used. Real-ESRGAN
+`realesr-animevideov3` (torch fp16): 3.9 fps → **5.8 fps with channels_last** (1.1 GB VRAM) ≈ 5× the
+video's length; hair, eyes, line art clearly crisper and cleaner, skin smoother (fine for AI films
+and animation, can look waxy on real faces). `general-x4v3`: 2.1 fps and waxier — not used.
+Real render, 20 s Bilibili cut at 1440p: fast 39 s (with VieNeu TTS), AI 126 s (incl. model
+download). 
+**YouTube round trip (2026-11-26, the owner's private uploads A 1080p / B 1440p fast / C 1440p AI,
+60 s of the Bilibili vlog, fetched back with yt-dlp).** A got AV1 1080p 0.88 Mb/s + H.264 2.0 Mb/s;
+B and C got VP9 1440p 3.4 Mb/s and VP9 1080p 1.2 Mb/s (no AV1 yet). VMAF of what YouTube serves
+vs what was uploaded (at 1080): A 91.5 (AV1) / 92.5 (H.264), B 1440p 96.5, C 1440p 96.3 — the
+1440p upload is kept much more faithfully. But vs the 1080p source picture: B 1440p 91.9, C 92.6
+≈ A 92.5, and a viewer at 1080p gets B/C's VP9 1080p (88.7 / 89.2). Eye-region crops: B 1440p keeps
+hair strands / lashes a little better than A's AV1; C is smoother (waxy skin on a real face).
+→ **1080p stays the default**; 1440p is an opt-in for viewers on big / high-DPI screens (file ≈ 3×).
+AI is not a default for real people.
+
+**Douyin 2D (浪浪山小妖怪 MV, 7532341222271241487).** The player streamed 1012×576 @ 0.42 Mb/s while
+the detail answer listed `normal_720_0` 1264×720 @ 0.75 Mb/s → the browser capture now hooks the
+detail answer, writes `streams` and `download.best_listed` adds the largest encode to the probed
+URLs: 720p downloaded, visibly sharper outlines and faces. AI on the 2D scenes: clean, crisp ink
+outlines on characters; painted backgrounds turn flatter (watercolour texture → smooth). Fine-detail
+frame-to-frame change: source 0.47, fast 0.48, AI 0.55 (≈ +15 %, in line with the added
+sharpness; no visible shimmer). Speed with only 1.1 GB VRAM free (Edge / an IDE holding 6.6 GB):
+~0.5–1 fps instead of 5.8 → the child reports free memory and the render log warns below 2 GB.
+Bug found and fixed: muxing the source audio live while the model fed the pipe slowly made the
+AI copy's video start 1.021 s late (picture behind the sound) — the picture is now encoded alone,
+the audio copied in after, and a start time > 0.05 s fails the pass.

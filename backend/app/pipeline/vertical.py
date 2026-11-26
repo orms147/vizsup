@@ -31,7 +31,7 @@ def filter_graph(width: int = SIZE[0], height: int = SIZE[1]) -> str:
     return (f"[0:v]split[fg][bg];"
             f"[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},"
             f"boxblur=16:3,eq=brightness=-0.22:saturation=0.55,scale={width}:{height},setsar=1[bars];"
-            f"[fg]scale={width}:-2:force_divisible_by=2,setsar=1[pic];"
+            f"[fg]scale={width}:-2:force_divisible_by=2:flags=lanczos,setsar=1[pic];"
             f"[bars][pic]overlay=(W-w)/2:(H-h)/2[v]")
 
 

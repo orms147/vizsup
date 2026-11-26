@@ -238,3 +238,12 @@ OpenRouter's `expiration_date` in `/models`). From that date the app falls back 
 falls back, for the rest of the process, if the promo model answers "not found / no endpoints"
 early. A malformed date disables the promo rather than running it indefinitely.
 
+## Upscale (render res "1440", `pipeline/upscale.py`, 2026-11-26)
+
+Not a provider kind (one render option, two engines); measurements in docs/plan/G-cost-log.md
+"Sharpness pass".
+
+| engine | how | speed (RTX 4070 Laptop) | when |
+|---|---|---|---|
+| fast (default) | `hqdn3d` → libplacebo `ewa_lanczossharp` on Vulkan (discrete card picked by a one-frame test), CPU lanczos fallback → cas 0.4 | 60–100 fps, inside the render | any source |
+| ai | Real-ESRGAN `realesr-animevideov3` (2.5 MB, sha256-checked, `storage/_models`), torch CUDA fp16 channels_last in a child process → cached `upscaled/<key>.mkv` | ~5.8 fps ≈ 5× the video's length, once | animation, AI films (real faces can look waxy) |
