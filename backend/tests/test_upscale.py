@@ -207,3 +207,26 @@ def test_ai_child_failure_leaves_no_cached_copy(tmp_path, monkeypatch):
         upscale.ensure_ai(j, 64, 36, progress=seen.append)
     assert seen == [0.1]
     assert not list((tmp_path / "upscaled").glob("*.mkv"))
+
+
+def test_ai_key_changes_with_the_pipeline_version(tmp_path, monkeypatch):
+    """A copy made by the old live mux (picture 1 s late) must not be reused after the fix."""
+    src = tmp_path / "source.mp4"
+    src.write_bytes(b"a" * 2000)
+    k = upscale.ai_key(src, 2560, 1440)
+    monkeypatch.setattr(upscale, "PIPELINE", upscale.PIPELINE + 1)
+    assert upscale.ai_key(src, 2560, 1440) != k
+
+
+def test_short_read_is_measured_against_the_video_stream():
+    from app.pipeline import upscale_ai as ua
+
+    # a 10-minute clip: missing 12 s at the end was within the old 2 % allowance
+    assert ua.missing_seconds(17640, 600.0, "30/1") == pytest.approx(12.0)
+    assert ua.missing_seconds(17640, 600.0, "30/1") > ua.MISSING_OK_S
+    assert ua.missing_seconds(17995, 600.0, "30/1") <= ua.MISSING_OK_S    # last frames rounded
+    assert ua.missing_seconds(18000, 600.0, "30000/1001") == 0.0
+    # the stream's own length wins over the container (a longer audio track)
+    assert ua.stream_seconds({"duration": "8.000000"}, {"duration": "9.032"}) == 8.0
+    assert ua.stream_seconds({"tags": {"DURATION": "00:01:02.500000000"}}, {}) == 62.5
+    assert ua.stream_seconds({"duration": "N/A"}, {"duration": "9.5"}) == 9.5

@@ -51,15 +51,47 @@ def load_model(path: str, convs: int):
 
 
 def probe(src: str) -> tuple[int, int, str, float]:
+    """(width, height, frame rate, length of the VIDEO stream) — not the container's length,
+    which an audio track running longer would stretch (mkv: the stream has no duration, the
+    tags may; the container is the last resort)."""
     out = subprocess.run([ffprobe_bin(), "-v", "error", "-select_streams", "v:0", "-show_entries",
-                          "stream=width,height,avg_frame_rate:format=duration", "-of", "json", src],
+                          "stream=width,height,avg_frame_rate,duration:stream_tags=DURATION"
+                          ":format=duration", "-of", "json", src],
                          capture_output=True, text=True).stdout
     d = json.loads(out)
     s = d["streams"][0]
     rate = s.get("avg_frame_rate") or "30/1"
     if rate in ("0/0", "0/1"):
         rate = "30/1"
-    return int(s["width"]), int(s["height"]), rate, float(d["format"].get("duration") or 0)
+    return int(s["width"]), int(s["height"]), rate, stream_seconds(s, d.get("format") or {})
+
+
+def stream_seconds(stream: dict, fmt: dict) -> float:
+    """The video stream's length from an ffprobe answer. Pure."""
+    for raw in (stream.get("duration"), (stream.get("tags") or {}).get("DURATION")):
+        if not raw or raw == "N/A":
+            continue
+        try:
+            if ":" in str(raw):                       # mkv tag "00:01:02.500000000"
+                h, m, s = str(raw).split(":")
+                return int(h) * 3600 + int(m) * 60 + float(s)
+            return float(raw)
+        except ValueError:
+            continue
+    try:
+        return float(fmt.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def missing_seconds(done: int, video_s: float, rate: str) -> float:
+    """How much of the video stream's end the frames read so far leave out (0 = whole). Pure."""
+    num, den = (int(x) for x in rate.split("/"))
+    return max(0.0, video_s - done * den / num)
+
+
+# the fps filter may round the last frame or two; anything more is a short read
+MISSING_OK_S = 0.25
 
 
 def video_start(path: str) -> float:
@@ -127,8 +159,10 @@ def main(src: str, out: str, W: int, H: int, model_path: str, encoder: str) -> N
     # a source that breaks mid-clip must not leave a short copy that later renders reuse
     if dec.wait() != 0:
         raise SystemExit(f"ffmpeg decode failed after {done} of ~{total} frames")
-    if done < total - max(3, total // 50):
-        raise SystemExit(f"only {done} of ~{total} frames decoded")
+    short = missing_seconds(done, dur, rate)
+    if short > MISSING_OK_S:
+        raise SystemExit(f"only {done} of ~{total} frames decoded ({short:.2f} s of the video "
+                         "missing at the end)")
     if enc.wait() != 0:
         raise SystemExit("ffmpeg encode failed")
     mux = subprocess.run([ff, "-y", "-v", "error", "-i", pic, "-i", src, "-map", "0:v",

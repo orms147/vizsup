@@ -45,6 +45,9 @@ MODEL_URL = ("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/
 MODEL_SHA256 = "b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d"
 MODEL_CONVS = 16                  # SRVGGNetCompact depth of this model (x4, 64 features)
 AI_FPS = 5.8
+# bumped when the AI copy's making changes so old copies are made again: 2 = picture encoded
+# alone + audio copied in after (version 1 muxed live and could start the picture 1 s late)
+PIPELINE = 2
 # 2026-11-26: with 1.1 GB free (Edge, an IDE … holding 6.6 GB) the same model ran ~1 fps
 LOW_VRAM_GB = 2.0                      # measured frames per second at 1080p input (time estimate)
 
@@ -145,7 +148,7 @@ def ai_key(source: Path, w: int, h: int) -> str:
     st = source.stat()
     with source.open("rb") as f:
         head = hashlib.sha1(f.read(1 << 20)).hexdigest()[:12]
-    raw = json.dumps([st.st_size, int(st.st_mtime), head, MODEL, w, h])
+    raw = json.dumps([st.st_size, int(st.st_mtime), head, MODEL, w, h, PIPELINE])
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
