@@ -39,6 +39,20 @@ def test_series_list_wins_and_stays_in_the_series(tmp_path):
     assert word_filter.inherit(b) and word_filter.load(b) == (True, RULES)
 
 
+def test_a_series_without_its_own_list_takes_the_app_wide_one(tmp_path):
+    """A series made automatically from a 《…》 title has no list: the app-wide one applies."""
+    outside = _job(tmp_path, "x")
+    word_filter.keep_for_new(outside, True, RULES)
+    p = series.create("Phim B")
+    b = _job(tmp_path, "b")
+    series._write_link(b, p)
+    assert word_filter.keep_target(b) == ("Phim B", None)
+    assert word_filter.kept_for_new(b) == ("", (True, RULES))
+    logs = []
+    assert word_filter.inherit(b, log=logs.append) and word_filter.load(b) == (True, RULES)
+    assert "video mới" in logs[0]
+
+
 def test_an_approved_project_is_never_changed(tmp_path, monkeypatch):
     a, b = _job(tmp_path, "a"), _job(tmp_path, "b")
     word_filter.keep_for_new(a, True, RULES)

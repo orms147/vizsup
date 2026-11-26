@@ -56,18 +56,32 @@ def _global_path():
     return Path(settings.vizsup_storage_dir) / GLOBAL_FILE
 
 
-def kept_for_new(job) -> tuple[str, tuple[bool, list[tuple[str, str]]] | None]:
-    """Where rules for new projects are kept for this project — its series' name, or "" for
-    app-wide — and what is kept there (None = nothing)."""
+def _global_kept() -> tuple[bool, list[tuple[str, str]]] | None:
+    try:
+        return _clean(json.loads(_global_path().read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+def keep_target(job) -> tuple[str, tuple[bool, list[tuple[str, str]]] | None]:
+    """Where «Dùng danh sách này cho các tập mới» saves for this project — its series' name, or
+    "" for app-wide — and what is kept THERE (None = nothing)."""
     from app.pipeline import series
 
     p = series.profile_of(job)
     if p is not None:
         return p.name, _clean(p.word_filter)
-    try:
-        return "", _clean(json.loads(_global_path().read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        return "", None
+    return "", _global_kept()
+
+
+def kept_for_new(job) -> tuple[str, tuple[bool, list[tuple[str, str]]] | None]:
+    """The list a new project of this one's kind takes: its series' own list, else the
+    app-wide one (a series made automatically from a title has none). (series name or "",
+    list or None)."""
+    where, kept = keep_target(job)
+    if kept and kept[1]:
+        return where, kept
+    return "", _global_kept()
 
 
 def keep_for_new(job, enabled: bool, rules: list[tuple[str, str]] | None) -> None:
